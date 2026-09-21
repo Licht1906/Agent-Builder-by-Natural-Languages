@@ -1,0 +1,221 @@
+  # UC1-33 (#145), spec.md §12.1/§12.2 — the "profile single-node (demo)"
+# `docker-compose.yml` §12.1's package layout names. `./install.sh` is what
+# generates `.env`/secrets, migrates the database (which also seeds the
+# first `agent_admin`), then brings this file up.
+#
+# §6.2's service table, mapped to what actually runs here:
+#   gateway   -> not present. No Traefik/TLS termination in this profile —
+#                `backend` is reached directly on :8000, the honest state for
+#                a local/demo install; a real deployment puts its own
+#                reverse proxy in front, out of this file's scope.
+#   web       -> not present. UC1's own Next.js UI (chat/spec editor/queue)
+#                is a separate, still-unbuilt ticket (E2 — see
+#                `src.api.uc1_approval_routes`'s own `_FORM_CONFIRMED_STAND_IN`
+#                docstring for the same gap named from the API side).
+#                `frontend/` in this repo is a different, V2 app and is not
+#                wired in here. Until UC1's UI ships, `/docs` (FastAPI's own
+#                Swagger UI) is the honest browser-visible entry point.
+#   api       -> `backend`, below (also runs metaagent/compiler/runtime/policy
+#                client in-process — none of those four are separate
+#                deployable services in this codebase today).
+#   policy    -> `policy` (OPA), below.
+#   vault     -> `vault`, below.
+#   llm       -> not present, and now deliberately so rather than for want of
+#                wiring. `ChatModelFactory` (`src.services.llm`) reaches two
+#                hosted APIs: OpenAI directly (`OPENAI_API_KEY`) for the
+#                meta-agent, and OpenRouter (`OPENROUTER_API_KEY`) for the
+#                agent con (§6.3). Neither is a container this file can run.
+#                Note what that costs: §6.3's "local hoàn toàn" default is not
+#                what this profile does — see §6.3's own escape hatch ("Cho
+#                phép cấu hình sang OpenRouter/Azure OpenAI, nhưng khi bật thì
+#                UI hiển thị cảnh báo rõ ràng rằng NFR-03 không còn được đảm
+#                bảo"). A self-hosted vLLM service serving the same weights is
+#                what would restore it, and does not exist here yet.
+#                Embeddings go to Voyage/OpenAI through `src.services.embedding`
+#                — there is no local embedding service to run.
+#   data      -> `db` (Postgres) + `qdrant`, below. No Redis: nothing in this
+#                codebase queues through one yet.
+#   obs       -> not present. Langfuse is reached over `LANGFUSE_HOST`
+#                (self-hosted or cloud) — `settings.langfuse_public_key`/
+#                `secret_key` empty is the correct, honest default (see
+#                `src.services.uc1_tracing`/`src.services.tracing`), not a
+#                service this file has to run to be usable.
+services:
+  db:
+    # `pgvector/pgvector` is the stock Postgres image with the `vector`
+    # extension already built in — same data directory and same major version,
+    # so an existing volume keeps working. Plain `postgres:16` cannot run the
+    # ADR-0045 migration at all: `CREATE EXTENSION vector` fails on an image
+    # that does not ship the shared library.
+    #
+    # Moving from `postgres:16-alpine` keeps the volume — same major version,
+    # same data directory — but alpine links musl and this image links glibc,
+    # and the two sort text differently. Existing indexes on text columns were
+    # built under the old collation, so run `REINDEX DATABASE app_dev;` once
+    # after the switch (or recreate the volume, if the data is disposable).
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  reranker:
+    build:
+      context: ./reranker
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    # No `deploy.resources.devices` here on purpose (RAG-03): forcing a GPU
+    # requirement in compose would turn this demo into "only runs on one
+    # machine". app.py selects cuda when available and cpu otherwise — but
+    # note this means cpu by default even on a GPU host, since a plain
+    # `docker-compose up` gives the container no GPU passthrough. An operator
+    # who wants the reference machine's ~2.8 GB VRAM budget (ADR-0044 §2)
+    # actually exercised has to opt in themselves: `docker compose --gpus
+    # all up`, a `deploy.resources.reservations.devices` block added locally,
+    # or the NVIDIA Container Toolkit set as the default runtime.
+    volumes:
+      # `bge-reranker-v2-m3` is a 2.2 GB download that `CrossEncoder` fetches
+      # on first load. Without somewhere to keep it, every `docker compose up`
+      # on a recreated container pays for it again — and the model has to be
+      # resident before /health goes green, so it is start_period that pays.
+      - hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # UC1-12 (#113), §6.2: the PEP sidecar. Evaluates `authz.rego` over its own
+  # REST API — `src.policy.pep` is the only code allowed to call it. Pinned to
+  # the exact version `authz.rego` was verified against (`opa check` +
+  # `opa eval` against the sample input in the file's header); bumping this
+  # is a decision, not a routine update, since a Rego semantics change here
+  # changes what every tool call is allowed to do.
+  policy:
+    image: openpolicyagent/opa:1.19.0
+    command: ["run", "--server", "--addr=:8181", "/policy/authz.rego"]
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./docs/usecase_spec/platform:/policy:ro
+    # No healthcheck: the `openpolicyagent/opa` image ships only the `opa`
+    # binary, no shell/curl to probe its own HTTP server with. `backend`
+    # depends on `service_started` below, the same accommodation already made
+    # for `reranker`.
+
+  # UC1-08 (#122), §6.2/§16.1: Vault in dev-server mode — an in-memory backend,
+  # auto-unsealed, seeded with one root token. Good enough to demo FR-20..23;
+  # production-mode + auto-unseal is explicitly out of scope (§16.1) and would
+  # need its own storage backend, TLS, and an unseal ceremony `install.sh`
+  # cannot do unattended anyway. `VAULT_DEV_ROOT_TOKEN_ID` is what
+  # `settings.vault_token` (`src.services.vault_secret_store`) has to match.
+  vault:
+    image: hashicorp/vault:1.18
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-only-vault-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      # The healthcheck below runs `vault status`, which talks to `VAULT_ADDR`
+      # and defaults to *https*://127.0.0.1:8200. Dev mode serves plain HTTP, so
+      # without this the probe fails forever with "server gave HTTP response to
+      # HTTPS client" and `backend` never gets past its `service_healthy` wait.
+      VAULT_ADDR: http://127.0.0.1:8200
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # UC1-21 (#137), §16.2: "SMTP | MailHog | xem được email mà không gửi ra
+  # ngoài thật". `mail.send_reminder`'s real send (`src.compiler.tools`) is
+  # plain SMTP against whatever `SMTP_HOST`/`SMTP_PORT` name — this service is
+  # what they name inside the compose network, so a reminder approved in the
+  # demo shows up at `:8025`, never a real inbox.
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Overrides .env's DATABASE_URL/QDRANT_URL/RERANKER_URL/OPA_URL/VAULT_URL:
+      # inside the compose network these are reachable by service name, not
+      # `localhost`.
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/app_dev
+      QDRANT_URL: http://qdrant:6333
+      RERANKER_URL: http://reranker:8001
+      OPA_URL: http://policy:8181
+      VAULT_URL: http://vault:8200
+      VAULT_TOKEN: dev-only-vault-token
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      # Not `service_healthy`: the backend must come up even when the
+      # reranker is unhealthy or still loading its model (RAG-03 acceptance
+      # — "chạy được khi reranker chết"). `src.services.reranker` degrades to
+      # an unranked result rather than failing a request.
+      reranker:
+        condition: service_started
+      # Also `service_started`, not `service_healthy` — `policy` has no
+      # healthcheck to wait on (see above). Unlike the reranker, `src.policy.pep`
+      # does not degrade gracefully if the sidecar isn't up yet: it fails
+      # closed on the first tool call, which is the correct behaviour, not a
+      # bug to route around with a slower dependency wait.
+      policy:
+        condition: service_started
+      vault:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  pgdata:
+  qdrant_data:
+  hf_cache:

@@ -1,0 +1,21 @@
+.git
+.gitignore
+.env
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+# docs/ bị loại vì nó là tài liệu — TRỪ usecase_spec, thứ mà code chạy thật
+# đọc tới. alembic/versions/a4c2c2363959 mở
+# docs/usecase_spec/uc1-ar-assistant/schema.sql bằng Path(__file__).parents[2],
+# nên loại cả docs/ làm `alembic upgrade head` chết ở migration cuối cùng bằng
+# FileNotFoundError — sau khi ~30 migration trước đó đã chạy xong xuôi.
+docs/
+!docs/usecase_spec/
+eval/
+*.md
+!requirements.txt
+.dockerignore
+Dockerfile
+docker-compose.yml
