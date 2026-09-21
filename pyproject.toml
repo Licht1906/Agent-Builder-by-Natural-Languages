@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-builder-by-natural-languages"
+version = "0.1.0"
+description = "Build AI agents from natural-language descriptions"
+authors = [
+    {name = "Licht1906", email = "titeocr27@gmail.com"},
+]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.28.0",
+    "langchain>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "langgraph>=0.2.0",
+    "pyjwt>=2.10.0",
+    "bcrypt>=4.2.0",
+    # The secret store's envelope encryption (RAG-19 / ADR-0045) — AES-256-GCM
+    # over each stored secret, keyed by SECRET_STORE_KEY.
+    "cryptography>=43.0.0",
+    "sqlalchemy>=2.0.0",
+    "alembic>=1.14.0",
+    "psycopg2-binary>=2.9.0",
+    # The conversation checkpointer (#6) speaks psycopg3, not the psycopg2
+    # SQLAlchemy uses — same database, two drivers.
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "psycopg[binary,pool]>=3.2.0",
+    # Operational tracing (#11), imported only when LANGFUSE_* keys are set.
+    "langfuse>=3.0.0",
+    # Uploading documents for `KnowledgeSearch`: the multipart parser FastAPI
+    # needs to read a file at all, and the two extractors that turn a PDF or a
+    # DOCX into the text a model can be grounded in.
+    "python-multipart>=0.0.20",
+    "pypdf>=5.1.0",
+    "python-docx>=1.1.2",
+    # Retrieval for `KnowledgeSearch` (ADR-0045): the alternative embedding
+    # provider, and the column type every provider's vectors are stored in.
+    "voyageai>=0.3.0",
+    # Reading an uploaded XLSX test set (ADR-0054 §2, EVAL-2) — not previously
+    # a dependency, direct or transitive; checked before adding.
+    "openpyxl>=3.1.0",
+    "pgvector>=0.3.6",
+    # The scenario grid (ADR-0042/0043 via ADR-0054 §3, EVAL-4): covering-array
+    # generation and the Wilson interval, both from vetted libraries on purpose.
+    "allpairspy>=2.5.0",
+    "statsmodels>=0.14.0",
+]
+
+[project.urls]
+repository = "https://github.com/Licht1906/Agent-Builder-by-Natural-Languages"
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.14.0",
+    "types-openpyxl>=3.1.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=7.0.0",  # ADR-0048: the coverage trade has to stay re-measurable
+    "httpx>=0.28.0",
+    # UC1-03 (#111): the AgentSpec contract test parses the real
+    # docs/usecase_spec/uc1-ar-assistant/agentspec.yaml, not a copy of it.
+    "pyyaml>=6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+"src.models.examples" = ["*.json"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

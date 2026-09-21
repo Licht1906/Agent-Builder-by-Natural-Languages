@@ -1,0 +1,91 @@
+# Core
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+python-dotenv>=1.0.0
+httpx>=0.28.0          # web_search + http_request tools
+
+# AI / LangChain
+langchain>=0.3.0
+langchain-openai>=0.3.0
+langgraph>=0.2.0
+
+# Auth
+pyjwt>=2.10.0
+bcrypt>=4.2.0          # legacy verify only (UC1-01 / #117) — see src/auth/passwords.py
+argon2-cffi>=23.1.0    # UC1-01 (#117), FR-02: Argon2id is the hasher for new passwords
+ldap3>=2.9.0           # UC1-02 (#118), FR-05 (Should): bind against LDAP/AD instead of a local password
+
+# Meta-agent prompt rendering (UC1-05 / #119). Renders
+# docs/usecase_spec/platform/meta-agent-system-prompt.md with the catalogs and
+# schema the drafter needs — already a transitive dependency of langchain,
+# declared here for the same reason pyyaml is (#111).
+jinja2>=3.1.0
+
+# Secret store (RAG-19 / ADR-0045) — AES-256-GCM envelope encryption for
+# credentials referenced by ToolRegistration.credential_secret_ref.
+cryptography>=43.0.0
+
+# Database
+sqlalchemy>=2.0.0
+alembic>=1.14.0
+psycopg2-binary>=2.9.0
+
+# Conversation memory (#6) — the checkpointer is Postgres-only, and it talks
+# psycopg3 rather than the psycopg2 SQLAlchemy uses. Both drivers, one database.
+langgraph-checkpoint-postgres>=2.0.0
+psycopg[binary,pool]>=3.2.0
+
+# Operational tracing (#11). Imported lazily and only when both LANGFUSE_* keys
+# are set, so an install without credentials — every test run, most local dev —
+# never touches it. See src/services/tracing.py.
+langfuse>=3.0.0
+
+# The scenario grid (ADR-0042 via ADR-0054 §3, EVAL-4): a vetted covering-array
+# generator and a vetted Wilson interval — both ADRs forbid hand-rolling either.
+allpairspy>=2.5.0
+statsmodels==0.14.4
+
+# Uploading documents for the `KnowledgeSearch` node. `python-multipart` is what
+# lets FastAPI read a file upload at all; the other two turn a PDF or a DOCX into
+# the text a model can actually be grounded in. See src/workflow/knowledge.py.
+python-multipart>=0.0.20
+pypdf>=5.1.0
+python-docx>=1.1.2
+
+# Retrieval for `KnowledgeSearch` (ADR-0045). Embeddings come from OpenAI by
+# default (already a dependency via langchain-openai); `voyageai` is the second
+# supported provider. `pgvector` is the SQLAlchemy type for the column those
+# vectors live in — the extension itself is created by the migration and must
+# exist in the Postgres image (see docker-compose.yml).
+voyageai>=0.3.0
+pgvector>=0.3.6
+
+# Vector Store — Qdrant (RAG-01 / ADR-0044 §1), UC-1's own retrieval index for
+# Knowledge Bases, kept separate from `KnowledgeSearch`'s pgvector-backed
+# stores above. See src/services/qdrant.py.
+qdrant-client>=1.12.0
+
+# Extraction (RAG-06 / ADR-0044 §5). PyMuPDF renders PDF pages to images for
+# the vision-model path; the model call itself is a plain OpenRouter HTTP
+# call via `httpx`, already a dependency above. See src/services/extraction.py.
+pymupdf>=1.24.0
+
+# Dev tools
+ruff>=0.8.0
+mypy>=1.14.0
+pytest>=8.0.0
+pytest-asyncio>=0.24.0
+httpx>=0.28.0
+
+# UC1-03 (#111) — the AgentSpec of record is a YAML document
+# (docs/usecase_spec/uc1-ar-assistant/agentspec.yaml) and the contract test parses
+# it rather than a copy. Already present transitively via langchain; declared here
+# because a test that depends on somebody else's dependency breaks on their upgrade.
+pyyaml>=6.0
+# ADR-0048 traded 5.43 points of coverage for a suite a third the size. That
+# trade is only auditable if the number can be re-measured, so the tool that
+# measures it is a dependency, not a local install:  pytest tests/ --cov=src
+pytest-cov>=7.0.0
+openpyxl

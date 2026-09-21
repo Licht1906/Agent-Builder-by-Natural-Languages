@@ -1,0 +1,95 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.bak.*
+
+# Credential caches written by tooling — real tokens, one `git add -A` away
+# from being published if they are merely untracked.
+.tokens/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (never commit large data)
+data/
+*.db
+*.sqlite3
+
+# UC1-35 (#147): per-agent compose network overrides, regenerated on every deploy
+deploy/network-policies/
+
+# UC1-34 (#146): packaged air-gapped artifacts (images.tar makes these large)
+dist/
+
+# Logs
+logs/
+*.log
+
+# Test coverage
+htmlcov/
+.coverage
+coverage.xml
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Docker
+docker-compose.override.yml
+
+# Node (frontend)
+node_modules/
+.next/
+out/
+.nuxt/
+
+# Build
+*.pyc
+*.pyo
+
+# AI logs — tracked structure, ignored content
+# `**/` so a stray .ai-log/ outside the repo root is ignored too
+**/.ai-log/*.jsonl
+**/.ai-log/archive/
+
+# Personal prompt-redaction customization (Claude only) — not a shared
+# team mechanism; log_hook.py/submit_log.py import it defensively and work
+# without it. .ai-log/.claude_pending.jsonl is covered by .ai-log/*.jsonl above.
+scripts/redact.py
+scripts/llm_redact.py
+tests/test_scripts/
+
+# UC1-37 (#149) — scripts/run_ac_checklist.py's own dated evidence reports.
+# Tracked structure (the directory + this note), ignored content: each real
+# run produces a new timestamped file, the same "structure in, generated
+# content out" shape .ai-log/ above already uses.
+docs/usecase_spec/uc1-ar-assistant/ac_checklist_evidence/*.md
+!docs/usecase_spec/uc1-ar-assistant/ac_checklist_evidence/README.md
+
+# Firebase CLI
+firebase-debug.log
+.firebase/
