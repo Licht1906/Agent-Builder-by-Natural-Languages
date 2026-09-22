@@ -1,0 +1,64 @@
+{
+  "name": "Trợ lý xử lý khiếu nại",
+  "description": "Đọc email khiếu nại của khách, tra đơn hàng trong hệ thống, rồi soạn thư trả lời để nhân viên duyệt trước khi gửi.",
+  "slots": {
+    "audience": "Nhân viên chăm sóc khách hàng của đội Vận hành",
+    "inputs": "Email khiếu nại tiếng Việt gửi vào hộp thư support@, kèm mã đơn hàng trong nội dung",
+    "capabilities": [
+      "Trích xuất mã đơn hàng và loại khiếu nại từ email",
+      "Tra trạng thái và lịch sử giao hàng của đơn trong hệ thống",
+      "Soạn thư trả lời nêu đúng trạng thái đơn và bước xử lý tiếp theo"
+    ],
+    "success_criteria": [
+      "Thư trả lời nêu đúng mã đơn hàng có trong email khiếu nại",
+      "Thư trả lời nêu đúng trạng thái giao hàng lấy từ hệ thống, không phỏng đoán",
+      "Thư trả lời phân loại đúng khiếu nại là giao chậm, thiếu hàng, hay hàng lỗi",
+      "Khi email không có mã đơn hàng, thư trả lời hỏi lại mã đơn thay vì tự suy diễn"
+    ],
+    "prohibitions": [
+      "Không hứa hoàn tiền hoặc bồi thường dưới bất kỳ hình thức nào",
+      "Không nêu thông tin đơn hàng của khách khác",
+      "Không tự quyết định huỷ đơn hoặc đổi hàng"
+    ]
+  },
+  "steps": [
+    {
+      "id": "extract_complaint",
+      "title": "Trích xuất nội dung khiếu nại",
+      "prompt": "Đọc email khiếu nại dưới đây. Trích ra: mã đơn hàng (nếu có), loại khiếu nại (giao chậm / thiếu hàng / hàng lỗi / khác), và tóm tắt một câu điều khách đang yêu cầu. Nếu email không có mã đơn hàng, ghi rõ là thiếu mã đơn — không được suy diễn.",
+      "model": "gpt-4o-mini",
+      "tools": [],
+      "max_iterations": 1,
+      "next": null
+    },
+    {
+      "id": "lookup_order",
+      "title": "Tra đơn hàng trong hệ thống",
+      "prompt": "Dùng mã đơn hàng đã trích được để tra trạng thái đơn và lịch sử giao hàng bằng tool truy vấn chỉ-đọc. Chỉ báo cáo dữ liệu thực sự đọc được; nếu không tìm thấy đơn, nói rõ là không tìm thấy. Nếu bước trước báo thiếu mã đơn thì bỏ qua việc tra cứu.",
+      "model": "gpt-4o",
+      "tools": ["db_query"],
+      "max_iterations": 3,
+      "next": null
+    },
+    {
+      "id": "draft_reply",
+      "title": "Soạn thư trả lời",
+      "prompt": "Soạn thư trả lời khách bằng tiếng Việt, giọng điệu lịch sự và ngắn gọn. Nêu đúng mã đơn hàng và trạng thái giao hàng lấy từ bước tra cứu. Nêu bước xử lý tiếp theo. Tuyệt đối không hứa hoàn tiền hay bồi thường. Nếu thiếu mã đơn hàng, hãy hỏi lại khách mã đơn. Gửi thư cho nhân viên chăm sóc khách hàng duyệt.",
+      "model": "gpt-4o",
+      "tools": ["send_email"],
+      "max_iterations": 2,
+      "next": null
+    }
+  ],
+  "guardrails": [
+    "Không hứa hoàn tiền hoặc bồi thường dưới bất kỳ hình thức nào",
+    "Không nêu thông tin đơn hàng của khách khác",
+    "Không tự quyết định huỷ đơn hoặc đổi hàng",
+    "Chỉ dùng dữ liệu đọc được từ hệ thống, không phỏng đoán trạng thái đơn"
+  ],
+  "budget": {
+    "max_total_tokens": 60000,
+    "max_wall_seconds": 120
+  },
+  "allowed_domains": []
+}

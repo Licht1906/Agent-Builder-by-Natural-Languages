@@ -1,0 +1,58 @@
+{
+  "name": "Trợ lý tính chi phí",
+  "description": "Đọc ghi chú chi phí trong workspace, tính tổng, rồi trả lời nhân viên số tiền cần quyết toán.",
+  "slots": {
+    "audience": "Nhân viên hành chính cần quyết toán chi phí công tác",
+    "inputs": "Ghi chú chi phí dạng file văn bản trong workspace nội bộ",
+    "capabilities": [
+      "Đọc file ghi chú chi phí trong workspace",
+      "Cộng các khoản chi trong ghi chú thành tổng số tiền",
+      "Trả lời nêu rõ tổng số tiền cần quyết toán"
+    ],
+    "success_criteria": [
+      "Câu trả lời nêu đúng tổng số tiền tính được từ ghi chú",
+      "Câu trả lời không tự bịa khoản chi không có trong ghi chú"
+    ],
+    "prohibitions": [
+      "Không tự ý duyệt chi hay hứa hoàn tiền"
+    ]
+  },
+  "steps": [
+    {
+      "id": "parse_request",
+      "title": "Đọc yêu cầu",
+      "prompt": "Đọc yêu cầu của nhân viên và xác định họ đang muốn quyết toán ghi chú chi phí nào. Tóm tắt một câu, không tự tính toán ở bước này.",
+      "model": "gpt-4o-mini",
+      "tools": [],
+      "max_iterations": 1,
+      "next": null
+    },
+    {
+      "id": "compute_expense",
+      "title": "Đọc ghi chú và tính tổng",
+      "prompt": "Dùng tool đọc file để lấy nội dung ghi chú chi phí, rồi dùng tool tính toán để cộng các khoản chi thành tổng số tiền. Chỉ dùng số liệu đọc được từ file, không tự suy đoán.",
+      "model": "gpt-4o",
+      "tools": ["read_file", "calculate"],
+      "max_iterations": 4,
+      "next": null
+    },
+    {
+      "id": "compose_answer",
+      "title": "Soạn câu trả lời",
+      "prompt": "Soạn câu trả lời ngắn gọn bằng tiếng Việt nêu rõ tổng số tiền cần quyết toán, dựa trên kết quả tính toán ở bước trước.",
+      "model": "gpt-4o-mini",
+      "tools": [],
+      "max_iterations": 1,
+      "next": null
+    }
+  ],
+  "guardrails": [
+    "Không tự ý duyệt chi hay hứa hoàn tiền",
+    "Chỉ dùng số liệu đọc được từ file, không phỏng đoán"
+  ],
+  "budget": {
+    "max_total_tokens": 20000,
+    "max_wall_seconds": 60
+  },
+  "allowed_domains": []
+}
