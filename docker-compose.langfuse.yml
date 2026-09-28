@@ -1,0 +1,184 @@
+# The `obs` service `docker-compose.yml` says is "not present" — a self-hosted
+# Langfuse, in its own file so the default stack stays as light as it is.
+#
+#   docker compose -f docker-compose.langfuse.yml up -d
+#   # then, in .env:
+#   LANGFUSE_HOST=http://localhost:3000
+#   LANGFUSE_PUBLIC_KEY=pk-lf-agentlab-local
+#   LANGFUSE_SECRET_KEY=sk-lf-agentlab-local
+#   LANGFUSE_PROJECT_ID=agentlab-local
+#
+# Why self-host rather than paste cloud keys: a trace carries what the user
+# asked, what every tool returned and what the agent answered. UC-1 scrubs
+# PII before exporting (`spec.observability.pii_scrub_traces`,
+# `src.services.uc1_tracing`); V2 does not, so a V2 trace leaving the machine
+# is a data decision, not a config one. On localhost it is neither.
+#
+# Why so many containers: Langfuse v3 is web + worker over Postgres (metadata),
+# ClickHouse (the traces themselves), Redis (the ingestion queue) and an S3
+# store (raw events — MinIO here). The Python SDK in `requirements.txt`
+# (`langfuse>=3`) speaks v3's OTel ingestion and needs a v3 server; the
+# single-Postgres v2 server would not accept it. All six are pinned to a
+# major and given their own volumes and network; nothing here touches the
+# platform's own `db`/`qdrant`.
+#
+# Why the keys are fixed: `LANGFUSE_INIT_*` provisions the org, project, user
+# and API keys on first boot, so `.env` can name them without anyone clicking
+# through a signup — and `LANGFUSE_PROJECT_ID` is what the PM board needs to
+# turn a run's `trace_id` into a link (`src.services.tracing.trace_url_template`).
+# Every secret below is a localhost default. Change all of them before this
+# file is pointed at anything that is not your own machine.
+
+services:
+  langfuse-web:
+    image: langfuse/langfuse:3
+    restart: unless-stopped
+    depends_on: &langfuse-depends-on
+      langfuse-db:
+        condition: service_healthy
+      langfuse-clickhouse:
+        condition: service_healthy
+      langfuse-redis:
+        condition: service_healthy
+      langfuse-minio:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      SALT: agentlab-local-salt-change-me
+      # Quoted on purpose: a bare run of digits is an integer to YAML, and
+      # Langfuse refuses anything but 64 hex characters. A localhost default —
+      # `openssl rand -hex 32` for anything real.
+      ENCRYPTION_KEY: "a9e1c3b5d7f90214365879abcdef0123456789abcdef0123456789abcdef0123"
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: agentlab-local-nextauth-secret
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: agentlab-local-redis
+      REDIS_TLS_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      # The browser uploads media straight to this one, so it is the host-side
+      # address of MinIO, not the in-network one.
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+      # First-boot provisioning — the org, the project the PM board links
+      # into, one login, and the two keys `.env` names.
+      LANGFUSE_INIT_ORG_ID: agentlab
+      LANGFUSE_INIT_ORG_NAME: Agentlab
+      LANGFUSE_INIT_PROJECT_ID: agentlab-local
+      LANGFUSE_INIT_PROJECT_NAME: Agentlab (local)
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-agentlab-local
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-agentlab-local
+      LANGFUSE_INIT_USER_EMAIL: pm@example.com
+      LANGFUSE_INIT_USER_NAME: PM
+      LANGFUSE_INIT_USER_PASSWORD: pm-dev-password
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/api/public/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks: [langfuse]
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    environment: *langfuse-env
+    networks: [langfuse]
+
+  langfuse-db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [langfuse]
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks: [langfuse]
+
+  langfuse-redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "agentlab-local-redis", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a agentlab-local-redis ping | grep PONG"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+    networks: [langfuse]
+
+  langfuse-minio:
+    image: minio/minio
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    ports:
+      - "9090:9000"
+      - "127.0.0.1:9091:9001"
+    volumes:
+      - langfuse_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 2s
+    networks: [langfuse]
+
+volumes:
+  langfuse_pgdata:
+  langfuse_clickhouse_data:
+  langfuse_clickhouse_logs:
+  langfuse_minio_data:
+
+networks:
+  langfuse:
