@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agentlab — Agent Builder</title>
+
+    <!-- Three cuts of one mark, each for the size it survives — see
+         the note in src/components/brand.jsx. The tab icon is the mascot's head
+         alone: the full mark
+         (mascot on a blueprint sheet) is a blue smudge at 16px. The 192px slot
+         and the iOS home screen get the AL tile, which is the icon the brand
+         drew for app stores and launchers. All of them are cut from the sheets
+         in design/ from the two 1254px sheets in design/assets/.
+
+         **The script that cut them is not in the repo.** The PNGs below are
+         checked in and correct; the process that produced them was not kept, so
+         re-cutting them today means writing that step again from the sheets. -->
+    <link rel="icon" href="/brand/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/icon-small-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/brand/app-icon.png" />
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+    <link rel="mask-icon" href="/brand/icon-silhouette.png" color="#1d72fc" />
+
+    <!-- Brand blue for the mobile browser chrome, matching the identity board's
+         accent rather than whatever the OS picks. -->
+    <meta name="theme-color" content="#1d72fc" />
+    <meta name="description" content="Describe a task in plain language; Agentlab interviews you, drafts the spec, builds the workflow, and tests it before anything ships." />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
