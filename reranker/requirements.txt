@@ -1,0 +1,33 @@
+# A separate service, a separate dependency set — this is what keeps torch
+# and its several hundred MB out of the main backend's image (ADR-0044 §2:
+# "the reranker image carries torch and is large; that is the accepted price").
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.10.0
+sentence-transformers>=3.3.0
+
+# Left unpinned and pointed at PyPI on purpose, which means CUDA 13 wheels on
+# x86_64 and CPU wheels on arm64 — whatever the host can actually install.
+#
+# There is a trap here, and it is a silent one. A `cu130` wheel refuses any
+# driver older than 580, and the reference machine's is 575.64 (CUDA 12.9).
+# Refused does not mean failed: `select_device` asks for CUDA, cannot have
+# it, and returns "cpu", so the only symptom is reranking that takes seconds
+# instead of milliseconds (ADR-0044 §2's latency table). `/health` reports
+# the device it actually got — read it before blaming the model.
+#
+# The fix for such a host is one command, deliberately NOT pinned here:
+#
+#     pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.11.0+cu128
+#
+# Pinning it in this file would buy the reference machine its GPU at the
+# price of every other machine: `+cu128` wheels exist only for linux x86_64
+# on PyTorch's own index, so an arm64 build would stop failing silently and
+# start failing outright. Compose refuses to hard-code one machine's
+# hardware (see docker-compose.yml); this file will not smuggle it back in a
+# layer down.
+torch>=2.5.0
+
+# Dev tools
+pytest>=8.0.0
+httpx>=0.28.0
