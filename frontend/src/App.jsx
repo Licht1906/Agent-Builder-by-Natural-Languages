@@ -252,7 +252,7 @@ export default function App() {
     pageTitle = t("Approval dossier");
   } else if (view === "knowledge-bases") {
     crumb = t("WORKSPACE");
-    pageTitle = t("Knowledge Bases");
+    pageTitle = t("Data sources");
   } else if (view === "admin-users") {
     crumb = t("ADMIN");
     pageTitle = t("Accounts");

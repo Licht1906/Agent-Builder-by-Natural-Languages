@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import * as api from "../lib/api";
 import { ErrorNote, PageHead, PageShell, Spinner } from "../components/ui";
+import { useLang } from "../i18n";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { AgentMascot } from "../components/mascot";
 
@@ -193,20 +194,78 @@ function connectionPayloadOf(form) {
   };
 }
 
+/* ============================================================
+   "Nguồn dữ liệu" (DS-01 / ADR-0059 §2): one page, two kinds of source. The
+   Documents tab is the Knowledge Base screen exactly as it was; the Databases
+   tab is where a Hệ CSDL is registered (DS-02 builds the real form — this tab
+   is the frame it plugs into).
+   ============================================================ */
+const SOURCE_TABS = [
+  { id: "documents", label: "Documents", icon: Library },
+  { id: "databases", label: "Databases", icon: Database },
+];
+
 export default function KnowledgeBasesPage({ notify }) {
+  const [tab, setTab] = useState("documents");
   const [openKbId, setOpenKbId] = useState(null);
 
   if (openKbId) {
     return <KnowledgeBaseDetail kbId={openKbId} back={() => setOpenKbId(null)} notify={notify} />;
   }
-  return <KnowledgeBaseList notify={notify} openKb={setOpenKbId} />;
+  const tabs = <SourceTabs active={tab} onSelect={setTab} />;
+  if (tab === "databases") return <DatabaseList tabs={tabs} />;
+  return <KnowledgeBaseList notify={notify} openKb={setOpenKbId} tabs={tabs} />;
+}
+
+function SourceTabs({ active, onSelect }) {
+  const { t } = useLang();
+  return (
+    <div className="ab-tabs" role="tablist" style={{ padding: 0, marginBottom: 18 }}>
+      {SOURCE_TABS.map((entry) => (
+        <button
+          key={entry.id}
+          type="button"
+          role="tab"
+          aria-selected={active === entry.id}
+          className={`ab-tab${active === entry.id ? " active" : ""}`}
+          onClick={() => onSelect(entry.id)}
+        >
+          <entry.icon size={14} />{t(entry.label)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// The Databases tab: empty until DS-02 registers the first Hệ CSDL
+// --------------------------------------------------------------------------- //
+
+function DatabaseList({ tabs }) {
+  const { t } = useLang();
+  return (
+    <PageShell width="narrow">
+        <PageHead title={t("Data sources")} hint={t("Where an agent reads from: documents on a shelf, or a company database it queries by the asker's role.")}>
+          <button type="button" className="btn btn-primary" disabled title={t("Registering a database arrives in the next release.")}>
+            <Plus size={14} />{t("Add a database")}
+          </button>
+        </PageHead>
+
+        {tabs}
+
+        <div className="ab-empty" style={{ border: "1px dashed var(--color-divider)" }}>
+          {t("No database yet — add one to let an agent answer from it, scoped to whoever is asking.")}
+        </div>
+    </PageShell>
+  );
 }
 
 // --------------------------------------------------------------------------- //
 // The list screen: every shelf, how much is on it, who is using it
 // --------------------------------------------------------------------------- //
 
-function KnowledgeBaseList({ notify, openKb }) {
+function KnowledgeBaseList({ notify, openKb, tabs }) {
+  const { t } = useLang();
   const [shelves, setShelves] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -284,13 +343,15 @@ function KnowledgeBaseList({ notify, openKb }) {
 
   return (
     <PageShell width="narrow">
-        <PageHead title="Knowledge Bases" hint="Where a Knowledge Search step reads from. Add documents to a shelf without ever touching a workflow.">
+        <PageHead title={t("Data sources")} hint={t("Where a Knowledge Search step reads from. Add documents to a shelf without ever touching a workflow.")}>
           {!composing && (
             <button type="button" className="btn btn-primary" onClick={() => setComposing(true)}>
-              <Plus size={14} />Tạo Knowledge Base
+              <Plus size={14} />{t("Create a Knowledge Base")}
             </button>
           )}
         </PageHead>
+
+        {tabs}
 
         {composing && <CreateKnowledgeBase onCancel={() => setComposing(false)} onCreated={afterCreate} notify={notify} />}
 

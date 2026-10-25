@@ -58,18 +58,18 @@ const pageIsInsideShell = () => {
 };
 
 
-describe("the Knowledge Bases tab", () => {
-  /* Knowledge Bases used to live inside the Enterprise disclosure; it now sits
-     in the Workspace section directly under the Workflow builder, reachable in
-     one click with no disclosure to open. It was also one of the last screens
-     still drawing its own header, so it is among the likeliest to be put back
-     outside the shell by a later merge. */
+describe("the Data sources tab", () => {
+  /* Data sources (formerly Knowledge Bases) used to live inside the Enterprise
+     disclosure; it now sits in the Workspace section directly under the
+     Workflow builder, reachable in one click with no disclosure to open. It
+     was also one of the last screens still drawing its own header, so it is
+     among the likeliest to be put back outside the shell by a later merge. */
   it("puts the page inside the shell, not one viewport below the fold", async () => {
     const actor = userEvent.setup();
     draw();
     await waitFor(() => expect(screen.getByText("Agentlab")).toBeInTheDocument());
 
-    await actor.click(screen.getByRole("button", { name: /Knowledge Bases|Kho tri thức/i }));
+    await actor.click(screen.getByRole("button", { name: /Data sources|Nguồn dữ liệu/i }));
 
     await waitFor(() => expect(api.knowledgeBases.list).toHaveBeenCalled());
     expect(pageIsInsideShell()).toBe(true);

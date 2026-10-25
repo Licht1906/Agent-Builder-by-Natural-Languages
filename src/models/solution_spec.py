@@ -66,22 +66,26 @@ class SuccessCriterionCategory(StrEnum):
 class DataSourceKind(StrEnum):
     """Where a data source physically is, which decides whether it can be addressed.
 
-    The first two name a resource that exists somewhere and therefore has a
-    `ref`: a file the creator uploaded, an account they connected. The last two
-    name data that arrives at run time and has nothing to point at — see
-    `DataSource.ref`.
+    `uploaded_file`, `connected_account` and `database` name a resource that
+    exists somewhere and therefore has a `ref`: a file the creator uploaded, an
+    account they connected, a Hệ CSDL they registered (ADR-0059 §2). `web` and
+    `user_input` name data that arrives at run time and has nothing to point at
+    — see `DataSource.ref`.
     """
 
     UPLOADED_FILE = "uploaded_file"
     CONNECTED_ACCOUNT = "connected_account"
     WEB = "web"
     USER_INPUT = "user_input"
+    DATABASE = "database"
 
 
 #: The kinds that address a resource, and so are the only ones a `ref` makes
 #: sense on. Derived from nothing — it is the distinction `DataSourceKind`
 #: exists to draw, written once so the validator and the interview prompt agree.
-ADDRESSABLE_DATA_KINDS = frozenset({DataSourceKind.UPLOADED_FILE, DataSourceKind.CONNECTED_ACCOUNT})
+ADDRESSABLE_DATA_KINDS = frozenset(
+    {DataSourceKind.UPLOADED_FILE, DataSourceKind.CONNECTED_ACCOUNT, DataSourceKind.DATABASE}
+)
 
 
 def _non_blank(value: str) -> str:
@@ -118,10 +122,11 @@ class DataSource(BaseModel):
     Knowledge Base id, picked from the creator's own shelves on the spec screen
     or the canvas (ADR-0043 §1, §4) — never a single file, and never a blob key
     the way it was before the RAG uplift. For `connected_account` it is still a
-    connection id. Either way it is filled in after the interview is over, by a
-    person choosing something they actually attached; it stays `None` through
-    the whole interview, because the model reading a description has no way to
-    know which shelf or which connection was meant, and a `ref` it invented
+    connection id, and for `database` the id of a Hệ CSDL (ADR-0059 §2). Either
+    way it is filled in after the interview is over, by a person choosing
+    something they actually attached; it stays `None` through the whole
+    interview, because the model reading a description has no way to know which
+    shelf, connection or database was meant, and a `ref` it invented
     would point at nothing (ADR-0025 §5).
     """
 
@@ -132,7 +137,8 @@ class DataSource(BaseModel):
     ref: str | None = Field(
         default=None,
         description=(
-            "Id Knowledge Base đã gắn (uploaded_file) hoặc id kết nối (connected_account); "
+            "Id Knowledge Base đã gắn (uploaded_file), id kết nối (connected_account) "
+            "hoặc id Hệ CSDL (database); "
             "null khi chưa gắn tài nguyên thật nào"
         ),
     )
@@ -152,7 +158,7 @@ class DataSource(BaseModel):
 
     @model_validator(mode="after")
     def _ref_needs_something_to_point_at(self) -> "DataSource":
-        """Only an uploaded file or a connected account has an address.
+        """Only an uploaded file, a connected account or a Hệ CSDL has an address.
 
         A `ref` on `web` or `user_input` would read on the review screen as a
         resource that was attached, and the Workflow Generator would wire a node

@@ -50,6 +50,18 @@ export const VI = {
   "Connections": "Kết nối",
   "Action queue": "Hàng chờ hành động",
   "Knowledge Bases": "Kho tri thức",
+  /* ── Data sources page (DS-01) ── */
+  "Documents": "Tài liệu",
+  "Databases": "Hệ CSDL",
+  "Add a database": "Thêm Hệ CSDL",
+  "Create a Knowledge Base": "Tạo Knowledge Base",
+  "Registering a database arrives in the next release.": "Đăng ký Hệ CSDL sẽ có ở bản tới.",
+  "No database yet — add one to let an agent answer from it, scoped to whoever is asking.":
+    "Chưa có Hệ CSDL nào — thêm một hệ để agent trả lời từ đó, đúng phạm vi của người hỏi.",
+  "Where an agent reads from: documents on a shelf, or a company database it queries by the asker's role.":
+    "Nơi agent đọc dữ liệu: tài liệu trong kho, hoặc CSDL của công ty mà agent truy vấn theo chức vụ người hỏi.",
+  "Where a Knowledge Search step reads from. Add documents to a shelf without ever touching a workflow.":
+    "Nơi bước Tra cứu tri thức đọc dữ liệu. Thêm tài liệu vào kho mà không phải đụng tới workflow.",
   "Approval dossier": "Hồ sơ duyệt",
   "Agent Chat": "Trò chuyện với agent",
   "Toggle sidebar": "Thu gọn thanh bên",
@@ -276,6 +288,11 @@ export const VI = {
   "Connected account": "Tài khoản đã kết nối",
   "Web": "Web",
   "User input": "Người dùng nhập",
+  "Database": "Hệ CSDL",
+  "Not attached yet": "Chưa gắn nguồn",
+  "Database #{id} (missing)": "Hệ CSDL #{id} (không còn)",
+  "No database registered yet — add one on the Data sources page.":
+    "Chưa có Hệ CSDL nào — thêm ở trang Nguồn dữ liệu.",
   "Workflow completes": "Workflow chạy trọn vẹn",
   "Right tool called": "Gọi đúng tool",
   "Approval respected": "Tôn trọng quyết định duyệt",

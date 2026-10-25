@@ -9,11 +9,15 @@ import { AgentMascot } from "../components/mascot";
 /* The two closed enums the spec carries. Both are `StrEnum`s on the backend —
    a value not in these lists is one the API would refuse, so the form offers
    exactly these and nothing else. */
+/* `picked` is a kind whose `ref` is chosen from a list rather than typed: a
+   Knowledge Base for `uploaded_file`, a Hệ CSDL for `database` (ADR-0059 §2).
+   Only `connected_account` still takes a typed connection id. */
 const DATA_KINDS = [
-  { id: "uploaded_file", label: "Uploaded file", addressable: true },
-  { id: "connected_account", label: "Connected account", addressable: true },
-  { id: "web", label: "Web", addressable: false },
-  { id: "user_input", label: "User input", addressable: false },
+  { id: "uploaded_file", label: "Uploaded file", addressable: true, picked: true },
+  { id: "connected_account", label: "Connected account", addressable: true, picked: false },
+  { id: "web", label: "Web", addressable: false, picked: false },
+  { id: "user_input", label: "User input", addressable: false, picked: false },
+  { id: "database", label: "Database", addressable: true, picked: true },
 ];
 
 const CRITERION_CATEGORIES = [
@@ -26,6 +30,7 @@ const CRITERION_CATEGORIES = [
 ];
 
 const isAddressable = (kind) => DATA_KINDS.some((entry) => entry.id === kind && entry.addressable);
+const isPicked = (kind) => DATA_KINDS.some((entry) => entry.id === kind && entry.picked);
 
 /** Trim the way the backend does before it decides a list is empty, so the
  *  "what still needs filling in" hint on screen matches what a save would say. */
@@ -345,6 +350,10 @@ function TemplateGallery({ busy, onPick }) {
 function DataSources({ sources, disabled, onChange }) {
   const { t } = useLang();
   const [shelves, setShelves] = useState([]);
+  // The creator's Hệ CSDL. Nothing registers one until DS-02, so the list is
+  // empty and the picker can only say so — the shape is already the one DS-02
+  // fills in.
+  const databases = [];
 
   const update = (index, fields) =>
     onChange(sources.map((source, position) => (position === index ? { ...source, ...fields } : source)));
@@ -406,7 +415,7 @@ function DataSources({ sources, disabled, onChange }) {
               >
                 {DATA_KINDS.map((kind) => <option key={kind.id} value={kind.id}>{t(kind.label)}</option>)}
               </select>
-              {source.kind !== "uploaded_file" && (
+              {!isPicked(source.kind) && (
                 <input
                   className="input"
                   style={{ flex: "1 1 130px", minWidth: 0 }}
@@ -426,6 +435,14 @@ function DataSources({ sources, disabled, onChange }) {
                 onCreated={loadShelves}
               />
             )}
+            {source.kind === "database" && (
+              <DatabaseChips
+                databases={databases}
+                selected={source.ref}
+                disabled={disabled}
+                onSelect={(ref) => update(index, { ref })}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -443,6 +460,37 @@ function DataSources({ sources, disabled, onChange }) {
         {t("A Knowledge Search node searches the Knowledge Bases you pick here.")}
       </p>
     </div>
+  );
+}
+
+/** One chip per `{id, name}` the `ref` may name, the chosen one lit, and — when
+ *  the stored `ref` is none of them — a red chip saying so rather than
+ *  dropping it. The row both picked kinds share; each wraps it with what is
+ *  its own (a Knowledge Base can be created on the spot, a Hệ CSDL cannot). */
+function ChoiceChips({ items, selected, disabled, onSelect, missingLabel }) {
+  return (
+    <>
+      {items.map((item) => {
+        const on = String(selected) === String(item.id);
+        return (
+          <button
+            key={item.id}
+            type="button"
+            disabled={disabled}
+            className="ab-chip"
+            style={on ? { color: "var(--ab-primary)", borderColor: "rgba(0,212,168,.4)", background: "rgba(0,212,168,.08)" } : undefined}
+            onClick={() => onSelect(on ? null : String(item.id))}
+          >
+            {item.name}
+          </button>
+        );
+      })}
+      {selected && !items.some((item) => String(item.id) === String(selected)) && (
+        <span className="ab-chip" style={{ color: "#f8a5a5", borderColor: "rgba(239,68,68,.3)" }}>
+          {missingLabel}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -476,26 +524,13 @@ function KnowledgeBaseChips({ shelves, selected, disabled, onSelect, onCreated }
 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-      {shelves.map((kb) => {
-        const on = String(selected) === String(kb.id);
-        return (
-          <button
-            key={kb.id}
-            type="button"
-            disabled={disabled}
-            className="ab-chip"
-            style={on ? { color: "var(--ab-primary)", borderColor: "rgba(0,212,168,.4)", background: "rgba(0,212,168,.08)" } : undefined}
-            onClick={() => onSelect(on ? null : String(kb.id))}
-          >
-            {kb.name}
-          </button>
-        );
-      })}
-      {selected && !shelves.some((kb) => String(kb.id) === String(selected)) && (
-        <span className="ab-chip" style={{ color: "#f8a5a5", borderColor: "rgba(239,68,68,.3)" }}>
-          Knowledge Base #{selected} (missing)
-        </span>
-      )}
+      <ChoiceChips
+        items={shelves}
+        selected={selected}
+        disabled={disabled}
+        onSelect={onSelect}
+        missingLabel={`Knowledge Base #${selected} (missing)`}
+      />
       {!disabled && !creating && (
         <button type="button" className="ab-btn ab-btn-ghost ab-btn-sm" onClick={() => setCreating(true)}>
           <Plus size={12} />Tạo tủ mới
@@ -517,6 +552,35 @@ function KnowledgeBaseChips({ shelves, selected, disabled, onSelect, onCreated }
           </button>
           <button type="button" className="ab-btn ab-btn-ghost ab-btn-sm" onClick={() => setCreating(false)}>Huỷ</button>
         </form>
+      )}
+    </div>
+  );
+}
+
+/** Quick-select chips for a `database` source's Hệ CSDL — the same "picked,
+ *  never typed" rule as `KnowledgeBaseChips`, because a typed id is the one a
+ *  creator gets wrong without noticing. A source with no `ref` yet says so:
+ *  the workflow cannot query a database nobody attached. */
+function DatabaseChips({ databases, selected, disabled, onSelect }) {
+  const { t } = useLang();
+  const muted = { fontSize: "var(--text-xs)", color: "color-mix(in srgb, var(--color-text) 55%, transparent)" };
+
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+      {!selected && (
+        <span className="ab-chip" style={{ color: "#f5c26b", borderColor: "rgba(245,194,107,.35)" }}>
+          {t("Not attached yet")}
+        </span>
+      )}
+      <ChoiceChips
+        items={databases}
+        selected={selected}
+        disabled={disabled}
+        onSelect={onSelect}
+        missingLabel={t("Database #{id} (missing)", { id: selected })}
+      />
+      {databases.length === 0 && (
+        <span style={muted}>{t("No database registered yet — add one on the Data sources page.")}</span>
       )}
     </div>
   );

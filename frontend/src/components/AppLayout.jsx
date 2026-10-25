@@ -110,15 +110,16 @@ export default function AppLayout({
      its row in "Agents you can use", or the link its Deploy tab hands out. A nav
      item for it can only mean "the last agent you happened to open", which is
      the one thing the person clicking it never means. */
-  /* Knowledge Bases lives here, in the Workspace section directly under the
-     Workflow builder, rather than in a section of its own. The Enterprise
+  /* Data sources (Knowledge Bases + Hệ CSDL, ADR-0059 §2) lives here, in the
+     Workspace section directly under the Workflow builder, rather than in a
+     section of its own. The Enterprise
      (UC-1) feature area it used to sit in is no longer surfaced in the nav —
      the routes still exist in `App.jsx`, they just have no door here. */
   const navMain = [
     { id: "designer", label: t("Home"), icon: <Home size={17} />, go: startDesigner, active: view === "designer" },
     { id: "dashboard", label: t("Agents"), icon: <Bot size={17} />, go: goDashboard, active: view === "dashboard" || view === "chat" },
     { id: "builder", label: t("Workflow builder"), icon: <Layers size={17} />, go: openBuilder, active: view === "builder" || view === "spec" },
-    { id: "knowledge-bases", label: t("Knowledge Bases"), icon: <Library size={17} />, go: openKnowledgeBases, active: view === "knowledge-bases" },
+    { id: "knowledge-bases", label: t("Data sources"), icon: <Library size={17} />, go: openKnowledgeBases, active: view === "knowledge-bases" },
   ];
 
   const navAdmin = [
