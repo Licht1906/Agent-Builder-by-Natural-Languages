@@ -28,8 +28,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-RowStatus = Literal["added", "skipped", "error"]
-
 from openpyxl import load_workbook
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -43,6 +41,8 @@ from src.models.solution_spec import SuccessCriterionCategory
 from src.models.workflow import WorkflowJSON
 from src.solution.specs import SpecStageError, solution_spec_of
 from src.workflow.generator import WorkflowStageError, workflow_of
+
+RowStatus = Literal["added", "skipped", "error"]
 
 #: ADR-0054 §2 — "mỗi case sau này là một lần chạy sandbox + judge": the ceiling
 #: is a cost ceiling, not a format limitation.
