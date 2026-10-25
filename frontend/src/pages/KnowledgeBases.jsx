@@ -6,6 +6,7 @@ import {
 import * as api from "../lib/api";
 import { ErrorNote, PageHead, PageShell, Spinner } from "../components/ui";
 import { useLang } from "../i18n";
+import DatabaseSourcesTab from "./DatabaseSources";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { AgentMascot } from "../components/mascot";
 
@@ -197,8 +198,7 @@ function connectionPayloadOf(form) {
 /* ============================================================
    "Nguồn dữ liệu" (DS-01 / ADR-0059 §2): one page, two kinds of source. The
    Documents tab is the Knowledge Base screen exactly as it was; the Databases
-   tab is where a Hệ CSDL is registered (DS-02 builds the real form — this tab
-   is the frame it plugs into).
+   tab is where a Hệ CSDL is registered (`DatabaseSources.jsx`, DS-02).
    ============================================================ */
 const SOURCE_TABS = [
   { id: "documents", label: "Documents", icon: Library },
@@ -213,7 +213,7 @@ export default function KnowledgeBasesPage({ notify }) {
     return <KnowledgeBaseDetail kbId={openKbId} back={() => setOpenKbId(null)} notify={notify} />;
   }
   const tabs = <SourceTabs active={tab} onSelect={setTab} />;
-  if (tab === "databases") return <DatabaseList tabs={tabs} />;
+  if (tab === "databases") return <DatabaseSourcesTab tabs={tabs} notify={notify} />;
   return <KnowledgeBaseList notify={notify} openKb={setOpenKbId} tabs={tabs} />;
 }
 
@@ -234,29 +234,6 @@ function SourceTabs({ active, onSelect }) {
         </button>
       ))}
     </div>
-  );
-}
-
-// --------------------------------------------------------------------------- //
-// The Databases tab: empty until DS-02 registers the first Hệ CSDL
-// --------------------------------------------------------------------------- //
-
-function DatabaseList({ tabs }) {
-  const { t } = useLang();
-  return (
-    <PageShell width="narrow">
-        <PageHead title={t("Data sources")} hint={t("Where an agent reads from: documents on a shelf, or a company database it queries by the asker's role.")}>
-          <button type="button" className="btn btn-primary" disabled title={t("Registering a database arrives in the next release.")}>
-            <Plus size={14} />{t("Add a database")}
-          </button>
-        </PageHead>
-
-        {tabs}
-
-        <div className="ab-empty" style={{ border: "1px dashed var(--color-divider)" }}>
-          {t("No database yet — add one to let an agent answer from it, scoped to whoever is asking.")}
-        </div>
-    </PageShell>
   );
 }
 

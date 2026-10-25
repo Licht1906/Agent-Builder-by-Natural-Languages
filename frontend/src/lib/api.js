@@ -270,6 +270,16 @@ export const externalConnections = {
   remove: (id) => request(`/external-connections/${id}`, { method: "DELETE" }),
 };
 
+/** A creator's Hệ CSDL (DS-02). The DSN goes in on `create`/`update` and never
+ *  comes back — a response says `has_dsn`, nothing more. */
+export const databaseSources = {
+  list: () => request("/database-sources"),
+  create: (body) => request("/database-sources", { method: "POST", body }),
+  update: (id, body) => request(`/database-sources/${id}`, { method: "PATCH", body }),
+  test: (id) => request(`/database-sources/${id}/test`, { method: "POST" }),
+  remove: (id) => request(`/database-sources/${id}`, { method: "DELETE" }),
+};
+
 /** What sits on one Knowledge Base — RAG-08's per-shelf pipeline (#94), watched
  *  by the upload screen (RAG-12 / #98) as it moves `pending → extracting →
  *  chunking → embedding → indexed`. */

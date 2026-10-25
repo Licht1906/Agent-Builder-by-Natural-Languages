@@ -13,6 +13,7 @@ vi.mock("../lib/api", async () => {
     spec: { read: vi.fn(), revise: vi.fn(), confirm: vi.fn() },
     workflow: { read: vi.fn(), templates: vi.fn(), generate: vi.fn() },
     knowledgeBases: { list: vi.fn(), create: vi.fn() },
+    databaseSources: { list: vi.fn() },
     agents: { setKnowledgeBases: vi.fn() },
   };
 });
@@ -41,6 +42,7 @@ beforeEach(() => {
   api.workflow.read.mockRejectedValue(new Error("404"));
   api.workflow.templates.mockResolvedValue([]);
   api.knowledgeBases.list.mockResolvedValue([]);
+  api.databaseSources.list.mockResolvedValue([]);
   api.spec.revise.mockImplementation(async (_agent, _version, body) => ({ spec: body, status: "spec_pending_confirmation" }));
 });
 
@@ -67,6 +69,18 @@ describe("a database data source on the spec screen", () => {
 
     expect(await screen.findByText(/Database #12 \(missing\)/)).toBeInTheDocument();
     expect(screen.queryByText(/Not attached yet/)).toBeNull();
+  });
+
+  it("offers the creator's own Hệ CSDL and saves the one picked as the ref", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.list.mockResolvedValue([{ id: 7, name: "ERP staging" }]);
+    open([{ name: "ERP công nợ", kind: "database", ref: null }]);
+
+    await actor.click((await screen.findByText("ERP staging")).closest("button"));
+    await actor.click(screen.getByRole("button", { name: /Save draft/ }));
+
+    expect(screen.queryByText(/Not attached yet/)).toBeNull();
+    expect(api.spec.revise.mock.calls[0][2].data).toEqual([{ name: "ERP công nợ", kind: "database", ref: "7" }]);
   });
 
   it("saves the source as database with no ref", async () => {

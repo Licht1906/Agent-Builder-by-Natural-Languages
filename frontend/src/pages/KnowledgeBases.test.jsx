@@ -7,7 +7,7 @@ import * as api from "../lib/api";
 
 vi.mock("../lib/api", async () => {
   const actual = await vi.importActual("../lib/api");
-  return { ...actual, knowledgeBases: { list: vi.fn() } };
+  return { ...actual, knowledgeBases: { list: vi.fn() }, databaseSources: { list: vi.fn() } };
 });
 
 const shelf = {
@@ -21,6 +21,7 @@ const shelf = {
 beforeEach(() => {
   vi.clearAllMocks();
   api.knowledgeBases.list.mockResolvedValue([shelf]);
+  api.databaseSources.list.mockResolvedValue([]);
 });
 
 /* DS-01 / ADR-0059 §2: "Nguồn dữ liệu" is one page with two kinds on it —
@@ -42,7 +43,7 @@ describe("the Data sources page", () => {
     await actor.click(screen.getByRole("tab", { name: /Databases/ }));
 
     expect(screen.getByRole("tab", { name: /Databases/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByText(/No database yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No database yet/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Add a database/ })).toBeInTheDocument();
     expect(screen.queryByText("Sổ tay khiếu nại")).toBeNull();
   });

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from src.agents.versions import version_number
 from src.api.agent_routes import OwnedAgent, OwnedVersion
 from src.auth.dependencies import CurrentUser
+from src.datasources.sources import unowned_database_refs
 from src.db.base import get_db
 from src.db.models import AgentVersion, SolutionInterviewSession
 from src.models.schemas import (
@@ -221,7 +222,7 @@ def read_my_versions_solution_spec(_agent: OwnedAgent, version: OwnedVersion) ->
 
 @spec_router.put("/{agent_id}/versions/{version_id}/solution-spec", response_model=SolutionSpecResponse)
 def revise_my_versions_solution_spec(
-    _agent: OwnedAgent,
+    agent: OwnedAgent,
     version: OwnedVersion,
     payload: AgentSolutionSpecification,
     db: Annotated[Session, Depends(get_db)],
@@ -236,7 +237,17 @@ def revise_my_versions_solution_spec(
     A 409 once the version is confirmed. The body may be perfectly valid; what is
     wrong is that this spec is immutable now, and the way to change the business
     intent is a new version.
+
+    A 422 for a `database` source whose `ref` is not one of the creator's own
+    Hệ CSDL (DS-02) — an id is all a ref is, and one typed by hand could name
+    somebody else's ERP.
     """
+    unowned = unowned_database_refs(db, agent.owner_id, payload)
+    if unowned:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Không có Hệ CSDL nào của bạn mang id: {', '.join(unowned)}",
+        )
     try:
         revised = revise_spec(db, version, payload)
     except SpecStageError as exc:

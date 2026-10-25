@@ -1654,6 +1654,69 @@ class ExternalConnection(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
+class DatabaseDialect(StrEnum):
+    """Which engine a Hệ CSDL runs — ADR-0059 §8. SQL Server (DS-06) and MySQL (DS-07) join later."""
+
+    POSTGRESQL = "postgresql"
+
+
+class DatabaseSourceStatus(StrEnum):
+    """Where a Hệ CSDL's last probe landed.
+
+    `NEEDS_DSN` is a row that has no DSN in the secret store to probe with —
+    every row carried over from `uc1_connections`, whose credentials lived in
+    a dev-mode Vault that does not survive a restart (DS-02).
+    """
+
+    UNTESTED = "untested"
+    CONNECTED = "connected"
+    FAILED = "failed"
+    NEEDS_DSN = "needs_dsn"
+
+
+class DatabaseSource(Base):
+    """One creator's Hệ CSDL — a business database an agent may read, DS-02 / ADR-0059 §2.
+
+    Absorbs `UC1Connection`. **The DSN is never a column**: it lives in the
+    secret store (`src.services.secret_store`) under `dsn_secret_ref`, and a
+    dump of this table names a key, never a password — the spec's
+    "DSN không bao giờ nằm trong bảng `database_sources`".
+
+    `allowed_views` is what the creator ticked; `view_columns`/`view_row_counts`
+    /`base_tables` are the *last probe's* snapshot of the database, kept so a
+    tick can be checked (and a base table refused) without dialling out again,
+    and so `data_query` (DS-04) can check columns against what was really
+    there. Like `ExternalConnection.status`, a snapshot is not a live fact.
+    """
+
+    __tablename__ = "database_sources"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(doc="Tên Hệ CSDL, người tạo tự đặt")
+    dialect: Mapped[DatabaseDialect]
+    dsn_secret_ref: Mapped[str] = mapped_column(
+        default="", doc="Khoá trong secret store giữ DSN — rỗng khi chưa có DSN (NEEDS_DSN), không bao giờ là DSN"
+    )
+    allowed_views: Mapped[list[str]] = mapped_column(JSON, default=list, doc="Các view người tạo cho phép agent đọc")
+    view_columns: Mapped[dict[str, list[str]]] = mapped_column(
+        JSON, default=dict, doc="{view: [cột, …]} của lần kiểm tra gần nhất"
+    )
+    view_row_counts: Mapped[dict[str, int]] = mapped_column(
+        JSON, default=dict, doc="{view: số dòng} của lần kiểm tra gần nhất"
+    )
+    base_tables: Mapped[list[str]] = mapped_column(
+        JSON, default=list, doc="Bảng gốc lần kiểm tra gần nhất thấy — để từ chối khi bị tick"
+    )
+    last_probe_status: Mapped[DatabaseSourceStatus] = mapped_column(default=DatabaseSourceStatus.UNTESTED)
+    last_probe_reason: Mapped[str | None] = mapped_column(
+        default=None, doc="ProbeFailure của lần kiểm tra gần nhất — để UI viết lời khuyên, không phải lời của driver"
+    )
+    last_probe_detail: Mapped[str | None] = mapped_column(default=None)
+    last_probed_at: Mapped[datetime | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
 class UC1ConnectionProbeStatus(StrEnum):
     """Where one UC-1 connection's last dry-run probe (FR-23) landed. Not `ExternalConnectionStatus`
     on purpose — same three shapes, unrelated concern (a connection into a

@@ -55,7 +55,26 @@ export const VI = {
   "Databases": "Hệ CSDL",
   "Add a database": "Thêm Hệ CSDL",
   "Create a Knowledge Base": "Tạo Knowledge Base",
-  "Registering a database arrives in the next release.": "Đăng ký Hệ CSDL sẽ có ở bản tới.",
+  /* ── Databases tab (DS-02) ── */
+  "Deleted “{name}”": "Đã xoá “{name}”",
+  "Name": "Tên",
+  "Database type": "Loại CSDL",
+  "Point it at a sample or staging database with the same schema, using a read-only account. The DSN is kept in the secret store and never shown again.":
+    "Trỏ tới DB mẫu hoặc staging cùng schema, dùng tài khoản chỉ đọc. DSN được cất trong kho bí mật và không bao giờ hiển thị lại.",
+  "Save and test": "Lưu và kiểm tra",
+  "Test connection": "Kiểm tra kết nối",
+  "Re-enter DSN": "Nhập lại DSN",
+  "Delete": "Xoá",
+  "Not tested yet.": "Chưa kiểm tra kết nối.",
+  "New DSN": "DSN mới",
+  "Save DSN": "Lưu DSN",
+  "Allowed views saved": "Đã lưu các view được phép",
+  "Tick the views an agent may read. Only views can be allowed — never base tables.":
+    "Tick các view agent được phép đọc. Chỉ view mới được phép — không bao giờ là bảng gốc.",
+  "{rows} rows · {columns} columns": "{rows} dòng · {columns} cột",
+  "rows not counted · {columns} columns": "không đếm được số dòng · {columns} cột",
+  "Base tables (cannot be allowed): {names}": "Bảng gốc (không chọn được): {names}",
+  "Save allowed views": "Lưu các view được phép",
   "No database yet — add one to let an agent answer from it, scoped to whoever is asking.":
     "Chưa có Hệ CSDL nào — thêm một hệ để agent trả lời từ đó, đúng phạm vi của người hỏi.",
   "Where an agent reads from: documents on a shelf, or a company database it queries by the asker's role.":

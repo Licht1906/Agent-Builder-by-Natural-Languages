@@ -2,6 +2,8 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -16,6 +18,7 @@ from src.api.approval_routes import router as approval_router
 from src.api.auth_routes import router as auth_router
 from src.api.connection_routes import router as connection_router
 from src.api.control_plane_routes import router as control_plane_router
+from src.api.database_source_routes import router as database_source_router
 from src.api.deployment_routes import router as deployment_router
 from src.api.document_routes import router as document_router
 from src.api.eval_routes import router as eval_router
@@ -136,7 +139,22 @@ async def _model_provider_unavailable(_request: Request, exc: Exception) -> JSON
     return JSONResponse(status_code=503, content={"detail": reason}, headers={"Retry-After": "60"})
 
 
+async def _validation_error_without_input(request: Request, exc: Exception) -> JSONResponse:
+    """FastAPI's 422, minus the `input` it would echo back — DS-02's "DSN không xuất hiện trong bất kỳ response".
+
+    The default body repeats what was sent, and for a missing field that is
+    the *whole* object: a Hệ CSDL created without a name would have its DSN
+    handed straight back. Where an error is and what was wrong with it is
+    still said in full; only the caller's own value is left out, for every
+    route at once, since any form can carry a secret.
+    """
+    errors = exc.errors() if isinstance(exc, RequestValidationError) else []
+    detail = [{key: value for key, value in error.items() if key != "input"} for error in errors]
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(detail)})
+
+
 settings = get_settings()
+app.add_exception_handler(RequestValidationError, _validation_error_without_input)
 for provider_error in PROVIDER_ERROR_TYPES:
     app.add_exception_handler(provider_error, _model_provider_unavailable)
 app.add_middleware(
@@ -158,6 +176,7 @@ app.include_router(interview_router, prefix="/api/v1")
 app.include_router(knowledge_base_router, prefix="/api/v1")
 app.include_router(knowledge_base_agent_links_router, prefix="/api/v1")
 app.include_router(external_connection_router, prefix="/api/v1")
+app.include_router(database_source_router, prefix="/api/v1")
 app.include_router(connection_router, prefix="/api/v1")
 app.include_router(user_connection_router, prefix="/api/v1")
 app.include_router(metaagent_router, prefix="/api/v1")

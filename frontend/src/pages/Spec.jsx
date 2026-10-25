@@ -350,10 +350,8 @@ function TemplateGallery({ busy, onPick }) {
 function DataSources({ sources, disabled, onChange }) {
   const { t } = useLang();
   const [shelves, setShelves] = useState([]);
-  // The creator's Hệ CSDL. Nothing registers one until DS-02, so the list is
-  // empty and the picker can only say so — the shape is already the one DS-02
-  // fills in.
-  const databases = [];
+  // The creator's Hệ CSDL (DS-02) — a `database` source's `ref` is one of these.
+  const [databases, setDatabases] = useState([]);
 
   const update = (index, fields) =>
     onChange(sources.map((source, position) => (position === index ? { ...source, ...fields } : source)));
@@ -368,6 +366,7 @@ function DataSources({ sources, disabled, onChange }) {
   useEffect(() => {
     let cancelled = false;
     api.knowledgeBases.list().then((kbs) => !cancelled && setShelves(kbs)).catch(() => {});
+    api.databaseSources.list().then((rows) => !cancelled && setDatabases(rows)).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 

@@ -70,7 +70,11 @@ def _resolve_and_validate(url: str) -> tuple[str, list[str]]:
     host = parsed.hostname
     if not host:
         raise SSRFBlockedError(f"URL không hợp lệ (thiếu host): {url!r}")
+    return host, _validated_addresses(host)
 
+
+def _validated_addresses(host: str) -> list[str]:
+    """Every address `host` resolves to — raises unless all of them are safe. `_resolve_and_validate`'s check, URL-free."""
     try:
         resolved = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
@@ -86,7 +90,7 @@ def _resolve_and_validate(url: str) -> tuple[str, list[str]]:
             raise SSRFBlockedError(f"Host {host!r} phân giải về địa chỉ nội bộ/dành riêng ({ip}) — bị chặn")
         ips.append(ip)
 
-    return host, ips
+    return ips
 
 
 def assert_safe_url(url: str) -> str:
@@ -114,6 +118,17 @@ def pin_safe_ip(url: str) -> tuple[str, str]:
     """
     host, ips = _resolve_and_validate(url)
     return host, ips[0]
+
+
+def pin_safe_host(host: str) -> str:
+    """`pin_safe_ip` for a dial-out that has a host but no URL — a database DSN (DS-02).
+
+    A Postgres connection string is not an `http(s)` URL, so it never reaches
+    `pin_safe_ip`'s scheme check; the host it names gets exactly the same
+    resolve-every-address check, and the caller dials the address returned
+    (`hostaddr`) rather than asking DNS again.
+    """
+    return _validated_addresses(host)[0]
 
 
 def url_with_pinned_host(url: str, ip: str) -> str:

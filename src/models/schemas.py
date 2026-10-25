@@ -15,10 +15,13 @@ from src.agents.threads import CONVERSATION_ID_PATTERN, ThreadNamespace
 from src.agents.tools.registry import ToolRisk
 from src.agentspec.spec import ConnectionType
 from src.approvals.states import QueueState
+from src.datasources.dialects.base import ProbeFailure
 from src.db.models import (
     MAX_RATE_LIMIT_PER_USER,
     MIN_RATE_LIMIT_PER_USER,
     ApprovalDecisionKind,
+    DatabaseDialect,
+    DatabaseSourceStatus,
     DeploymentAccessMode,
     DeploymentStatus,
     DocumentStatus,
@@ -308,6 +311,62 @@ class ExternalConnectionResponse(BaseModel):
     last_checked_at: UtcTimestamp | None = Field(
         default=None, description="Lúc /test chạy lần gần nhất; null nếu chưa test"
     )
+    created_at: UtcTimestamp
+
+
+class DatabaseSourceCreateRequest(BaseModel):
+    """A Hệ CSDL as a creator types it in — DS-02 / ADR-0059 §2.
+
+    `dsn` is the one value this endpoint exists to keep: it goes straight into
+    the secret store and is never stored on the row, echoed or logged.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, description="Tên Hệ CSDL, người tạo tự đặt")
+    dialect: DatabaseDialect
+    dsn: str = Field(..., min_length=1, description="Chuỗi kết nối tới DB mẫu/staging — chỉ đi vào secret store")
+
+
+class DatabaseSourceUpdateRequest(BaseModel):
+    """Any of a name, a new DSN, or the ticked views. `None` leaves that part alone."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1)
+    dsn: str | None = Field(default=None, min_length=1, description="DSN mới — thay DSN cũ trong secret store")
+    allowed_views: list[str] | None = Field(default=None, description="Các view agent được phép đọc")
+
+
+class DatabaseViewResponse(BaseModel):
+    """One view the last probe saw, and whether the creator ticked it."""
+
+    name: str
+    columns: list[str]
+    row_count: int | None = Field(..., description="null khi lần kiểm tra không đếm kịp hoặc không có quyền đọc view")
+    allowed: bool
+
+
+class DatabaseSourceResponse(BaseModel):
+    """One Hệ CSDL, as a creator reads it back — `has_dsn` in place of the DSN, always.
+
+    Assembled field by field (`ExternalConnectionResponse`'s reason): `has_dsn`
+    and `views` have no single column to read from.
+    """
+
+    id: int
+    name: str
+    dialect: DatabaseDialect
+    has_dsn: bool = Field(..., description="True nếu đã có DSN trong secret store — không bao giờ là chính DSN")
+    status: DatabaseSourceStatus
+    status_reason: ProbeFailure | None = Field(
+        default=None, description="Loại lỗi của lần kiểm tra gần nhất — để màn hình viết lời khuyên"
+    )
+    status_detail: str | None = None
+    last_probed_at: UtcTimestamp | None = None
+    allowed_views: list[str]
+    views: list[DatabaseViewResponse] = Field(..., description="Các view lần kiểm tra gần nhất thấy")
+    base_tables: list[str] = Field(..., description="Bảng gốc lần kiểm tra gần nhất thấy — không chọn được")
     created_at: UtcTimestamp
 
 

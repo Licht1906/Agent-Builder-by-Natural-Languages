@@ -316,6 +316,19 @@ class Settings(BaseSettings):
     # person makes by hand while setting up a connection, not a bulk operation.
     external_connection_test_rate_limit_per_user: int = Field(default=10, ge=1)
 
+    # Hệ CSDL (DS-02 / ADR-0059 §2). A staging ERP usually sits on a private
+    # network — exactly the addresses `src.services.ssrf_guard` refuses — so an
+    # operator lists, comma-separated and spelled as a DSN spells them, the
+    # hosts `POST /database-sources/{id}/test` may dial anyway. Empty: public
+    # addresses only. The demo's own ERP service (DS-23) is listed here, not
+    # exempted in code.
+    database_source_trusted_hosts: str = ""
+
+    @property
+    def database_source_trusted_host_set(self) -> frozenset[str]:
+        """`database_source_trusted_hosts` as the set it is — `embedding_models`'s reason for parsing once."""
+        return frozenset(host.strip() for host in self.database_source_trusted_hosts.split(",") if host.strip())
+
     # Vault (UC1-08 / #122, §6.2). Dev-mode server for the demo — the spec's own
     # scope line (§16.1: "production-mode+auto-unseal ngoài MVP"). `vault_token`
     # is the dev root token `vault server -dev` prints and `docker-compose.yml`'s
