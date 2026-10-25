@@ -13,10 +13,10 @@ spec screen, the `data_query` validator (DS-04) and the exported package's
 start-up check (DS-15) ask one question one way.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class ProbeFailure(StrEnum):
@@ -84,6 +84,20 @@ class Introspection:
     base_tables: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ColumnRef:
+    """One column of one view, as a creator names them (`view` schema-qualified outside `public`)."""
+
+    view: str
+    column: str
+
+
+#: `(match, value, columns) -> {column: value}` for the one row of `match.view`
+#: whose `match.column` equals `value`, or `None` for no row or several — the
+#: access engine's single read (`src.datasources.access.resolve_principal`).
+IdentityLookup = Callable[[ColumnRef, Any, tuple[str, ...]], Mapping[str, Any] | None]
+
+
 class Dialect(Protocol):
     """One database engine, as far as a Hệ CSDL needs it today.
 
@@ -91,10 +105,21 @@ class Dialect(Protocol):
     join this interface with `data_query` (DS-04), the first caller that
     needs either — defining them before there is a query type to compile
     would be guessing at its shape.
+
+    Every method takes the DSN and the trusted hosts and dials through the
+    same checks; none keeps a connection past its own call.
     """
 
     def introspect(self, dsn: str, *, trusted_hosts: frozenset[str]) -> Introspection:
         """Every view with its columns and row count, plus the base tables. Raises `DatabaseProbeError`."""
+        ...
+
+    def identity_lookup(self, dsn: str, *, trusted_hosts: frozenset[str]) -> IdentityLookup:
+        """An `IdentityLookup` against this database — each call one short read-only connection."""
+        ...
+
+    def distinct_values(self, dsn: str, column: ColumnRef, *, trusted_hosts: frozenset[str]) -> list[Any]:
+        """The distinct non-null values of `column`, sorted — the spec form's list of positions. Capped."""
         ...
 
 

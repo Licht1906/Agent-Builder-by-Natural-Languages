@@ -278,6 +278,12 @@ export const databaseSources = {
   update: (id, body) => request(`/database-sources/${id}`, { method: "PATCH", body }),
   test: (id) => request(`/database-sources/${id}/test`, { method: "POST" }),
   remove: (id) => request(`/database-sources/${id}`, { method: "DELETE" }),
+  /* Quy tắc truy cập (DS-03): `rules: null` means none saved — deny everyone. */
+  accessRules: (id) => request(`/database-sources/${id}/access-rules`),
+  saveAccessRules: (id, rules) => request(`/database-sources/${id}/access-rules`, { method: "PUT", body: rules }),
+  accessRulesYaml: (id) => requestText(`/database-sources/${id}/access-rules/yaml`),
+  distinctValues: (id, view, column) =>
+    request(`/database-sources/${id}/distinct-values?view=${encodeURIComponent(view)}&column=${encodeURIComponent(column)}`),
 };
 
 /** What sits on one Knowledge Base — RAG-08's per-shelf pipeline (#94), watched

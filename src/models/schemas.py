@@ -15,6 +15,7 @@ from src.agents.threads import CONVERSATION_ID_PATTERN, ThreadNamespace
 from src.agents.tools.registry import ToolRisk
 from src.agentspec.spec import ConnectionType
 from src.approvals.states import QueueState
+from src.datasources.access import AccessRules
 from src.datasources.dialects.base import ProbeFailure
 from src.db.models import (
     MAX_RATE_LIMIT_PER_USER,
@@ -368,6 +369,24 @@ class DatabaseSourceResponse(BaseModel):
     views: list[DatabaseViewResponse] = Field(..., description="Các view lần kiểm tra gần nhất thấy")
     base_tables: list[str] = Field(..., description="Bảng gốc lần kiểm tra gần nhất thấy — không chọn được")
     created_at: UtcTimestamp
+
+
+class AccessRulesResponse(BaseModel):
+    """A Hệ CSDL's quy tắc truy cập (DS-03) and what is wrong with them against the database as last probed.
+
+    `rules` null means none were saved — every asker is denied. `problems`
+    is recomputed on every read, so a view unticked after saving shows up
+    here rather than only when a query is refused.
+    """
+
+    rules: AccessRules | None
+    problems: list[str]
+
+
+class DistinctValuesResponse(BaseModel):
+    """The distinct values of one column — the positions the access form offers (DS-03)."""
+
+    values: list[Any]
 
 
 class UC1ConnectionCreateRequest(BaseModel):

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Database, KeyRound, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Check, Database, KeyRound, Plus, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
 import * as api from "../lib/api";
 import { ErrorNote, PageHead, PageShell, Spinner } from "../components/ui";
 import { useLang } from "../i18n";
 import { AgentMascot } from "../components/mascot";
+import AccessRulesEditor from "./AccessRulesEditor";
 
 /* ============================================================
    The Databases tab of "Nguồn dữ liệu" (DS-02 / ADR-0059 §2): register a Hệ
@@ -163,6 +164,7 @@ function DatabaseSourceCard({ source, onChanged, onRemove, notify }) {
   const { t } = useLang();
   const [testing, setTesting] = useState(false);
   const [enteringDsn, setEnteringDsn] = useState(!source.has_dsn);
+  const [editingAccess, setEditingAccess] = useState(false);
 
   async function test() {
     setTesting(true);
@@ -213,6 +215,19 @@ function DatabaseSourceCard({ source, onChanged, onRemove, notify }) {
       {enteringDsn && <DsnForm sourceId={source.id} onSave={saveDsn} onCancel={source.has_dsn ? () => setEnteringDsn(false) : null} />}
 
       {source.views.length > 0 && <ViewPicker source={source} onChanged={onChanged} notify={notify} />}
+
+      {source.allowed_views.length > 0 && (
+        <div style={{ borderTop: "1px solid var(--color-divider)", paddingTop: 10 }}>
+          <button type="button" className="btn btn-ghost btn-sm" aria-expanded={editingAccess} onClick={() => setEditingAccess(!editingAccess)}>
+            <ShieldCheck size={12} />{t("Access rules")}
+          </button>
+          {editingAccess && (
+            <div style={{ marginTop: 10 }}>
+              <AccessRulesEditor source={source} notify={notify} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

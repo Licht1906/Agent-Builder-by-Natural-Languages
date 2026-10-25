@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.engine import URL
 
-from src.datasources.dialects import DatabaseProbeError, ProbeFailure, schema_problems
+from src.datasources.dialects import ColumnRef, DatabaseProbeError, ProbeFailure, schema_problems
 from src.datasources.dialects.postgresql import PostgresDialect
 from src.db.base import engine
 
@@ -146,6 +146,58 @@ def test_a_view_too_slow_to_count_is_listed_without_a_count(slow_view: str) -> N
     views = {view.name: view for view in found.views}
     assert views[slow_view].row_count is None
     assert isinstance(views["v_ar_open"].row_count, int)
+
+
+@pytest.fixture
+def employee_view() -> Iterator[str]:
+    """A small employee view — what DS-23's ERP gives `identity.view`, here built in the test database."""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE OR REPLACE VIEW v_test_employees AS SELECT * FROM (VALUES "
+                "('an@cty.vn', 'E102', 'SALES', 'Nhân viên KD'), "
+                "('binh@cty.vn', 'E200', 'SALES', 'Trưởng nhóm KD'), "
+                "('chi@cty.vn', 'E300', 'FIN', 'Kế toán trưởng'), "
+                "('trung@cty.vn', 'E401', 'SALES', 'Nhân viên KD'), "
+                "('trung@cty.vn', 'E402', 'SALES', 'Nhân viên KD')"
+                ") AS t(email, emp_id, dept_code, position)"
+            )
+        )
+    yield "v_test_employees"
+    with engine.begin() as connection:
+        connection.execute(text("DROP VIEW IF EXISTS v_test_employees"))
+
+
+def test_the_identity_lookup_reads_one_askers_row(employee_view: str) -> None:
+    lookup = DIALECT.identity_lookup(_dsn(), trusted_hosts=TRUSTED)
+
+    row = lookup(ColumnRef(view=employee_view, column="email"), "an@cty.vn", ("emp_id", "dept_code", "position"))
+
+    assert row == {"emp_id": "E102", "dept_code": "SALES", "position": "Nhân viên KD"}
+
+
+def test_the_identity_lookup_finds_nobody_for_an_unknown_value(employee_view: str) -> None:
+    lookup = DIALECT.identity_lookup(_dsn(), trusted_hosts=TRUSTED)
+
+    assert lookup(ColumnRef(view=employee_view, column="email"), "la@cty.vn", ("emp_id",)) is None
+
+
+def test_an_ambiguous_asker_is_nobody_rather_than_the_first_match(employee_view: str) -> None:
+    lookup = DIALECT.identity_lookup(_dsn(), trusted_hosts=TRUSTED)
+
+    assert lookup(ColumnRef(view=employee_view, column="email"), "trung@cty.vn", ("emp_id",)) is None
+
+
+def test_a_lookup_value_is_a_parameter_never_sql(employee_view: str) -> None:
+    lookup = DIALECT.identity_lookup(_dsn(), trusted_hosts=TRUSTED)
+
+    assert lookup(ColumnRef(view=employee_view, column="email"), "x' OR '1'='1", ("emp_id",)) is None
+
+
+def test_distinct_values_lists_every_position_once(employee_view: str) -> None:
+    values = DIALECT.distinct_values(_dsn(), ColumnRef(view=employee_view, column="position"), trusted_hosts=TRUSTED)
+
+    assert values == ["Kế toán trưởng", "Nhân viên KD", "Trưởng nhóm KD"]
 
 
 def test_every_session_is_read_only() -> None:

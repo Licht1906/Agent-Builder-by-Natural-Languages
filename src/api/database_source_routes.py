@@ -12,21 +12,30 @@ key, and `has_dsn` is all that is said about it.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi.responses import PlainTextResponse
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from src.auth.dependencies import CurrentUser
 from src.config import get_settings
-from src.datasources.dialects import ProbeFailure
+from src.datasources.access import AccessRules, from_yaml, to_yaml
+from src.datasources.dialects import ColumnRef, DatabaseProbeError, ProbeFailure
 from src.datasources.sources import (
+    AccessRulesError,
     AllowedViewsError,
+    ColumnNotReadableError,
     DatabaseSourceInUseError,
+    access_rules_of,
     create_database_source,
+    current_access_problems,
     delete_database_source,
+    distinct_column_values,
     list_database_sources,
     rename_database_source,
     replace_dsn,
     run_database_test,
+    save_access_rules,
     set_allowed_views,
     snapshot_of,
 )
@@ -34,15 +43,20 @@ from src.db.base import get_db
 from src.db.models import DatabaseSource
 from src.deployments.rate_limit import RateLimitExceededError, SlidingWindowLimiter
 from src.models.schemas import (
+    AccessRulesResponse,
     DatabaseSourceCreateRequest,
     DatabaseSourceResponse,
     DatabaseSourceUpdateRequest,
     DatabaseViewResponse,
+    DistinctValuesResponse,
 )
 from src.services.connection_test_rate_limit import charge_one_connection_test, get_connection_test_rate_limiter
 from src.services.secret_store import SecretStore, get_secret_store
 
 router = APIRouter(prefix="/database-sources", tags=["database-sources"])
+
+#: `access.yaml`'s media type, in and out.
+_YAML = "application/yaml"
 
 
 def get_owned_database_source(
@@ -167,6 +181,99 @@ def test_my_database_source(
     person dialling out by hand, and one ceiling across both is what keeps
     two endpoints from being two scanners.
     """
+    _charge_one_dial_out(rate_limiter, source)
+    updated = run_database_test(
+        db, source, secret_store=secret_store, trusted_hosts=get_settings().database_source_trusted_host_set
+    )
+    return _response_of(updated)
+
+
+# --------------------------------------------------------------------------- #
+# Quy tắc truy cập (DS-03)
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/{source_id}/access-rules", response_model=AccessRulesResponse)
+def read_my_access_rules(source: OwnedDatabaseSource) -> AccessRulesResponse:
+    """The saved rules, and what is wrong with them against the database as last probed. `rules: null` = deny all."""
+    return AccessRulesResponse(rules=access_rules_of(source), problems=current_access_problems(source))
+
+
+@router.put("/{source_id}/access-rules", response_model=AccessRulesResponse)
+def save_my_access_rules(
+    rules: AccessRules, source: OwnedDatabaseSource, db: Annotated[Session, Depends(get_db)]
+) -> AccessRulesResponse:
+    """Replace the rules — 422 naming every view and column that does not fit, nothing saved."""
+    return _saved(db, source, rules)
+
+
+@router.get("/{source_id}/access-rules/yaml", response_class=PlainTextResponse)
+def export_my_access_rules(source: OwnedDatabaseSource) -> PlainTextResponse:
+    """The rules as `access.yaml` — what "Xem YAML" shows and the exported package ships. 404 before any are saved."""
+    rules = access_rules_of(source)
+    if rules is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hệ CSDL này chưa có quy tắc truy cập")
+    return PlainTextResponse(to_yaml(rules), media_type=_YAML)
+
+
+@router.put("/{source_id}/access-rules/yaml", response_model=AccessRulesResponse)
+def import_my_access_rules(
+    body: Annotated[bytes, Body(media_type=_YAML)], source: OwnedDatabaseSource, db: Annotated[Session, Depends(get_db)]
+) -> AccessRulesResponse:
+    """Replace the rules from `access.yaml` — the same checks as the JSON route, after the YAML is read."""
+    try:
+        rules = from_yaml(body.decode("utf-8", errors="replace"))
+    except ValidationError as exc:
+        problems = [f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()]
+        raise _refused("access.yaml sai định dạng", problems) from None
+    except ValueError as exc:
+        raise _refused(str(exc), [str(exc)]) from None
+    return _saved(db, source, rules)
+
+
+@router.get("/{source_id}/distinct-values", response_model=DistinctValuesResponse)
+def list_my_distinct_values(
+    column: Annotated[ColumnRef, Depends()],
+    source: OwnedDatabaseSource,
+    secret_store: SecretStoreDep,
+    rate_limiter: ConnectionTestRateLimiterDep,
+) -> DistinctValuesResponse:
+    """The distinct values of one ticked view's column (`?view=&column=`) — the form's position list. Rate-limited.
+
+    422 for a view not ticked or a column not in the last probe, decided
+    before dialling; 502 when the database itself could not be read, in the
+    probe's own fixed sentence.
+    """
+    _charge_one_dial_out(rate_limiter, source)
+    try:
+        values = distinct_column_values(
+            source, column, secret_store=secret_store, trusted_hosts=get_settings().database_source_trusted_host_set
+        )
+    except ColumnNotReadableError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+    except DatabaseProbeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
+    return DistinctValuesResponse(values=values)
+
+
+def _saved(db: Session, source: DatabaseSource, rules: AccessRules) -> AccessRulesResponse:
+    """Save `rules` for both PUT routes, or raise the 422 naming every problem."""
+    try:
+        saved = save_access_rules(db, source, rules)
+    except AccessRulesError as exc:
+        raise _refused("Quy tắc truy cập không khớp với Hệ CSDL", exc.problems) from None
+    return AccessRulesResponse(rules=access_rules_of(saved), problems=[])
+
+
+def _refused(message: str, problems: list[str]) -> HTTPException:
+    """The access-rules 422 — `{message, problems}`, one shape for both PUT routes and every refusal."""
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"message": message, "problems": problems}
+    )
+
+
+def _charge_one_dial_out(rate_limiter: SlidingWindowLimiter, source: DatabaseSource) -> None:
+    """Count one outbound dial against the owner's `/test` allowance, or answer 429 — before anything is dialled."""
     try:
         charge_one_connection_test(rate_limiter, source.owner_id)
     except RateLimitExceededError as exc:
@@ -175,7 +282,3 @@ def test_my_database_source(
             detail=exc.message,
             headers={"Retry-After": str(exc.retry_after_seconds)},
         ) from None
-    updated = run_database_test(
-        db, source, secret_store=secret_store, trusted_hosts=get_settings().database_source_trusted_host_set
-    )
-    return _response_of(updated)

@@ -7,8 +7,10 @@ Server (DS-06) or MySQL (DS-07) is a module plus a row in `_DIALECTS`.
 """
 
 from src.datasources.dialects.base import (
+    ColumnRef,
     DatabaseProbeError,
     Dialect,
+    IdentityLookup,
     Introspection,
     ProbeFailure,
     ViewInfo,
@@ -18,8 +20,10 @@ from src.datasources.dialects.postgresql import PostgresDialect
 from src.db.models import DatabaseDialect
 
 __all__ = [
+    "ColumnRef",
     "DatabaseProbeError",
     "Dialect",
+    "IdentityLookup",
     "Introspection",
     "ProbeFailure",
     "ViewInfo",

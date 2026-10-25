@@ -75,6 +75,32 @@ export const VI = {
   "rows not counted · {columns} columns": "không đếm được số dòng · {columns} cột",
   "Base tables (cannot be allowed): {names}": "Bảng gốc (không chọn được): {names}",
   "Save allowed views": "Lưu các view được phép",
+  /* ── Quy tắc truy cập (DS-03) ── */
+  "Access rules": "Quy tắc truy cập",
+  "Access rules saved": "Đã lưu quy tắc truy cập",
+  "Save the rules first to see them as YAML.": "Lưu quy tắc trước rồi mới xem được dạng YAML.",
+  "Who sees what": "Ai thấy gì",
+  "Load positions": "Lấy danh sách chức vụ",
+  "Nobody can read anything yet — every asker is denied until a rule says otherwise.":
+    "Chưa ai đọc được gì — mọi người hỏi đều bị cấm cho tới khi có quy tắc cho phép.",
+  "View YAML": "Xem YAML",
+  "Save access rules": "Lưu quy tắc truy cập",
+  "Employee view": "View nhân viên",
+  "Matched against the sign-in by": "Cột khớp với người đăng nhập",
+  "Attributes read off the asker's row. “position” is required — rules are written per position.":
+    "Các thuộc tính đọc từ dòng của người hỏi. Bắt buộc có “position” — quy tắc được viết theo chức vụ.",
+  "Attribute name": "Tên thuộc tính",
+  "Column for {name}": "Cột cho {name}",
+  "Add an attribute": "Thêm thuộc tính",
+  "Position": "Chức vụ",
+  "View column": "Cột của view",
+  "Asker attribute": "Thuộc tính người hỏi",
+  "Add a condition": "Thêm điều kiện",
+  "{position} — {view}: the filter has no complete condition. Pick a view column and an asker attribute, or choose Deny.":
+    "{position} — {view}: bộ lọc chưa có điều kiện đầy đủ. Chọn cột của view và thuộc tính người hỏi, hoặc chọn Cấm.",
+  "Deny": "Cấm",
+  "Everything": "Tất cả",
+  "Filter": "Lọc",
   "No database yet — add one to let an agent answer from it, scoped to whoever is asking.":
     "Chưa có Hệ CSDL nào — thêm một hệ để agent trả lời từ đó, đúng phạm vi của người hỏi.",
   "Where an agent reads from: documents on a shelf, or a company database it queries by the asker's role.":

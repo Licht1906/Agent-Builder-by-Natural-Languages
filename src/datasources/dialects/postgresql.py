@@ -26,7 +26,14 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
-from src.datasources.dialects.base import DatabaseProbeError, Introspection, ProbeFailure, ViewInfo
+from src.datasources.dialects.base import (
+    ColumnRef,
+    DatabaseProbeError,
+    IdentityLookup,
+    Introspection,
+    ProbeFailure,
+    ViewInfo,
+)
 from src.services.ssrf_guard import SSRFBlockedError, pin_safe_host
 
 #: A person is watching a spinner — UC-1's own "timeout ngắn", and DS-02's
@@ -40,6 +47,10 @@ _STATEMENT_TIMEOUT_MS = 5000
 #: view past either is listed with no count rather than failing the probe.
 _COUNT_TIMEOUT_MS = 2000
 _COUNT_BUDGET_SECONDS = 10
+
+#: How many distinct values the spec form is offered — positions in a
+#: company, not a column scan.
+_DISTINCT_LIMIT = 200
 
 #: The connection-string keywords a creator may set. Everything else libpq
 #: knows reaches past the DSN into this server — `service`/`passfile` read
@@ -71,24 +82,61 @@ class PostgresDialect:
 
     def introspect(self, dsn: str, *, trusted_hosts: frozenset[str]) -> Introspection:
         """Every view with its columns and row count, plus the base tables — one connection, read-only."""
+        with self._reading(dsn, trusted_hosts) as connection:
+            columns = _view_columns(connection)
+            tables = tuple(
+                _display_name(schema, name)
+                for schema, name in connection.execute(_BASE_TABLES, (list(_SYSTEM_SCHEMAS),))
+            )
+            views = _counted(connection, columns)
+        return Introspection(views=views, base_tables=tables)
+
+    def identity_lookup(self, dsn: str, *, trusted_hosts: frozenset[str]) -> IdentityLookup:
+        """The asker's row by one equality, as a parameter — `None` for nobody and for an ambiguous match.
+
+        Two rows for one email is not an asker this lookup may choose between:
+        picking the first would hand whoever sorts first the other one's
+        scope. The column is compared as text, so an `int` employee code
+        matches the string an identity provider hands over.
+        """
+
+        def lookup(match: ColumnRef, value: Any, columns: tuple[str, ...]) -> dict[str, Any] | None:
+            statement = sql.SQL("SELECT {columns} FROM {view} WHERE {match}::text = %s LIMIT 2").format(
+                columns=sql.SQL(", ").join(sql.Identifier(column) for column in columns),
+                view=_qualified(match.view),
+                match=sql.Identifier(match.column),
+            )
+            with self._reading(dsn, trusted_hosts) as connection:
+                rows = connection.execute(statement, (str(value),)).fetchall()
+            return dict(zip(columns, rows[0], strict=True)) if len(rows) == 1 else None
+
+        return lookup
+
+    def distinct_values(self, dsn: str, column: ColumnRef, *, trusted_hosts: frozenset[str]) -> list[Any]:
+        """`SELECT DISTINCT` of one column, non-null, sorted, at most `_DISTINCT_LIMIT` values."""
+        statement = sql.SQL(
+            "SELECT DISTINCT {column} FROM {view} WHERE {column} IS NOT NULL ORDER BY 1 LIMIT {limit}"
+        ).format(column=sql.Identifier(column.column), view=_qualified(column.view), limit=sql.Literal(_DISTINCT_LIMIT))
+        with self._reading(dsn, trusted_hosts) as connection:
+            return [row[0] for row in connection.execute(statement)]
+
+    @contextmanager
+    def _reading(self, dsn: str, trusted_hosts: frozenset[str]) -> Iterator[psycopg.Connection[Any]]:
+        """`connect`, with every driver error inside the block reported as a `DatabaseProbeError` — never its text."""
         try:
             with self.connect(dsn, trusted_hosts=trusted_hosts) as connection:
-                columns = _view_columns(connection)
-                tables = tuple(
-                    _display_name(schema, name)
-                    for schema, name in connection.execute(_BASE_TABLES, (list(_SYSTEM_SCHEMAS),))
-                )
-                views = _counted(connection, columns)
+                yield connection
         except psycopg.Error as exc:
             raise DatabaseProbeError(_failure_of(exc)) from None
-        return Introspection(views=views, base_tables=tables)
 
     @contextmanager
     def connect(self, dsn: str, *, trusted_hosts: frozenset[str]) -> Iterator[psycopg.Connection[Any]]:
         """A short-lived, autocommit, read-only connection, dialled through `_dial_conninfo`'s checks.
 
-        Not on the `Dialect` interface yet — `introspect` is its only caller
-        until `data_query` (DS-04) runs a query through it.
+        Driver errors raised *inside* the block come out as themselves; the
+        dialect's own methods read through `_reading`, which reports them by
+        reason. Not on the `Dialect` interface until `data_query` (DS-04) runs
+        a query through it.
         """
         conninfo = _dial_conninfo(dsn, trusted_hosts)
         try:
@@ -143,9 +191,14 @@ def _pinned_address(target: str, trusted_hosts: frozenset[str]) -> str:
         except SSRFBlockedError:
             raise DatabaseProbeError(ProbeFailure.BLOCKED_ADDRESS) from None
     try:
-        return str(socket.getaddrinfo(target, None)[0][4][0])
+        resolved = socket.getaddrinfo(target, None)
     except OSError:
         raise DatabaseProbeError(ProbeFailure.UNREACHABLE) from None
+    # IPv4 first when there is one: `localhost` resolves to `::1` first on many
+    # hosts, and a database that only listens on IPv4 would then look down to a
+    # probe that, unlike libpq, tries exactly one address.
+    ipv4 = [info for info in resolved if info[0] == socket.AF_INET]
+    return str((ipv4 or resolved)[0][4][0])
 
 
 def _view_columns(connection: psycopg.Connection[Any]) -> dict[tuple[str, str], list[str]]:
@@ -188,6 +241,12 @@ def _row_count(connection: psycopg.Connection[Any], schema: str, view: str) -> i
 def _display_name(schema: str, name: str) -> str:
     """`name` as a creator writes it: bare in `public`, schema-qualified anywhere else."""
     return name if schema == "public" else f"{schema}.{name}"
+
+
+def _qualified(display_name: str) -> sql.Composed:
+    """`_display_name`'s inverse, quoted: `v_x` → `"public"."v_x"`, `sales.v_x` → `"sales"."v_x"`."""
+    schema, _, name = display_name.rpartition(".")
+    return sql.SQL("{}.{}").format(sql.Identifier(schema or "public"), sql.Identifier(name))
 
 
 def _failure_of(exc: psycopg.Error) -> ProbeFailure:

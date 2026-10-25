@@ -15,11 +15,22 @@ dialect. No function here returns it.
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.datasources.access import (
+    AccessRules,
+    Deny,
+    DenyCause,
+    Principal,
+    Scope,
+    access_problems,
+    scope_for,
+)
 from src.datasources.dialects import (
+    ColumnRef,
     DatabaseProbeError,
     Introspection,
     ProbeFailure,
@@ -34,6 +45,18 @@ from src.services.secret_store import SecretNotFoundError, SecretStore, SecretUn
 
 class AllowedViewsError(ValueError):
     """The views a creator ticked are not all views the last probe saw — one sentence per name, joined."""
+
+
+class ColumnNotReadableError(ValueError):
+    """A column a caller asked to read that is not on a ticked view the last probe saw — refused before dialling."""
+
+
+class AccessRulesError(ValueError):
+    """Rules that name a view or column this Hệ CSDL does not have or does not allow — one sentence each."""
+
+    def __init__(self, problems: Sequence[str]) -> None:
+        self.problems = list(problems)
+        super().__init__("; ".join(problems))
 
 
 class DatabaseSourceInUseError(ValueError):
@@ -151,6 +174,62 @@ def snapshot_of(source: DatabaseSource) -> Introspection:
     return Introspection(views=views, base_tables=tuple(source.base_tables))
 
 
+def access_rules_of(source: DatabaseSource) -> AccessRules | None:
+    """`source`'s quy tắc truy cập, or `None` — which `scope_for` callers must read as "deny everyone"."""
+    return AccessRules.model_validate(source.access_rules) if source.access_rules else None
+
+
+def current_access_problems(source: DatabaseSource) -> list[str]:
+    """What is wrong with the saved rules *now* — a view unticked or dropped since they were saved shows here."""
+    rules = access_rules_of(source)
+    return [] if rules is None else _problems_with(source, rules)
+
+
+def save_access_rules(db: Session, source: DatabaseSource, rules: AccessRules) -> DatabaseSource:
+    """Keep `rules` — refused, naming every view and column, unless they fit the last probe and the ticked views."""
+    problems = _problems_with(source, rules)
+    if problems:
+        raise AccessRulesError(problems)
+    source.access_rules = rules.model_dump(mode="json")
+    return _persist(db, source)
+
+
+def scope_on(source: DatabaseSource, principal: Principal | None, view: str) -> Scope:
+    """What `principal` may see of `view` on this Hệ CSDL — the one door `data_query` (DS-04) asks through.
+
+    `scope_for` plus the three denies only the row can know: no rules saved;
+    rules that no longer fit the ticked views and the last probe (a view
+    unticked or a column dropped after saving — the whole source closes,
+    rather than trusting the half that still fits); a view that is not
+    ticked at all. Mặc định cấm, here as in the engine.
+    """
+    rules = access_rules_of(source)
+    if rules is None:
+        return Deny(cause=DenyCause.NO_RULES)
+    if _problems_with(source, rules):
+        return Deny(cause=DenyCause.RULES_OUT_OF_DATE)
+    if view not in source.allowed_views:
+        return Deny(cause=DenyCause.VIEW_NOT_ALLOWED)
+    return scope_for(rules, principal, view)
+
+
+def distinct_column_values(
+    source: DatabaseSource, column: ColumnRef, *, secret_store: SecretStore, trusted_hosts: frozenset[str]
+) -> list[Any]:
+    """The distinct values of a ticked view's column — the positions the access form offers. Dials out.
+
+    The view must be ticked and the column must be in the last probe before
+    anything is sent: this reads a creator's real data, and only what they
+    already said an agent may read.
+    """
+    if column.view not in source.allowed_views:
+        raise ColumnNotReadableError(f"view {column.view} chưa được tick cho phép")
+    if column.column not in source.view_columns.get(column.view, []):
+        raise ColumnNotReadableError(f"view {column.view} không có cột {column.column}")
+    dsn = _dsn_of(source, secret_store)
+    return dialect_for(source.dialect).distinct_values(dsn, column, trusted_hosts=trusted_hosts)
+
+
 def unowned_database_refs(db: Session, owner_id: int, spec: AgentSolutionSpecification) -> list[str]:
     """Every `database` ref in `spec` that names no Hệ CSDL `owner_id` owns — `ensure_knowledge_bases_owned`'s rule.
 
@@ -167,6 +246,11 @@ def unowned_database_refs(db: Session, owner_id: int, spec: AgentSolutionSpecifi
 
 #: The probe failures that mean "no DSN to dial" rather than "a DSN that failed".
 _NO_DSN = frozenset({ProbeFailure.DSN_MISSING, ProbeFailure.DSN_UNREADABLE})
+
+
+def _problems_with(source: DatabaseSource, rules: AccessRules) -> list[str]:
+    """`access_problems` against this row's ticked views and last probe — the one way the check is asked."""
+    return access_problems(rules, allowed_views=source.allowed_views, snapshot=snapshot_of(source))
 
 
 def _dsn_of(source: DatabaseSource, secret_store: SecretStore) -> str:

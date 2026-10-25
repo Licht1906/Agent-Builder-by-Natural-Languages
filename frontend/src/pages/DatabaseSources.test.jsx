@@ -10,7 +10,14 @@ vi.mock("../lib/api", async () => {
   const actual = await vi.importActual("../lib/api");
   return {
     ...actual,
-    databaseSources: { list: vi.fn(), create: vi.fn(), update: vi.fn(), test: vi.fn(), remove: vi.fn() },
+    databaseSources: {
+      list: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      test: vi.fn(),
+      remove: vi.fn(),
+      accessRules: vi.fn(),
+    },
   };
 });
 
@@ -131,6 +138,19 @@ describe("the Databases tab", () => {
     await actor.click(screen.getByRole("button", { name: /Re-enter DSN/ }));
 
     expect(screen.getByLabelText(/New DSN/)).toHaveAttribute("type", "password");
+  });
+
+  it("opens the access rules of a source that has ticked views", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.accessRules.mockResolvedValue({ rules: null, problems: [] });
+    draw();
+    await screen.findByText("ERP staging");
+
+    expect(api.databaseSources.accessRules).not.toHaveBeenCalled();
+    await actor.click(screen.getByRole("button", { name: /Access rules/ }));
+
+    expect(await screen.findByText(/Nobody can read anything yet/)).toBeInTheDocument();
+    expect(api.databaseSources.accessRules).toHaveBeenCalledWith(4);
   });
 
   it("shows why a delete was refused", async () => {

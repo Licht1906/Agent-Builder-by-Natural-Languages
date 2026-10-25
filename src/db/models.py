@@ -1714,6 +1714,11 @@ class DatabaseSource(Base):
     )
     last_probe_detail: Mapped[str | None] = mapped_column(default=None)
     last_probed_at: Mapped[datetime | None] = mapped_column(default=None)
+    access_rules: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        default=None,
+        doc="Quy tắc truy cập (access.yaml: identity + rules, DS-03) — null khi chưa khai, tức cấm hết",
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
