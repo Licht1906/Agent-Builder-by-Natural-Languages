@@ -22,7 +22,15 @@ of it that would be worse than the bug: a platform that silently overrides real
 judgements about quality.
 """
 
-from src.models.model_catalog import ASSIGNABLE_MODELS, DEFAULT_NODE_MODEL, MODEL_CATALOG, SUPERSEDED_BY
+from src.models.model_catalog import (
+    ASSIGNABLE_MODELS,
+    DEFAULT_NODE_MODEL,
+    MODEL_CATALOG,
+    RETIRED_MODELS,
+    SEEDED_MODEL_ALLOWLIST,
+    SUPERSEDED_BY,
+    served_model,
+)
 from src.workflow.composition import _assigned_model
 
 #: Every assignable model, as a default install offers them.
@@ -42,7 +50,7 @@ def test_everything_that_is_not_dominated_is_left_exactly_as_written() -> None:
     costs $0.40/$1.60 against gpt-4o-mini's $0.15/$0.60 — so that pair is a real
     trade and nothing here gets to make it on the composer's behalf.
     """
-    for named in ("gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o-mini"):
+    for named in ("gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini"):
         assert _assigned_model(named, ALL) == named
 
 
@@ -81,3 +89,15 @@ def test_every_domination_claim_in_the_catalog_is_true_of_its_prices() -> None:
         # Same tier, or the claim is about capability rather than price and does
         # not belong in a table that overrides the composer without asking.
         assert better_price.tier is worse_price.tier
+
+
+def test_a_retired_model_is_never_assigned_even_when_the_allowlist_still_names_it() -> None:
+    """OpenAI 404s `gpt-4.1-nano` now; an admin allowlist saved before that still lists it."""
+    assert _assigned_model("gpt-4.1-nano", ALL) == RETIRED_MODELS["gpt-4.1-nano"]
+    assert _assigned_model("gpt-4.1-nano", ["gpt-4.1-nano", "gpt-4o-mini"]) == "gpt-4o-mini"
+
+
+def test_a_stored_node_naming_a_retired_model_is_served_by_its_replacement() -> None:
+    assert served_model("gpt-4.1-nano") == "gpt-4.1-mini"
+    assert served_model("gpt-4o-mini") == "gpt-4o-mini"
+    assert "gpt-4.1-nano" not in SEEDED_MODEL_ALLOWLIST

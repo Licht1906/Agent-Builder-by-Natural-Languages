@@ -1,0 +1,44 @@
+[
+  {
+    "name": "dense (embeddings)",
+    "hit": 16,
+    "total": 22,
+    "mrr": 0.508,
+    "misses": [
+      "khi nào thì sinh viên bị đuổi học",
+      "bao nhiêu điểm thì được điểm a",
+      "muốn chuyển sang ngành khác cần điều kiện gì",
+      "em muốn học thêm bằng thứ hai thì cần gì",
+      "nghỉ học nhiều buổi có bị trừ điểm không",
+      "bảo vệ luận văn thạc sĩ không đạt thì có được bảo vệ lại không"
+    ]
+  },
+  {
+    "name": "sparse (bag-of-words băm)",
+    "hit": 15,
+    "total": 22,
+    "mrr": 0.422,
+    "misses": [
+      "học lại nhiều môn quá thì bằng có bị hạ loại không",
+      "trượt bao nhiêu tín chỉ thì bị cảnh báo học tập",
+      "khi nào thì sinh viên bị đuổi học",
+      "đang bị cảnh báo thì kỳ này được đăng ký tối đa mấy tín chỉ",
+      "muốn chuyển sang ngành khác cần điều kiện gì",
+      "nghỉ học nhiều buổi có bị trừ điểm không",
+      "bảo vệ luận văn thạc sĩ không đạt thì có được bảo vệ lại không"
+    ]
+  },
+  {
+    "name": "HYBRID + rerank — đường production",
+    "hit": 17,
+    "total": 22,
+    "mrr": 0.683,
+    "misses": [
+      "học lại nhiều môn quá thì bằng có bị hạ loại không",
+      "khi nào thì sinh viên bị đuổi học",
+      "muốn chuyển sang ngành khác cần điều kiện gì",
+      "nghỉ học nhiều buổi có bị trừ điểm không",
+      "bảo vệ luận văn thạc sĩ không đạt thì có được bảo vệ lại không"
+    ]
+  }
+]

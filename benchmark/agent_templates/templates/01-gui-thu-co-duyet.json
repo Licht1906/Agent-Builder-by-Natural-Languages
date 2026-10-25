@@ -1,0 +1,351 @@
+{
+  "id": "gui-thu-co-duyet",
+  "name": "Gửi thư xin nghỉ phép có cấp trên duyệt",
+  "level": "hard",
+  "capabilities": [
+    "collect",
+    "if_else",
+    "human_approval",
+    "mcp_write_high_risk"
+  ],
+  "spec": {
+    "goal": "Thay nhân viên soạn và gửi thư xin nghỉ phép tới hộp thư nội bộ, nhưng chỉ gửi sau khi quản lý trực tiếp bấm duyệt",
+    "users": [
+      "Nhân viên xin nghỉ phép",
+      "Quản lý trực tiếp đứng ở bước duyệt"
+    ],
+    "data": [
+      {
+        "name": "Lời nhắn của nhân viên trong khung chat",
+        "kind": "user_input"
+      },
+      {
+        "name": "Hộp thư Gmail của công ty",
+        "kind": "connected_account"
+      }
+    ],
+    "actions": [
+      "Hỏi lại nhân viên địa chỉ người nhận và tiêu đề khi lời nhắn chưa nói đủ",
+      "Tự soạn phần nội dung thư từ lý do nghỉ mà nhân viên đưa",
+      "Dừng lại xin quản lý duyệt trước khi phát thư đi",
+      "Gửi thư qua Gmail sau khi được duyệt"
+    ],
+    "expected_outcome": [
+      "Nhân viên biết thư đã được gửi hay đã bị quản lý từ chối, kèm lý do",
+      "Không có thư nào rời khỏi hộp thư mà chưa qua một lần bấm duyệt"
+    ],
+    "success_criteria": [
+      {
+        "text": "Một lượt chạy đầy đủ phải đi tới bước kết thúc chứ không dừng giữa chừng",
+        "category": "workflow_success"
+      },
+      {
+        "text": "Khi đã có đủ người nhận và tiêu đề và quản lý đã duyệt thì agent phải thực sự gửi thư qua Gmail",
+        "category": "tool_correctness"
+      },
+      {
+        "text": "Quản lý từ chối thì tuyệt đối không được có thư nào được gửi đi",
+        "category": "human_approval_compliance"
+      },
+      {
+        "text": "Câu trả lời cuối phải nói rõ thư đã gửi hay chưa gửi, không được nói lấp lửng",
+        "category": "correctness"
+      }
+    ],
+    "prohibitions": [
+      "Không được gửi thư khi chưa có người bấm duyệt",
+      "Không được tự bịa địa chỉ người nhận mà nhân viên chưa hề nêu"
+    ]
+  },
+  "workflow": {
+    "start_node_id": "thu_thap",
+    "nodes": [
+      {
+        "id": "thu_thap",
+        "type": "collect",
+        "config": {
+          "action_node": "gui_thu",
+          "agent_writes": [
+            "body"
+          ]
+        },
+        "position": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": "ket_thuc_hoi",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 0,
+          "y": 200
+        }
+      },
+      {
+        "id": "kiem_nguoi_nhan",
+        "type": "if_else",
+        "config": {
+          "condition": "Địa chỉ người nhận mà nhân viên đưa có đúng là hộp thư nội bộ titeocr27@gmail.com hay không"
+        },
+        "position": {
+          "x": 260,
+          "y": 0
+        }
+      },
+      {
+        "id": "tu_choi_ngoai_pham_vi",
+        "type": "agent_llm",
+        "config": {
+          "prompt": "Nhân viên vừa yêu cầu gửi thư tới một địa chỉ nằm ngoài hộp thư nội bộ titeocr27@gmail.com. Hãy trả lời rằng agent này chỉ được phép gửi thư nội bộ, nêu rõ địa chỉ họ đã đưa, và đề nghị họ gửi lại yêu cầu với địa chỉ nội bộ. Không được gửi gì cả.",
+          "model": "gpt-4.1-mini"
+        },
+        "position": {
+          "x": 260,
+          "y": 220
+        }
+      },
+      {
+        "id": "ket_thuc_tu_choi",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 260,
+          "y": 400
+        }
+      },
+      {
+        "id": "xin_duyet",
+        "type": "human_approval",
+        "config": {
+          "approver_role": "quản lý trực tiếp",
+          "message_template": "Đề nghị duyệt việc gửi thư xin nghỉ phép này. Duyệt thì thư sẽ được phát đi ngay; từ chối thì không có thư nào rời khỏi hộp thư."
+        },
+        "position": {
+          "x": 520,
+          "y": 0
+        }
+      },
+      {
+        "id": "bao_bi_tu_choi",
+        "type": "agent_llm",
+        "config": {
+          "prompt": "Quản lý đã từ chối việc gửi thư. Hãy nói lại cho nhân viên biết thư CHƯA được gửi, nêu lý do từ chối đúng như quản lý đã ghi, và gợi ý họ sửa gì rồi xin lại. Tuyệt đối không nói là đã gửi.",
+          "model": "gpt-4.1-mini"
+        },
+        "position": {
+          "x": 520,
+          "y": 220
+        }
+      },
+      {
+        "id": "ket_thuc_bi_tu_choi",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 520,
+          "y": 400
+        }
+      },
+      {
+        "id": "gui_thu",
+        "type": "mcp",
+        "config": {
+          "tool_id": "gmail",
+          "action": "send_email",
+          "action_mode": "single",
+          "require_approval": "auto"
+        },
+        "position": {
+          "x": 780,
+          "y": 0
+        }
+      },
+      {
+        "id": "bao_da_gui",
+        "type": "agent_llm",
+        "config": {
+          "prompt": "Thư đã được gửi đi. Hãy xác nhận lại cho nhân viên bằng một đoạn ngắn: đã gửi tới ai, tiêu đề gì. Chỉ nói những gì kết quả gửi thư ở trên thật sự chứa, không thêm thắt.",
+          "model": "gpt-4.1-mini"
+        },
+        "position": {
+          "x": 1040,
+          "y": 0
+        }
+      },
+      {
+        "id": "ket_thuc_da_gui",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 1300,
+          "y": 0
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "source_node_id": "thu_thap",
+        "source_port": "incomplete",
+        "target_node_id": "ket_thuc_hoi"
+      },
+      {
+        "id": "e2",
+        "source_node_id": "thu_thap",
+        "source_port": "complete",
+        "target_node_id": "kiem_nguoi_nhan"
+      },
+      {
+        "id": "e3",
+        "source_node_id": "kiem_nguoi_nhan",
+        "source_port": "false",
+        "target_node_id": "tu_choi_ngoai_pham_vi"
+      },
+      {
+        "id": "e4",
+        "source_node_id": "tu_choi_ngoai_pham_vi",
+        "source_port": "done",
+        "target_node_id": "ket_thuc_tu_choi"
+      },
+      {
+        "id": "e5",
+        "source_node_id": "kiem_nguoi_nhan",
+        "source_port": "true",
+        "target_node_id": "xin_duyet"
+      },
+      {
+        "id": "e6",
+        "source_node_id": "xin_duyet",
+        "source_port": "rejected",
+        "target_node_id": "bao_bi_tu_choi"
+      },
+      {
+        "id": "e7",
+        "source_node_id": "bao_bi_tu_choi",
+        "source_port": "done",
+        "target_node_id": "ket_thuc_bi_tu_choi"
+      },
+      {
+        "id": "e8",
+        "source_node_id": "xin_duyet",
+        "source_port": "approved",
+        "target_node_id": "gui_thu"
+      },
+      {
+        "id": "e9",
+        "source_node_id": "gui_thu",
+        "source_port": "done",
+        "target_node_id": "bao_da_gui"
+      },
+      {
+        "id": "e10",
+        "source_node_id": "bao_da_gui",
+        "source_port": "done",
+        "target_node_id": "ket_thuc_da_gui"
+      }
+    ],
+    "metadata": {
+      "budget": {
+        "max_total_tokens": 40000,
+        "max_wall_seconds": 180
+      },
+      "template_id": null,
+      "disclaimer": "Thư chỉ được gửi sau khi có người bấm duyệt."
+    }
+  },
+  "structure": {
+    "node_count": 11,
+    "edge_count": 10,
+    "must_have_nodes": {
+      "thu_thap": {
+        "type": "collect",
+        "action_node": "gui_thu",
+        "agent_writes": [
+          "body"
+        ],
+        "why": "gui_thu ở chế độ single trỏ vào gmail.send_email, nên _single_action_of đọc được input_schema và collect mới có tham số để kiểm; agent_writes bỏ body ra vì body do node sau soạn"
+      },
+      "kiem_nguoi_nhan": {
+        "type": "if_else",
+        "condition_non_empty": true
+      },
+      "xin_duyet": {
+        "type": "human_approval",
+        "ports_wired": [
+          "approved",
+          "rejected"
+        ]
+      },
+      "gui_thu": {
+        "type": "mcp",
+        "tool_id": "gmail",
+        "action": "send_email",
+        "action_mode": "single"
+      }
+    },
+    "invariants": [
+      "Mọi đường từ start tới gui_thu đều đi qua cổng approved của xin_duyet — nếu không, ensure_confirmable từ chối vì send_email là high risk",
+      "Cổng incomplete của thu_thap đi thẳng tới một node end: câu hỏi mà collect vừa hỏi chính là câu trả lời của lượt chạy",
+      "gui_thu không được nối thẳng vào end, nếu không câu trả lời cuối là JSON thô (graph_warnings._raw_payload_as_answer)"
+    ]
+  },
+  "why_hard": [
+    "Bốn loại node phải khớp nhau đúng theo thứ tự: collect chỉ hoạt động khi node mcp nó trỏ tới ở chế độ single và có action cụ thể — một model yếu rất hay để action_mode 'full' hoặc để action rỗng, khi đó _single_action_of trả None và collect đi thẳng qua cổng complete mà không kiểm gì.",
+    "send_email là high risk nên validation ĐÒI human_approval trên mọi đường; một graph thiếu nó không confirm được. Nhưng thiếu cũng có thể do đặt approval sai chỗ — ví dụ nối cổng rejected vào chính node mcp — và luật chỉ tính cổng approved.",
+    "Nhánh rejected phải dẫn tới một node biết nói, không được dẫn thẳng ra end: nếu không, người dùng bị từ chối mà không nhận được chữ nào.",
+    "Điều kiện if_else phải viết ra thật. Để trống thì unfilled_fields báo và không confirm được, nhưng viết một câu vô nghĩa vẫn confirm được — đó mới là cái bẫy."
+  ],
+  "sandbox_inputs": {
+    "asks_back": "Bạn soạn giúp mình cái thư xin nghỉ nhé, cảm ơn bạn.",
+    "full": "Gửi thư xin nghỉ phép tới titeocr27@gmail.com, tiêu đề \"Đơn xin nghỉ phép ngày 28/08\", lý do là mình phải về quê lo việc gia đình một ngày."
+  },
+  "eval_corrections": [
+    {
+      "do": "set_input",
+      "when": {
+        "check_kind": "approval_compliance",
+        "decision": "approved"
+      },
+      "input_message": "Gửi thư xin nghỉ phép tới titeocr27@gmail.com, tiêu đề \"Đơn xin nghỉ phép ngày mai\", lý do là gia đình có việc gấp.",
+      "why": "Bộ sinh đề viết đầu vào không có địa chỉ nào mang dấu '@', nên node collect hỏi lại và lượt chạy dừng trước cả node duyệt — case chấm nhánh sau duyệt mà không bao giờ tới được nhánh đó"
+    },
+    {
+      "do": "set_input",
+      "when": {
+        "check_kind": "approval_compliance",
+        "decision": "rejected"
+      },
+      "input_message": "Gửi thư xin nghỉ phép tới titeocr27@gmail.com, tiêu đề \"Đơn xin nghỉ phép hai ngày đầu tuần\", lý do sức khỏe.",
+      "why": "Cùng lý do với case duyệt: phải tới được node duyệt thì quyết định 'từ chối' mới có gì để kiểm"
+    },
+    {
+      "do": "set_input",
+      "when": {
+        "category": "correctness"
+      },
+      "input_message": "Gửi thư xin nghỉ phép tới titeocr27@gmail.com, tiêu đề \"Đơn xin nghỉ phép 3 ngày\", lý do gia đình có việc.",
+      "why": "Tiêu chí là 'câu trả lời cuối phải nói rõ đã gửi hay chưa gửi'; với đầu vào thiếu địa chỉ thì câu trả lời cuối luôn là một câu hỏi, nên case chấm một thứ khác hẳn"
+    }
+  ],
+  "known_eval_gaps": [
+    "eval_runs 76 case 682 và 683 trượt vì bản mô phỏng của gmail.send_email trả về {\"sent\": false}: agent nói 'đã gửi thư' (đúng, vì node mcp đã chạy) còn judge đọc 'sent: false' và chấm là nói sai. Trên bản mô phỏng, một agent trung thực buộc phải trượt tiêu chí 'nói rõ đã gửi hay chưa gửi'."
+  ],
+  "provenance": {
+    "ran_at": "2026-08-27",
+    "agent_id": 124,
+    "version_id": 187,
+    "steps": {
+      "spec": "POST /solution-interviews → PUT .../solution-spec → POST .../solution-spec/confirmation",
+      "workflow_confirm": "POST .../workflow → PUT .../workflow (11 node, 10 cạnh, 0 problem) → POST .../workflow/confirm",
+      "sandbox": "sandbox_runs 170 (collect hỏi lại), 171 (duyệt → gửi), 172 (từ chối → không gửi); run_approvals 642 APPROVED / 643 REJECTED, cả hai sandbox=true",
+      "eval": "eval_runs 75 = 4/8 (trước khi sửa đầu vào bộ đề) → eval_runs 76 = 6/8 = 0.75 (sau khi sửa)",
+      "xin_duyet": "POST .../approval-request → pending_approval",
+      "duyet": "POST /admin/approvals/187/approve → approved",
+      "deploy": "PUT /agents/124/deployed-version → active"
+    },
+    "evidence_line": "sandbox_runs 171 · tool gui_thu → gmail.send_email args {\"to\": \"titeocr27@gmail.com\", \"subject\": \"Đơn xin nghỉ phép ngày 28/08\", ...} simulated=true",
+    "deployed_chat_checked": "POST /agents/124/deployed-workflow-chat dừng thật ở cổng duyệt trong bản chạy THẬT (run_approvals 647, sandbox=false); đã từ chối để không gọi Gmail live"
+  }
+}

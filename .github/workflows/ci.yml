@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Not `postgres:16-alpine`: the test schema includes a `vector` column
+        # (ADR-0045), and `conftest` creates the extension before building it.
+        # A stock image fails there, at the first fixture, for every test.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      APP_ENV: test
+      OPENAI_API_KEY: test-key
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint with ruff
+        run: ruff check src/ tests/
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      # UC1-14 (#115): the DDL's own AC-6/AC-7 verification, run for real after
+      # every migration — fails the build if a PR widens agt_ar_assistant_ro's
+      # grants, turns off RLS, or breaks the audit_log hash chain's detection.
+      - name: Verify UC-1 data surface (AC-6/AC-7)
+        run: python scripts/verify_uc1_data_surface.py
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
+
+  # UC1-13 (#114), §20: `opa test` is a seam of its own, independent of the
+  # HTTP stack — the PEP is a decision service, not app code, so its ~15-case
+  # matrix (role × data_scope × autonomy × prohibitions) runs here in a few
+  # hundred milliseconds without a Postgres/OPA sidecar/backend container.
+  policy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the same build `docker-compose.yml`'s `policy` sidecar runs,
+      # so a green CI run and a green sidecar mean the same Rego semantics.
+      - name: Set up OPA
+        uses: open-policy-agent/setup-opa@v2
+        with:
+          version: "1.19.0"
+
+      - name: opa test
+        run: opa test docs/usecase_spec/platform/ -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The build is a test in its own right: it is where a module that cannot
+      # resolve, or a component that cannot compile, shows up.
+      - name: Build
+        run: npm run build
+
+      # And this is where a component that compiles fine but behaves wrongly
+      # shows up — the half a build can never catch.
+      - name: Test
+        run: npm test

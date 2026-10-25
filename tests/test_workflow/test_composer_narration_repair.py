@@ -136,10 +136,10 @@ def test_the_narrator_never_names_a_model_outside_the_allowlist():
         start="fetch",
     )
 
-    fixed = _narrated(graph, ["gpt-4.1-nano"])
+    fixed = _narrated(graph, ["gpt-4o-mini"])
 
     narrator = next(n for n in fixed.nodes if n.type.value == "agent_llm")
-    assert narrator.config["model"] == "gpt-4.1-nano"
+    assert narrator.config["model"] == "gpt-4o-mini"
 
 
 def test_a_graph_with_nothing_flagged_is_returned_unchanged_by_identity():

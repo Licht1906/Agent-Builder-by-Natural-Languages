@@ -1,0 +1,143 @@
+.al-mascot {
+  --mascot-size: 220px;
+  --navy: #102a43;
+  --blue: #2f80ff;
+  --cyan: #68d7ff;
+  position: relative;
+  display: inline-block;
+  width: var(--mascot-size);
+  aspect-ratio: 1;
+  isolation: isolate;
+}
+
+.al-mascot *, .al-mascot *::before, .al-mascot *::after { box-sizing: border-box; }
+
+.al-mascot__robot,
+.al-mascot__blueprint,
+.al-mascot__node-system,
+.al-mascot__sparkles,
+.al-mascot__halo,
+.al-mascot__orbit,
+.al-mascot__wave,
+.al-mascot__alert-ring,
+.al-mascot__sleep-z { position: absolute; pointer-events: none; }
+
+.al-mascot__robot { z-index: 3; inset: 7% 8% 3%; transform-origin: 50% 70%; }
+.al-mascot__robot img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+.al-mascot__blueprint {
+  z-index: 1;
+  inset: 0;
+  opacity: 0;
+  transform: translate(-6%, 4%) scale(.84) rotate(-9deg);
+  transition: opacity .25s ease, transform .4s cubic-bezier(.2,.8,.2,1);
+}
+.al-mascot__blueprint img { width: 100%; height: 100%; display: block; object-fit: contain; }
+
+.al-mascot__halo {
+  z-index: 0;
+  inset: 22%;
+  border: 2px solid color-mix(in srgb, var(--cyan) 58%, transparent);
+  border-radius: 50%;
+  opacity: 0;
+  transform: scale(.75);
+}
+
+.al-mascot__orbit {
+  z-index: 2;
+  left: 18%; right: 18%; bottom: 16%; height: 20%;
+  border: 2px solid var(--cyan);
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0;
+}
+
+.al-mascot__wave {
+  z-index: 2;
+  left: 6%; top: 58%; width: 22%; height: 22%;
+  border: 2px solid var(--cyan);
+  border-right: 0;
+  border-top-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: 50%; opacity: 0;
+}
+.al-mascot__wave--two { left: 1%; top: 53%; width: 32%; height: 32%; }
+
+.al-mascot__node-system { z-index: 4; inset: 0; opacity: 0; }
+.al-mascot__node-system i, .al-mascot__node-system b {
+  position: absolute; display: block; border-radius: 999px; background: var(--cyan);
+  box-shadow: 0 0 0 3px var(--navy), 0 0 16px color-mix(in srgb, var(--cyan) 70%, transparent);
+}
+.al-mascot__node-system i { width: 9%; aspect-ratio: 1; }
+.al-mascot__node-system i:nth-child(1) { left: 12%; top: 48%; }
+.al-mascot__node-system i:nth-child(2) { left: 7%; top: 70%; }
+.al-mascot__node-system i:nth-child(3) { left: 28%; top: 76%; }
+.al-mascot__node-system b { height: 2px; transform-origin: left center; width: 24%; left: 15%; top: 55%; background: var(--blue); box-shadow: none; }
+.al-mascot__node-system b:nth-child(4) { transform: rotate(61deg); }
+.al-mascot__node-system b:nth-child(5) { left: 12%; top: 73%; width: 18%; transform: rotate(12deg); }
+
+.al-mascot__sparkles { z-index: 5; inset: 0; opacity: 0; }
+.al-mascot__sparkles i { position: absolute; width: 7%; aspect-ratio: 1; background: var(--cyan); clip-path: polygon(50% 0,61% 39%,100% 50%,61% 61%,50% 100%,39% 61%,0 50%,39% 39%); }
+.al-mascot__sparkles i:nth-child(1) { left: 18%; top: 27%; }
+.al-mascot__sparkles i:nth-child(2) { right: 17%; top: 31%; transform: scale(.7); }
+.al-mascot__sparkles i:nth-child(3) { right: 27%; top: 12%; transform: scale(.5); }
+
+.al-mascot__alert-ring { z-index: 6; right: 10%; top: 13%; width: 16%; aspect-ratio: 1; border: 3px solid #ff6b72; border-radius: 50%; opacity: 0; }
+.al-mascot__sleep-z { z-index: 6; color: var(--blue); font: 700 21%/1 system-ui, sans-serif; opacity: 0; }
+.al-mascot__sleep-z--one { right: 12%; top: 22%; }
+.al-mascot__sleep-z--two { right: 2%; top: 10%; font-size: 27%; }
+
+.al-mascot__blink {
+  position: absolute; left: 32%; right: 32%; top: 40%; height: 9%; border-radius: 999px;
+  background: var(--navy); opacity: 0; transform: scaleY(.08); transform-origin: center;
+}
+
+.al-mascot--idle .al-mascot__robot,
+.al-mascot--welcome .al-mascot__robot,
+.al-mascot--thinking .al-mascot__robot,
+.al-mascot--exploring .al-mascot__robot,
+.al-mascot--success .al-mascot__robot { animation: al-float 2.8s ease-in-out infinite; }
+.al-mascot--idle .al-mascot__blink,
+.al-mascot--welcome .al-mascot__blink,
+.al-mascot--rest .al-mascot__blink { animation: al-blink 4.6s infinite; }
+
+.al-mascot--welcome .al-mascot__wave { opacity: .9; animation: al-wave 1.6s ease-out infinite; }
+.al-mascot--welcome .al-mascot__wave--two { animation-delay: .25s; }
+
+.al-mascot--thinking .al-mascot__halo { opacity: .75; animation: al-think 1.7s ease-in-out infinite; }
+.al-mascot--processing .al-mascot__orbit { opacity: 1; animation: al-spin 1.05s linear infinite; }
+.al-mascot--processing .al-mascot__robot { animation: al-process .8s ease-in-out infinite; }
+
+.al-mascot--exploring .al-mascot__node-system { opacity: 1; animation: al-nodes 1.8s ease-in-out infinite; }
+.al-mascot--success .al-mascot__sparkles { opacity: 1; animation: al-sparkles 1.35s ease-out infinite; }
+
+.al-mascot--alert .al-mascot__alert-ring { opacity: 1; animation: al-alert 1.1s ease-out infinite; }
+.al-mascot--alert .al-mascot__robot { animation: al-alert-robot 1.1s ease-in-out infinite; }
+
+.al-mascot--builder .al-mascot__blueprint { opacity: 1; transform: translate(-6%, 4%) scale(.94) rotate(-9deg); animation: al-blueprint 3s ease-in-out infinite; }
+.al-mascot--builder .al-mascot__robot { animation: al-builder 3s ease-in-out infinite; }
+
+.al-mascot--rest .al-mascot__robot { animation: al-rest 3.4s ease-in-out infinite; filter: saturate(.76); }
+.al-mascot--rest .al-mascot__sleep-z { opacity: 1; animation: al-sleep-z 2.2s ease-out infinite; }
+.al-mascot--rest .al-mascot__sleep-z--two { animation-delay: .65s; }
+
+.al-mascot--static *, .al-mascot--static *::before, .al-mascot--static *::after { animation: none !important; }
+
+@keyframes al-float { 0%,100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-4.5%) rotate(-1deg); } }
+@keyframes al-blink { 0%,44%,48%,100% { opacity: 0; transform: scaleY(.08); } 46% { opacity: 1; transform: scaleY(1); } }
+@keyframes al-wave { from { transform: scale(.6); opacity: .95; } to { transform: scale(1.35); opacity: 0; } }
+@keyframes al-think { 0%,100% { transform: scale(.78); opacity: .25; } 50% { transform: scale(1.05); opacity: .9; } }
+@keyframes al-spin { to { transform: rotate(360deg); } }
+@keyframes al-process { 0%,100% { transform: translateY(0) scale(1); } 50% { transform: translateY(-2%) scale(.97); } }
+@keyframes al-nodes { 0%,100% { transform: translateX(0); opacity: .55; } 50% { transform: translateX(3%); opacity: 1; } }
+@keyframes al-sparkles { 0% { transform: scale(.65); opacity: 0; } 35% { opacity: 1; } 100% { transform: scale(1.35); opacity: 0; } }
+@keyframes al-alert { 0% { transform: scale(.75); opacity: 0; } 30% { opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
+@keyframes al-alert-robot { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-2%); } 75% { transform: translateX(2%); } }
+@keyframes al-blueprint { 0%,100% { transform: translate(-6%,4%) scale(.94) rotate(-9deg); } 50% { transform: translate(-8%,1%) scale(.98) rotate(-7deg); } }
+@keyframes al-builder { 0%,100% { transform: translate(5%,2%) scale(.95); } 50% { transform: translate(7%,-3%) scale(.98); } }
+@keyframes al-rest { 0%,100% { transform: translateY(1%) rotate(0); } 50% { transform: translateY(4%) rotate(1deg); } }
+@keyframes al-sleep-z { 0% { transform: translate(0,0) scale(.7); opacity: 0; } 25% { opacity: 1; } 100% { transform: translate(35%,-90%) scale(1.2); opacity: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .al-mascot *, .al-mascot *::before, .al-mascot *::after { animation: none !important; }
+}

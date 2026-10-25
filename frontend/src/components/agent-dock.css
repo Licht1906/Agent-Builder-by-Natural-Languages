@@ -1,0 +1,288 @@
+/* ============================================================
+   The agent's corner — where the one persistent agent actually lives.
+
+   It used to live in the app header, 40px wide, between the page title and the
+   reload / language / theme buttons. Three problems, all of them placement
+   rather than code:
+
+   - **Nobody looks there.** The header is read once, on arrival, to answer
+     "where am I". It is not re-read while you work, so a status that changes
+     during a 40-second eval run changed somewhere nobody was looking.
+   - **It read as a fourth icon button.** Sat in a row of 28px controls at the
+     same size, the creature stopped being a creature and became a glyph.
+   - **It had no room to move.** A header row is a fixed-height strip shared
+     with a title that can be long; anything that grows, lifts or unfurls there
+     pushes the controls around.
+
+   So the agent gets a corner of its own — bottom-right, the place every product
+   that keeps a persistent assistant on screen has trained people to look
+   (Intercom, Chatbase, Featurebase, Bloom all park theirs there), and the one
+   region of this app's chrome that nothing else claims: the sidebar is left,
+   toasts and the workflow chat are bottom-centre, dialogs are centred.
+
+   Two rules make the corner safe to occupy:
+
+   1. **It never takes a click.** `pointer-events: none` on everything here,
+      with no exceptions — there is no button, no menu, nothing to hit. Whatever
+      a screen draws underneath (the Builder's inspector runs the full right
+      edge when a node is selected) stays as clickable as if the dock were not
+      there.
+   2. **It gets out of the way of your eyes too.** When the pointer comes near,
+      the whole dock fades to a ghost (`data-ghost`), so reaching for something
+      behind it uncovers it. That is also why there is no "dismiss" control: the
+      dock dismisses itself, every time, without being asked, and comes back.
+
+   Everything below is square-cornered on purpose — this design system sets
+   `border-radius: 0` on toasts, chips, buttons and panels, and a rounded pill
+   in the corner would read as somebody else's widget.
+   ============================================================ */
+
+.ag-dock {
+  /* One literal, named once. `#ff6b72` is the alert colour the mascot's own
+     ring is drawn in (`mascot.css`); the plate has to agree with it, or an
+     alert is two different reds. */
+  --ag-dock-alert: #ff6b72;
+  position: fixed;
+  bottom: 20px;
+  /* Right by default — the corner every product with a persistent assistant
+     has trained people to look at. A screen with a composer at the bottom
+     declares the other side (useAgentSide), because a dock in the right corner
+     of a screen you are typing into sits opposite the conversation and unfurls
+     its plate over the bar's own edge.
+
+     Standing left means clearing the rail rather than sitting on it, and the
+     rail changes width when it is opened; --sidebar-w is set by AppLayout on
+     the shell, and the fallback keeps this honest if the dock is ever mounted
+     outside one. */
+  right: 20px;
+  transition: opacity .16s ease, right .28s cubic-bezier(.2,.8,.2,1), left .28s cubic-bezier(.2,.8,.2,1);
+  /* Above every page's own layers (the highest a screen uses is 20) and below
+     dialogs (60), toasts (200) and the lightbox (300): a status that covered a
+     modal, or a toast answering the very operation it is reporting, would be
+     the dock lying about who is in front. */
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  /* Never, under any state. See rule 1 above. */
+  pointer-events: none;
+}
+
+.ag-dock[data-side="left"] {
+  right: auto;
+  left: calc(var(--sidebar-w, 0px) + 20px);
+  align-items: flex-start;
+}
+/* The plate unfurls out of the creature, so standing on the left it has to
+   unfurl the other way or it reads as a box arriving from off-screen. */
+.ag-dock[data-side="left"] .ag-dock__row { flex-direction: row-reverse; }
+.ag-dock[data-side="left"] .ag-dock__plate { transform-origin: left center; }
+.ag-dock[data-side="left"] .ag-dock__stack { align-items: flex-start; }
+@keyframes ag-dock-unfurl-left {
+  from { opacity: 0; transform: translateX(-14px) scaleX(.9); }
+  to   { opacity: 1; transform: none; }
+}
+.ag-dock[data-side="left"] .ag-dock__plate,
+.ag-dock[data-side="left"] .ag-dock__also { animation-name: ag-dock-unfurl-left; }
+
+/* Reaching into the corner uncovers it. */
+.ag-dock[data-ghost="1"] { opacity: .12; }
+
+/* A screen is drawing the agent itself, so the corner steps aside — see
+   `useAgentStandIn`. Faded rather than unmounted: the dock has to still be the
+   same element on the other side of the page change, or the continuity this
+   module is built for is a lie. It sinks and shrinks a little on the way out so
+   that arriving on such a screen reads as the agent *moving to the middle*
+   rather than one of them being switched off. */
+.ag-dock[data-standin="1"] {
+  opacity: 0;
+  transform: translateY(10px) scale(.9);
+  transition: opacity .24s ease, transform .3s cubic-bezier(.2,.8,.2,1);
+}
+
+/* ── The puck: the creature itself ── */
+
+.ag-dock__puck {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  /* Opaque, not 82%: a translucent puck over a canvas full of nodes had the
+     graph showing through the creature, which is the other half of "too
+     faint". */
+  background: var(--color-bg);
+  border: 1px solid var(--color-divider);
+  box-shadow: var(--shadow-md);
+  /* The lift is on the wrapper rather than on the mascot's own `--mascot-size`,
+     because a custom property cannot be transitioned: re-rendering the mascot
+     at a new size would cut, not move. */
+  transform: translateY(0) scale(1);
+  transition: transform .34s cubic-bezier(.2,.8,.2,1), opacity .3s ease, border-color .2s ease;
+}
+
+/* Idle is a pose, not an absence — and it was being drawn as very nearly one.
+   .82 idle and .58 dozing read as washed out rather than quiet: against this
+   system's low-contrast greys, four tenths off is most of the creature. The
+   agent is the product's one continuous character, so it stands at full
+   strength when idle and only half a step back when it dozes; the quiet comes
+   from the pose it is holding and from the plate being absent, not from
+   fading the drawing out.
+
+   A screen's standing pose (the Canvas blueprint) is a deliberate statement
+   about where you are, so it is drawn at full strength too. */
+.ag-dock[data-busy="0"] .ag-dock__puck { opacity: 1; }
+.ag-dock[data-resting="1"] .ag-dock__puck { opacity: .84; }
+.ag-dock[data-posed="1"] .ag-dock__puck { opacity: 1; border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-divider)); }
+
+/* Work begins: the agent stands up. */
+.ag-dock[data-busy="1"] .ag-dock__puck { transform: translateY(-5px) scale(1.1); }
+
+/* A second signal that is not the mascot's animation, so the state survives
+   `prefers-reduced-motion`, a dropped image and a glance too short to read:
+   a bar sweeping the foot of the puck for as long as something is running.
+
+   Note which way round the two states are declared. Busy is a *full* bar, and
+   the sweep is an animation played over it — not the other way about. Anything
+   that cancels animations (reduced motion, a screenshot tool, a throttled
+   background tab) then falls back to a bar that is there rather than to one
+   scaled to nothing, which is the difference between a quiet signal and a
+   missing one. */
+.ag-dock__scan {
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  height: 3px;
+  background: var(--color-accent);
+  transform-origin: left center;
+  transform: scaleX(0);
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+.ag-dock[data-busy="1"] .ag-dock__scan {
+  opacity: 1;
+  transform: scaleX(1);
+  animation: ag-dock-scan 1.5s ease-in-out infinite;
+}
+.ag-dock[data-state="alert"] .ag-dock__scan { background: var(--ag-dock-alert); }
+/* Finished, not still going: the bar stops sweeping and simply stands full. */
+.ag-dock[data-state="success"] .ag-dock__scan { animation: none; }
+
+/* Never all the way down to nothing: the low end of the sweep is still a bar,
+   so a glance that lands on the wrong frame — or a screenshot, or a browser
+   that has quietly stopped animating a background tab — still finds one. */
+@keyframes ag-dock-scan {
+  0%, 100% { transform: scaleX(.3); }
+  50%      { transform: scaleX(1); }
+}
+
+/* ── The plate: the sentence, unfurling leftward out from under the agent ── */
+
+.ag-dock__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ag-dock__plate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(320px, 42vw);
+  padding: 6px 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  box-shadow: var(--shadow-lg);
+  /* Anchored to the agent's edge, so it reads as the sentence being drawn out
+     of the creature rather than as a separate box fading in beside it. */
+  transform-origin: right center;
+  animation: ag-dock-unfurl .26s cubic-bezier(.2,.8,.2,1) both;
+}
+.ag-dock[data-state="alert"] .ag-dock__plate { border-color: var(--ag-dock-alert); }
+.ag-dock[data-state="success"] .ag-dock__plate { border-color: var(--color-accent); }
+
+@keyframes ag-dock-unfurl {
+  from { opacity: 0; transform: translateX(14px) scaleX(.9); }
+  to   { opacity: 1; transform: none; }
+}
+
+.ag-dock__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--color-text) 72%, transparent);
+}
+
+/* How long it has been running. Absent for the first few seconds — a number
+   that appears instantly on every click is noise; one that appears once an
+   operation is *taking a while* is the answer to the question you were about
+   to ask. */
+.ag-dock__elapsed {
+  flex: none;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.ag-dock__count {
+  flex: none;
+  padding: 0 5px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--color-bg);
+  background: var(--color-accent);
+}
+
+/* ── The stack: everything else that is running ── */
+
+.ag-dock__stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.ag-dock__also {
+  max-width: min(320px, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  font-size: 11.5px;
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  border: 1px solid var(--color-divider);
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+  animation: ag-dock-unfurl .26s cubic-bezier(.2,.8,.2,1) both;
+}
+
+/* The sentence, always in the DOM, for whoever is not looking at the corner.
+   Exactly one live region in the whole app: an operation that starts on any
+   screen announces itself once, here. The plate above is the same words drawn,
+   and is hidden from assistive tech so it is not read twice. */
+.ag-dock__live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Reduced motion ──
+   No travel, no sweep — but never no signal. The scan bar stops sweeping and
+   simply stands there, full width, which says "running" just as plainly. */
+@media (prefers-reduced-motion: reduce) {
+  .ag-dock,
+  .ag-dock * {
+    transition: none !important;
+    animation: none !important;
+  }
+  .ag-dock[data-busy="1"] .ag-dock__puck { transform: none; }
+}

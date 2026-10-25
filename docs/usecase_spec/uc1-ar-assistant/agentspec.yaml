@@ -1,0 +1,146 @@
+apiVersion: agentbuilder/v1
+kind: AgentSpec
+
+metadata:
+  id: agt_ar_assistant
+  name: "Trợ lý công nợ phòng Kinh doanh"
+  description: >
+    Tra cứu công nợ quá hạn theo phạm vi khách hàng mà người hỏi phụ trách,
+    soạn email nhắc nợ và tạo task theo dõi. Mọi hành động gửi ra ngoài
+    đều cần trưởng phòng duyệt.
+  version: 3
+  status: pending_approval
+  created_by: usr_012
+  approved_by: []
+  parent_version: 2
+
+# ---------------------------------------------------------------------------
+# WHO — đối tượng sử dụng
+# data_scope: own_records nghĩa là filter dựa trên NGƯỜI ĐANG HỎI, không phải
+# người tạo agent. Sales rep và trưởng phòng dùng chung agent này nhưng nhìn
+# thấy hai tập dữ liệu khác nhau. Đây là trọng tâm của bài demo.
+# ---------------------------------------------------------------------------
+audience:
+  roles: [sales_rep, sales_manager]
+  departments: [SALES]
+  data_scope: own_records
+
+# ---------------------------------------------------------------------------
+# WHAT — agent được làm gì
+# ---------------------------------------------------------------------------
+capabilities:
+  - tool: erp.query_receivables
+    scope: read
+    constraints:
+      max_rows: 500
+      max_calls_per_session: 15
+      allowed_columns:
+        [order_id, customer_id, customer_name, sales_rep_id, amount_due,
+         due_date, days_overdue, order_status]
+
+  - tool: erp.query_customer
+    scope: read
+    constraints:
+      max_rows: 50
+      allowed_columns: [customer_id, customer_name, contact_email, city, state]
+
+  - tool: kb.search
+    scope: read
+    constraints:
+      max_calls_per_session: 10
+
+  - tool: mail.send_reminder
+    scope: write
+    requires_approval: true
+
+  - tool: task.create
+    scope: write
+    requires_approval: true
+
+# ---------------------------------------------------------------------------
+# WHAT NOT — agent không được làm gì. Deny thắng allow.
+# ---------------------------------------------------------------------------
+prohibitions:
+  never_expose:
+    [bank_account, tax_id, personal_phone, national_id, credit_limit_internal]
+  deny_tools:
+    ["erp.update_*", "erp.delete_*", "erp.write_*", "finance.*", "hr.*"]
+  deny_topics:
+    [salary, hr_records, legal_dispute, credit_policy_override]
+  external_egress: false
+
+# ---------------------------------------------------------------------------
+# HOW MUCH — quyền hạn
+# ---------------------------------------------------------------------------
+authority:
+  autonomy: propose_then_act
+  approval_quorum: 1
+
+  approval_matrix:
+    mail.send_reminder:
+      approver_roles: [sales_manager]
+      sla_minutes: 120
+
+    task.create:
+      approver_roles: [sales_manager]
+      sla_minutes: 480
+      # Tự giao việc cho chính mình thì không cần duyệt.
+      # Giao cho người khác thì cần.
+      condition:
+        field: assignee_id
+        op: neq
+        value: $principal.employee_id
+
+  budget:
+    max_tool_calls_per_session: 40
+    max_cost_usd_per_day: 5
+    max_sessions_per_user_per_day: 30
+
+# ---------------------------------------------------------------------------
+# Guardrails. Baseline do platform ép vào, người dùng không gỡ được.
+# ---------------------------------------------------------------------------
+guardrails:
+  input:  [prompt_injection_detector, pii_redactor, topic_classifier]
+  output: [pii_masker, citation_required, confidence_router]
+  fallback: escalate_to_human
+  confidence_threshold: 0.65
+
+# ---------------------------------------------------------------------------
+# Kết nối. credential_ref là con trỏ Vault, không phải secret.
+# allowed_objects chỉ chứa VIEW — compiler từ chối tên bảng gốc.
+# ---------------------------------------------------------------------------
+connections:
+  - id: conn_erp
+    type: postgres
+    credential_ref: vault://conn/erp_readonly
+    allowed_objects: [v_ar_open, v_customer_safe]
+    read_only: true
+
+  - id: conn_mail
+    type: smtp
+    credential_ref: vault://conn/smtp_internal
+    allowed_hosts: [smtp.internal.corp]
+    read_only: false
+
+  - id: conn_task
+    type: rest
+    credential_ref: vault://conn/tasktracker
+    allowed_hosts: [tasks.internal.corp]
+    read_only: false
+
+knowledge:
+  collections: [kb_sales_policy]
+  filter:
+    department: SALES
+  top_k: 8
+  rerank: true
+
+observability:
+  trace: langfuse
+  audit: append_only
+  pii_scrub_traces: true
+
+evaluation:
+  golden_set_ref: golden/uc1_ar_v3.jsonl
+  min_pass_rate: 0.5
+  metrics: [faithfulness, answer_relevancy, refusal_correctness, leak_check]

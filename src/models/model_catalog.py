@@ -85,6 +85,12 @@ MODEL_CATALOG: dict[str, ModelInfo] = {
     # `src.services.llm.meta_agent_model`, which now warns instead of refusing.
     # Context 1,050,000 + 128,000 max output = the worst-case bound below.
     "gpt-5.6-luna": ModelInfo(ModelTier.CHEAP, 0.20, 1.20, max_tokens_per_call=1_178_000),
+    # The meta-agent's and the document writer's since 2026-10-25 — see
+    # `META_AGENT_MODEL`. Same family position as 5.6 Luna (the cost-optimised
+    # one, below Sol), hence CHEAP. Prices from OpenAI's pricing page (standard,
+    # ≤272K input). The page states no context window; the worst-case bound is
+    # 5.6 Luna's until OpenAI publishes one — an assumption, not a measurement.
+    "gpt-6-luna": ModelInfo(ModelTier.CHEAP, 0.10, 0.50, max_tokens_per_call=1_178_000),
     # The document writer's, and nobody else's — see `DOCUMENT_MODEL`. Pinned for
     # `META_AGENT_MODEL`'s reason, and *separate from the assignable
     # `gpt-4.1-mini` above even though it is the same model*: what the platform
@@ -130,17 +136,13 @@ MODEL_CATALOG: dict[str, ModelInfo] = {
 #: data rather than a rule someone has to remember. The meta-agent is the hardest
 #: part of the system; a user's configuration does not get a vote in it.
 #:
-#: **`gpt-4.1`** — STRONG tier, $2.00/$8.00 per million tokens, 1M-token context.
-#: Stronger instruction-following than gpt-5.6-luna (CHEAP tier) for the hardest
-#: tasks the meta-agent does: composing a workflow graph, picking templates, writing
-#: and judging eval cases. Using a STRONG model here re-enables the guarantee
-#: `src.services.llm.meta_agent_model` makes — the warning it was emitting for
-#: gpt-5.6-luna is gone. The constant stays reserved and out of `ASSIGNABLE_MODELS`
-#: so no admin surface gets a vote in it.
-#:
-#: A floating alias rather than a dated snapshot — worth pinning to a snapshot
-#: (e.g. ``gpt-4.1-2025-04-14``) if reproducibility becomes a priority.
-META_AGENT_MODEL = "gpt-4.1"
+#: **`gpt-6-luna`** — CHEAP tier, $0.10/$0.50 per million tokens. Switched from
+#: `gpt-4.1` (2026-10-25) at the team's call. Being CHEAP, it makes `src.services.llm.meta_agent_model` log its "not strong tier"
+#: warning on every call — expected, and the line to look for if spec/graph
+#: quality drops. Tools are bound with reasoning off (`_ReasoningOffWhenToolsAreBound`).
+#: The constant stays reserved and out of `ASSIGNABLE_MODELS` so no admin
+#: surface gets a vote in it.
+META_AGENT_MODEL = "gpt-6-luna"
 
 #: What *writes the platform's own documents* — see `src.services.llm.DOCUMENT_MODEL`
 #: for the measurement and the argument. Reserved exactly like the meta-agent's:
@@ -154,7 +156,12 @@ META_AGENT_MODEL = "gpt-4.1"
 #: `src.workflow.validation` and `AgentSpec` stand in the way, and
 #: `write_document` re-asks with the complaint up to three times. A cheap model
 #: fails that gate more often and passes it just as completely.
-DOCUMENT_MODEL = "gpt-4.1-mini-2025-04-14"
+#:
+#: The same id as `META_AGENT_MODEL` since 2026-10-25 (both moved to
+#: `gpt-6-luna`). Luna is CHEAP, so `document_model`'s tier check still holds.
+#: `META_AGENT_TEMPERATURE` now applies only where reasoning is off (tool
+#: calls): a reasoning model takes no temperature but the default.
+DOCUMENT_MODEL = "gpt-6-luna"
 
 #: What `src.services.extraction` calls for a scanned/photographed page (RAG-06).
 #: Same reasoning as `META_AGENT_MODEL`: priced here so ingest cost (#101) reuses
@@ -228,6 +235,24 @@ ASSIGNABLE_MODELS: dict[str, ModelInfo] = {
 #: codebase already picked the dearer of two cheap models on purpose.
 SUPERSEDED_BY: dict[str, str] = {"gpt-4o": "gpt-4.1"}
 
+#: Models the provider **no longer serves**, mapped to the one that runs in their
+#: place. Stronger than `SUPERSEDED_BY`: there, the old name is a worse choice;
+#: here, it is no choice at all — OpenAI answers `gpt-4.1-nano` with a 404
+#: `model_not_found` ("has been deprecated"), measured 2026-10-25.
+#:
+#: Kept in `MODEL_CATALOG` anyway, for `DEFAULT_MODEL_ALLOWLIST`'s reason: a
+#: stored spec naming it must stay readable. What changes is that nothing new
+#: is assigned it (`SEEDED_MODEL_ALLOWLIST`, `undominated`) and that a stored
+#: node still naming it runs on the replacement (`served_model`) instead of
+#: failing the whole run. `gpt-4.1-mini` because it is `DEFAULT_NODE_MODEL`:
+#: same family, same tier, and already what an undecided node gets.
+RETIRED_MODELS: dict[str, str] = {"gpt-4.1-nano": "gpt-4.1-mini"}
+
+
+def served_model(model: str) -> str:
+    """The model the provider is actually asked for when a caller names `model`."""
+    return RETIRED_MODELS.get(model, model)
+
 
 #: The allowlist that applies when **nobody supplied one** — and it is the
 #: *reading* default, not the platform's policy. Keep it permissive.
@@ -268,7 +293,9 @@ DEFAULT_MODEL_ALLOWLIST: tuple[str, ...] = tuple(ASSIGNABLE_MODELS)
 #: more for nothing. Adding it back is one save on the platform-settings screen,
 #: which is what makes it a decision somebody makes rather than a default nobody
 #: chose.
-SEEDED_MODEL_ALLOWLIST: tuple[str, ...] = tuple(name for name in DEFAULT_MODEL_ALLOWLIST if name not in SUPERSEDED_BY)
+SEEDED_MODEL_ALLOWLIST: tuple[str, ...] = tuple(
+    name for name in DEFAULT_MODEL_ALLOWLIST if name not in SUPERSEDED_BY and name not in RETIRED_MODELS
+)
 
 
 #: What a node the platform drafted runs on until somebody chooses otherwise.
@@ -300,6 +327,11 @@ def undominated(model: str, allowlist: Sequence[str]) -> str:
     which concrete SKU realises that tier is the platform's job, and this is the
     platform doing it.
     """
+    retired = RETIRED_MODELS.get(model)
+    if retired is not None:
+        # Not conditional on the allowlist, unlike a dominated name: a retired
+        # model left in place is a run that 404s, which no allowlist asked for.
+        return retired if retired in allowlist else default_node_model(allowlist)
     better = SUPERSEDED_BY.get(model)
     return better if better is not None and better in allowlist and better in ASSIGNABLE_MODELS else model
 
@@ -320,7 +352,7 @@ def default_node_model(allowlist: Sequence[str]) -> str:
     """
     if DEFAULT_NODE_MODEL in allowlist:
         return DEFAULT_NODE_MODEL
-    allowed = [name for name in allowlist if name in ASSIGNABLE_MODELS]
+    allowed = [name for name in allowlist if name in ASSIGNABLE_MODELS and name not in RETIRED_MODELS]
     cheap = [name for name in allowed if ASSIGNABLE_MODELS[name].tier is ModelTier.CHEAP]
     return next(iter(cheap), next(iter(allowed), ""))
 

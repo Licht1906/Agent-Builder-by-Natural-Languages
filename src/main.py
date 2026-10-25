@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from src.agents.memory import close_checkpointer
+from src.agents.memory import close_checkpointer, get_checkpointer
 from src.api.admin_routes import router as admin_router
 from src.api.agent_routes import router as agent_router
 from src.api.approval_routes import creator_router as approval_creator_router
@@ -83,9 +83,15 @@ async def lifespan(app: FastAPI):
     recovered = recover_interrupted_ingestions()
     if recovered:
         print(f"Marked {recovered} interrupted ingestion(s) as failed — reingest to resume")
+    # Built here, not on the first chat: `setup()` runs LangGraph's migrations,
+    # some of which are `CREATE INDEX CONCURRENTLY` — and that waits for every
+    # open transaction in the database to end. Lazily, the first request had
+    # already opened one (`OwnedVersion`'s SELECT, idle until the response) and
+    # then waited on its own transaction forever.
+    await get_checkpointer()
     yield
-    # The conversation checkpointer holds its own Postgres pool, opened lazily
-    # on the first chat. Nothing else owns it, so shutdown is where it closes.
+    # The conversation checkpointer holds its own Postgres pool, opened at
+    # startup above. Nothing else owns it, so shutdown is where it closes.
     await close_checkpointer()
     # Traces are batched and never flushed during a request (#11) — this is the
     # only place the last batch gets sent, and the only place it is safe to wait.

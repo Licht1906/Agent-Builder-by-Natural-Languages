@@ -1,0 +1,297 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbuilder.local/schemas/agentspec-v1.json",
+  "title": "AgentSpec",
+  "description": "Declarative specification of a child agent. Produced as a draft by the meta-agent, edited and approved by a human, then compiled into a LangGraph runtime plus an OPA policy bundle. This document must never contain secrets.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "audience", "capabilities", "prohibitions", "authority", "guardrails"],
+  "additionalProperties": false,
+
+  "properties": {
+    "apiVersion": { "const": "agentbuilder/v1" },
+    "kind": { "const": "AgentSpec" },
+
+    "metadata": {
+      "type": "object",
+      "required": ["id", "name", "version", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^agt_[a-z0-9_]{3,48}$",
+          "description": "Stable identifier. Also used as the PostgreSQL role name and the container name."
+        },
+        "name": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "version": { "type": "integer", "minimum": 1 },
+        "status": {
+          "enum": ["draft", "pending_approval", "approved", "deployed", "suspended", "retired"],
+          "description": "Set by the platform, never by the meta-agent. A draft from the LLM is always forced to 'draft'."
+        },
+        "created_by": { "type": "string" },
+        "approved_by": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "User ids of approvers. Length must satisfy authority.approval_quorum before status can become 'approved'."
+        },
+        "parent_version": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+
+    "audience": {
+      "type": "object",
+      "description": "Who is allowed to talk to this agent, and how wide their data window is.",
+      "required": ["roles", "data_scope"],
+      "additionalProperties": false,
+      "properties": {
+        "roles": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]{2,40}$" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "departments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true,
+          "description": "Empty or absent means no department restriction."
+        },
+        "data_scope": {
+          "enum": ["own_records", "department", "all"],
+          "description": "Compiles into a mandatory row filter applied at query time using the CALLER's identity, not the creator's."
+        }
+      }
+    },
+
+    "capabilities": {
+      "type": "array",
+      "description": "Allow-list of tools. Anything not listed here is denied.",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["tool", "scope"],
+        "additionalProperties": false,
+        "properties": {
+          "tool": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+            "description": "Fully qualified tool name from the platform tool catalog, e.g. erp.query_receivables. The compiler rejects names not present in the catalog."
+          },
+          "scope": { "enum": ["read", "write"] },
+          "requires_approval": { "type": "boolean", "default": false },
+          "constraints": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "max_rows": { "type": "integer", "minimum": 1, "maximum": 10000 },
+              "max_calls_per_session": { "type": "integer", "minimum": 1 },
+              "allowed_columns": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+
+    "prohibitions": {
+      "type": "object",
+      "description": "Explicit negative space. Evaluated before capabilities: a deny here always wins.",
+      "required": ["external_egress"],
+      "additionalProperties": false,
+      "properties": {
+        "never_expose": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Field names redacted from every tool result before the LLM sees them, and masked again on output."
+        },
+        "deny_tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Glob patterns, e.g. erp.update_* — matched against the tool name."
+        },
+        "deny_topics": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Routed to the topic classifier guardrail. A match triggers guardrails.fallback."
+        },
+        "external_egress": {
+          "type": "boolean",
+          "default": false,
+          "description": "false compiles into a deny-all NetworkPolicy with an allow-list built only from connections[] hosts and the LLM gateway."
+        }
+      }
+    },
+
+    "authority": {
+      "type": "object",
+      "required": ["autonomy", "budget"],
+      "additionalProperties": false,
+      "properties": {
+        "autonomy": {
+          "enum": ["read_only", "propose", "propose_then_act", "autonomous"],
+          "description": "read_only: every write tool is denied. propose: the agent drafts an action but a human executes it. propose_then_act: the agent executes after approval. autonomous: no per-action approval; requires approval_quorum >= 2 at deploy time."
+        },
+        "approval_quorum": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3,
+          "default": 1,
+          "description": "How many distinct approvers must sign the spec before deployment."
+        },
+        "approval_matrix": {
+          "type": "object",
+          "description": "Per-tool runtime approval. Key is the tool name.",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["approver_roles"],
+            "additionalProperties": false,
+            "properties": {
+              "approver_roles": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1
+              },
+              "condition": { "$ref": "#/$defs/condition" },
+              "sla_minutes": { "type": "integer", "minimum": 1, "default": 240 }
+            }
+          }
+        },
+        "budget": {
+          "type": "object",
+          "required": ["max_tool_calls_per_session"],
+          "additionalProperties": false,
+          "properties": {
+            "max_tool_calls_per_session": { "type": "integer", "minimum": 1, "maximum": 200 },
+            "max_cost_usd_per_day": { "type": "number", "minimum": 0 },
+            "max_sessions_per_user_per_day": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+
+    "guardrails": {
+      "type": "object",
+      "description": "The platform force-merges a mandatory baseline into this object after the meta-agent returns. The user may add guardrails but may not remove baseline ones.",
+      "required": ["input", "output", "fallback"],
+      "additionalProperties": false,
+      "properties": {
+        "input": {
+          "type": "array",
+          "items": { "enum": ["prompt_injection_detector", "pii_redactor", "topic_classifier", "language_filter"] },
+          "uniqueItems": true
+        },
+        "output": {
+          "type": "array",
+          "items": { "enum": ["pii_masker", "citation_required", "confidence_router", "no_speculation", "grounding_check"] },
+          "uniqueItems": true
+        },
+        "fallback": { "enum": ["escalate_to_human", "refuse", "answer_with_disclaimer"] },
+        "confidence_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.6 }
+      }
+    },
+
+    "connections": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "credential_ref", "read_only"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^conn_[a-z0-9_]{2,40}$" },
+          "type": { "enum": ["postgres", "mysql", "mssql", "rest", "smtp", "s3", "filesystem"] },
+          "credential_ref": {
+            "type": "string",
+            "pattern": "^vault://[a-z0-9_/-]+$",
+            "description": "A POINTER, never a secret. The spec is stored in plaintext in Postgres and shown in the UI diff view; anything resembling a credential here is a security incident. The API rejects specs whose serialized form matches the secret-shape detector."
+          },
+          "allowed_objects": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "For SQL connections: the exact views the agent may read. Base tables are rejected by the compiler."
+          },
+          "allowed_hosts": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "For rest/smtp: hostnames added to the egress allow-list."
+          },
+          "read_only": { "type": "boolean" }
+        }
+      }
+    },
+
+    "knowledge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "collections": { "type": "array", "items": { "type": "string" } },
+        "filter": { "type": "object", "description": "Qdrant payload filter merged with the caller-derived filter at query time." },
+        "top_k": { "type": "integer", "minimum": 1, "maximum": 50, "default": 8 },
+        "rerank": { "type": "boolean", "default": true }
+      }
+    },
+
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trace": { "enum": ["langfuse", "none"], "default": "langfuse" },
+        "audit": { "const": "append_only" },
+        "pii_scrub_traces": { "type": "boolean", "default": true }
+      }
+    },
+
+    "evaluation": {
+      "type": "object",
+      "description": "Smoke test that must pass before status can move past 'approved'.",
+      "additionalProperties": false,
+      "properties": {
+        "golden_set_ref": { "type": "string" },
+        "min_pass_rate": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+        "metrics": {
+          "type": "array",
+          "items": { "enum": ["faithfulness", "answer_relevancy", "contextual_precision", "refusal_correctness", "leak_check"] }
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "condition": {
+      "type": "object",
+      "description": "Structured predicate evaluated by OPA. Deliberately NOT a free-form expression string: the meta-agent must not be able to emit code that the policy engine will evaluate.",
+      "required": ["field", "op", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Dot path into the tool arguments, e.g. assignee_id or amount."
+        },
+        "op": { "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "in", "not_in"] },
+        "value": {
+          "description": "A literal, or one of the reserved caller references: $principal.employee_id, $principal.department, $principal.sub."
+        }
+      }
+    }
+  },
+
+  "allOf": [
+    {
+      "if": { "properties": { "authority": { "properties": { "autonomy": { "const": "autonomous" } } } } },
+      "then": {
+        "properties": {
+          "authority": { "properties": { "approval_quorum": { "minimum": 2 } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "authority": { "properties": { "autonomy": { "const": "read_only" } } } } },
+      "then": {
+        "properties": {
+          "capabilities": { "items": { "properties": { "scope": { "const": "read" } } } }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# These files are this branch's personal AI-log mechanism (buffer + Gemini
+# redaction + resolve_log_dir + submit safety net) — already more advanced
+# than any incoming version from a teammate's branch. On merge conflict,
+# always keep this branch's version instead of stopping to resolve by hand.
+# Requires local `git config merge.ours.driver true` (see scripts/setup_hooks.sh
+# — .gitattributes alone can't define the driver, only reference it by name).
+.ai-log/session.jsonl merge=ours
+scripts/submit_log.py merge=ours
+scripts/log_hook.py merge=ours
+scripts/log_manual.py merge=ours
+scripts/log_antigravity.py merge=ours
+
+# .gitignore is NOT in this list on purpose: it also carries rules unrelated
+# to ai-log (Python, Node, IDE, ...), and "ours" would silently drop any
+# future teammate addition there forever. It's cheap to resolve by hand the
+# rare time it actually conflicts.

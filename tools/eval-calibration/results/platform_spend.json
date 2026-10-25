@@ -1,0 +1,18 @@
+{
+  "stage": "platform_one_call",
+  "model": "gpt-4.1-mini",
+  "estimated_usd": 0.036386,
+  "actual_usd": 0.0368,
+  "calls": 96,
+  "input_tokens": 54956,
+  "output_tokens": 9261,
+  "wall_seconds": 276.0,
+  "graded_artifact_git_blob_sha1": {
+    "src/evals/uc1_deepeval_runner.py": "47bc4821ba45cd1ccbd0d0f21ce71ce187c1182d",
+    "src/evals/metrics.py": "688ab4d29b708b20e6058eca78de0ddc27be0e6e"
+  },
+  "hosts_resolved": [
+    "api.openai.com"
+  ],
+  "hosts_blocked": []
+}

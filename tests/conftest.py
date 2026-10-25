@@ -25,6 +25,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.messages.tool import tool_call_chunk
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langgraph.checkpoint.postgres import PostgresSaver
 from pydantic import PrivateAttr
 from qdrant_client import QdrantClient
 from sqlalchemy import insert, inspect, text, update
@@ -183,6 +184,16 @@ def _fresh_postgres_schema() -> None:
         connection.execute(insert(User).values(**seed_agent_admin_row()))
         connection.execute(insert(User), seed_sales_demo_rows())
         connection.execute(insert(User).values(**seed_pm_row()))
+    # The checkpoint tables were dropped above, so their migrations run again —
+    # here, while nothing else holds a transaction, and not lazily in the first
+    # test that reaches `get_checkpointer`. Some of them are `CREATE INDEX
+    # CONCURRENTLY`, which waits for every open transaction in the database; a
+    # test's own `db_session` is one, so lazily the suite hung on itself. The
+    # same reason `src.main.lifespan` builds the checkpointer at startup.
+    with PostgresSaver.from_conn_string(
+        engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
+    ) as checkpointer:
+        checkpointer.setup()
 
 
 @pytest_asyncio.fixture

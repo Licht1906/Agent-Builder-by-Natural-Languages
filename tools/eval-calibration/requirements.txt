@@ -1,0 +1,17 @@
+# ADR-0059 — dev-only calibration harness. NEVER add these to pyproject.toml:
+# the ban ADR-0054 §4 records is narrowed to the product path, not lifted.
+# Recreate with:
+#   python -m venv tools/eval-calibration/.venv
+#   tools/eval-calibration/.venv/Scripts/python -m pip install -r tools/eval-calibration/requirements.txt
+#
+# The four pins below are one decision, not four. ragas 0.4.3 (the newest there
+# is) still imports `langchain_community.chat_models.vertexai`, which
+# langchain-community 0.4.x deleted, so a naive `pip install ragas deepeval`
+# installs a ragas that cannot be imported. Holding langchain-community under
+# 0.4 pulls langchain-core back to 0.3.x, which is why langchain-openai is
+# pinned under 1.0 alongside it. Verified working set is in
+# requirements.lock.txt.
+ragas==0.4.3
+deepeval==4.2.0
+langchain-community<0.4
+langchain-openai<1.0

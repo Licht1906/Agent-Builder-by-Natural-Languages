@@ -1,0 +1,144 @@
+# UC1-34 (#146), spec.md §12.1/§12.3, NFR-05 — the "profile ngoại tuyến"
+# §12.1's package layout names, a sibling of `docker-compose.yml` (the
+# single-node/demo profile, UC1-33 / #145), not an override merged with it:
+# an operator on a fully disconnected machine runs this file alone, after
+# `scripts/package_airgap_artifact.sh` (packaged on a *connected* machine)
+# produced and signed the artifact `scripts/import_airgap_artifact.sh`
+# imports here.
+#
+# The one structural difference from `docker-compose.yml`: no `build:`
+# anywhere. Building `backend`/`reranker` from source needs `pip install`
+# reaching PyPI mid-build — exactly the network access an air-gapped install
+# does not have. Every service here instead names a pre-built, pinned
+# `image:` — built and tagged by `package_airgap_artifact.sh` on a connected
+# machine, `docker save`d into the artifact's own `images.tar`, and
+# `docker load`ed back in by the import script before this file is ever
+# brought up, so `docker compose up` here never dials out for an image layer
+# it does not already have locally.
+#
+# `AGENT_BUILDER_IMAGE_TAG` names which build this artifact carries —
+# `package_airgap_artifact.sh` sets it (default `latest` here is only for a
+# manual `docker compose -f docker-compose.airgap.yml up` outside that
+# script, e.g. to sanity-check this file's own shape).
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  reranker:
+    image: agent-builder/reranker:${AGENT_BUILDER_IMAGE_TAG:-latest}
+    ports:
+      - "8001:8001"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # UC1-12 (#113), §6.2: same image `docker-compose.yml`'s own `policy`
+  # service pins — an OPA release, not something this repo builds, so it is
+  # already exactly as air-gap-friendly as any other pinned base image here.
+  policy:
+    image: openpolicyagent/opa:1.19.0
+    command: ["run", "--server", "--addr=:8181", "/policy/authz.rego"]
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./docs/usecase_spec/platform:/policy:ro
+
+  vault:
+    image: hashicorp/vault:1.18
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: dev-only-vault-token
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  backend:
+    image: agent-builder/backend:${AGENT_BUILDER_IMAGE_TAG:-latest}
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/app_dev
+      QDRANT_URL: http://qdrant:6333
+      RERANKER_URL: http://reranker:8001
+      OPA_URL: http://policy:8181
+      VAULT_URL: http://vault:8200
+      VAULT_TOKEN: dev-only-vault-token
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      # §12.4: no event on this list ever calls the control plane — an
+      # air-gapped install additionally has nothing to reach even if one
+      # tried, which `CONTROL_PLANE_URL` empty already guarantees the same
+      # way it does for the single-node profile.
+      CONTROL_PLANE_URL: ""
+    depends_on:
+      db:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      reranker:
+        condition: service_started
+      policy:
+        condition: service_started
+      vault:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  pgdata:
+  qdrant_data:
+  hf_cache:

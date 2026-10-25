@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/_pyrun.sh\" \"$CLAUDE_PROJECT_DIR/scripts/log_hook.py\" --tool=claude",
+            "shell": "bash"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/_pyrun.sh\" \"$CLAUDE_PROJECT_DIR/scripts/log_hook.py\" --tool=claude",
+            "shell": "bash"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/_pyrun.sh\" \"$CLAUDE_PROJECT_DIR/scripts/log_hook.py\" --tool=claude",
+            "shell": "bash"
+          }
+        ]
+      }
+    ]
+  }
+}

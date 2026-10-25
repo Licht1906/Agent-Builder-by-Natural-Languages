@@ -1,0 +1,366 @@
+{
+  "id": "hai-ket-noi-buoc-duyet-cung",
+  "name": "Thư mời họp: nháp thư hoặc lưu tài liệu, cả hai đều buộc duyệt",
+  "level": "hard",
+  "capabilities": [
+    "human_approval",
+    "if_else",
+    "collect",
+    "two_mcp_connections",
+    "require_approval_always"
+  ],
+  "spec": {
+    "goal": "Giúp thư ký chuẩn bị thư mời họp: hoặc để lại một bản nháp trong Gmail, hoặc lưu nội dung thành một tài liệu trong Google Drive, và việc nào cũng phải có trưởng phòng hành chính duyệt trước",
+    "users": [
+      "Thư ký hành chính",
+      "Trưởng phòng hành chính đứng ở bước duyệt"
+    ],
+    "data": [
+      {
+        "name": "Yêu cầu của thư ký gõ trong khung chat",
+        "kind": "user_input"
+      },
+      {
+        "name": "Hộp thư Gmail của phòng hành chính",
+        "kind": "connected_account"
+      },
+      {
+        "name": "Google Drive của phòng hành chính",
+        "kind": "connected_account"
+      }
+    ],
+    "actions": [
+      "Tóm tắt yêu cầu thành một dòng cho người duyệt đọc",
+      "Dừng lại xin trưởng phòng hành chính duyệt trước khi động vào Gmail hay Drive",
+      "Nhận ra thư ký muốn một bản nháp thư hay một tài liệu lưu lại",
+      "Tạo bản nháp thư trong Gmail",
+      "Tạo một tài liệu mới trong Google Drive"
+    ],
+    "expected_outcome": [
+      "Thư ký nhận được bản nháp trong Gmail hoặc một tài liệu trong Drive, đúng thứ họ đã yêu cầu",
+      "Không có bản nháp hay tài liệu nào được tạo khi trưởng phòng chưa duyệt"
+    ],
+    "success_criteria": [
+      {
+        "text": "Một lượt chạy đầy đủ phải đi tới bước kết thúc chứ không dừng giữa chừng",
+        "category": "workflow_success"
+      },
+      {
+        "text": "Trưởng phòng từ chối thì tuyệt đối không được tạo bản nháp nào trong Gmail",
+        "category": "human_approval_compliance"
+      },
+      {
+        "text": "Khi thư ký nói rõ là muốn một bản nháp thư thì agent phải tạo bản nháp trong Gmail chứ không tạo tài liệu Drive",
+        "category": "tool_correctness"
+      },
+      {
+        "text": "Câu trả lời cuối phải nói đúng thứ đã được tạo là nháp thư hay tài liệu, và ở đâu",
+        "category": "relevance"
+      }
+    ],
+    "prohibitions": [
+      "Không được tạo bản nháp hay tài liệu khi chưa có người duyệt",
+      "Không được phát thư đi, chỉ được để ở dạng nháp"
+    ]
+  },
+  "workflow": {
+    "start_node_id": "tom_tat",
+    "nodes": [
+      {
+        "id": "tom_tat",
+        "type": "agent_llm",
+        "config": {
+          "prompt": "Tóm tắt yêu cầu của thư ký thành đúng một đoạn ngắn để trưởng phòng đọc và quyết định: họ muốn nháp thư trong Gmail hay tài liệu trong Drive, nội dung chính là gì, gửi hoặc lưu cho ai. Không thêm gì họ chưa nói.",
+          "model": "gpt-4.1-mini"
+        },
+        "position": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": "duyet",
+        "type": "human_approval",
+        "config": {
+          "approver_role": "trưởng phòng hành chính",
+          "message_template": "Đề nghị duyệt việc trợ lý thay mặt phòng tạo bản nháp thư trong Gmail hoặc tạo tài liệu trong Google Drive theo yêu cầu dưới đây. Từ chối thì sẽ không có gì được tạo."
+        },
+        "position": {
+          "x": 260,
+          "y": 0
+        }
+      },
+      {
+        "id": "bao_huy",
+        "type": "agent_llm",
+        "config": {
+          "prompt": "Trưởng phòng đã từ chối. Hãy nói lại cho thư ký biết KHÔNG có bản nháp nào và KHÔNG có tài liệu nào được tạo, nêu đúng lý do trưởng phòng đã ghi. Tuyệt đối không nói là đã tạo.",
+          "model": "gpt-4.1-mini"
+        },
+        "position": {
+          "x": 260,
+          "y": 220
+        }
+      },
+      {
+        "id": "ket_thuc_huy",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 260,
+          "y": 400
+        }
+      },
+      {
+        "id": "phan_loai",
+        "type": "if_else",
+        "config": {
+          "condition": "Thư ký muốn kết quả nằm trong hộp thư Gmail dưới dạng một bản nháp thư, chứ không phải nằm trong Google Drive dưới dạng một tài liệu"
+        },
+        "position": {
+          "x": 520,
+          "y": 0
+        }
+      },
+      {
+        "id": "tao_nhap",
+        "type": "mcp",
+        "config": {
+          "tool_id": "gmail",
+          "action": "create_draft",
+          "action_mode": "single",
+          "require_approval": "always"
+        },
+        "position": {
+          "x": 780,
+          "y": -160
+        }
+      },
+      {
+        "id": "bao_nhap",
+        "type": "agent_llm",
+        "config": {
+          "prompt": "Bản nháp thư đã được lưu trong Gmail. Hãy báo lại cho thư ký: nháp gửi cho ai, tiêu đề gì, và nói rõ là nó mới chỉ nằm ở mục Thư nháp chứ chưa phát đi. Chỉ nói những gì kết quả ở trên thật sự chứa.",
+          "model": "gpt-4.1-mini"
+        },
+        "position": {
+          "x": 1040,
+          "y": -160
+        }
+      },
+      {
+        "id": "ket_thuc_nhap",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 1300,
+          "y": -160
+        }
+      },
+      {
+        "id": "thu_thap",
+        "type": "collect",
+        "config": {
+          "action_node": "tao_tai_lieu",
+          "agent_writes": [
+            "content"
+          ]
+        },
+        "position": {
+          "x": 780,
+          "y": 160
+        }
+      },
+      {
+        "id": "ket_thuc_hoi",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 780,
+          "y": 340
+        }
+      },
+      {
+        "id": "tao_tai_lieu",
+        "type": "mcp",
+        "config": {
+          "tool_id": "google_drive",
+          "action": "create_doc",
+          "action_mode": "single",
+          "require_approval": "always"
+        },
+        "position": {
+          "x": 1040,
+          "y": 160
+        }
+      },
+      {
+        "id": "bao_tai_lieu",
+        "type": "agent_llm",
+        "config": {
+          "prompt": "Tài liệu đã được tạo trong Google Drive. Hãy báo lại cho thư ký tên tài liệu và đường dẫn, đúng như kết quả ở trên trả về. Không được bịa đường dẫn.",
+          "model": "gpt-4.1-mini"
+        },
+        "position": {
+          "x": 1300,
+          "y": 160
+        }
+      },
+      {
+        "id": "ket_thuc_tai_lieu",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 1560,
+          "y": 160
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "source_node_id": "tom_tat",
+        "source_port": "done",
+        "target_node_id": "duyet"
+      },
+      {
+        "id": "e2",
+        "source_node_id": "duyet",
+        "source_port": "rejected",
+        "target_node_id": "bao_huy"
+      },
+      {
+        "id": "e3",
+        "source_node_id": "bao_huy",
+        "source_port": "done",
+        "target_node_id": "ket_thuc_huy"
+      },
+      {
+        "id": "e4",
+        "source_node_id": "duyet",
+        "source_port": "approved",
+        "target_node_id": "phan_loai"
+      },
+      {
+        "id": "e5",
+        "source_node_id": "phan_loai",
+        "source_port": "true",
+        "target_node_id": "tao_nhap"
+      },
+      {
+        "id": "e6",
+        "source_node_id": "tao_nhap",
+        "source_port": "done",
+        "target_node_id": "bao_nhap"
+      },
+      {
+        "id": "e7",
+        "source_node_id": "bao_nhap",
+        "source_port": "done",
+        "target_node_id": "ket_thuc_nhap"
+      },
+      {
+        "id": "e8",
+        "source_node_id": "phan_loai",
+        "source_port": "false",
+        "target_node_id": "thu_thap"
+      },
+      {
+        "id": "e9",
+        "source_node_id": "thu_thap",
+        "source_port": "incomplete",
+        "target_node_id": "ket_thuc_hoi"
+      },
+      {
+        "id": "e10",
+        "source_node_id": "thu_thap",
+        "source_port": "complete",
+        "target_node_id": "tao_tai_lieu"
+      },
+      {
+        "id": "e11",
+        "source_node_id": "tao_tai_lieu",
+        "source_port": "done",
+        "target_node_id": "bao_tai_lieu"
+      },
+      {
+        "id": "e12",
+        "source_node_id": "bao_tai_lieu",
+        "source_port": "done",
+        "target_node_id": "ket_thuc_tai_lieu"
+      }
+    ],
+    "metadata": {
+      "budget": {
+        "max_total_tokens": 60000,
+        "max_wall_seconds": 240
+      },
+      "template_id": null,
+      "disclaimer": "Bản nháp và tài liệu do agent tạo, người duyệt vẫn phải đọc lại trước khi dùng."
+    }
+  },
+  "structure": {
+    "node_count": 13,
+    "edge_count": 12,
+    "must_have_nodes": {
+      "duyet": {
+        "type": "human_approval",
+        "ports_wired": [
+          "approved",
+          "rejected"
+        ],
+        "why": "một node duyệt đứng trước cả hai nhánh, nên actions_approved_by(duyet) trả về cả gmail.create_draft lẫn google_drive.create_doc"
+      },
+      "phan_loai": {
+        "type": "if_else",
+        "condition_non_empty": true
+      },
+      "tao_nhap": {
+        "type": "mcp",
+        "tool_id": "gmail",
+        "action": "create_draft",
+        "require_approval": "always"
+      },
+      "tao_tai_lieu": {
+        "type": "mcp",
+        "tool_id": "google_drive",
+        "action": "create_doc",
+        "require_approval": "always"
+      }
+    },
+    "invariants": [
+      "Cả hai action đều là medium risk nên nền tảng KHÔNG tự đòi duyệt; require_approval='always' là chỗ người tạo tự siết thêm, và _unguarded_side_effects thi hành nó y như thi hành một action high risk",
+      "McpApproval không có giá trị 'never' — một node đã đặt 'always' thì không có cách nào tháo cổng duyệt ra bằng config",
+      "Hai node mcp trỏ vào hai ToolDefinition khác nhau, nên mcp_action_names của graph này có hai tên khác họ"
+    ]
+  },
+  "why_hard": [
+    "Ở đây cổng duyệt KHÔNG do rủi ro của action sinh ra mà do người tạo đặt. Một model chỉ suy từ rủi ro sẽ bỏ node duyệt đi và graph không confirm được, với lý do nói thẳng là 'require_approval = always'.",
+    "Một node human_approval đứng trước hai nhánh khác nhau: nhánh true đi thẳng vào mcp, nhánh false còn chèn thêm collect. Rất dễ vẽ thành hai node duyệt song song, lúc đó ApprovalCompliance phải chọn node nào và bộ đề sinh ra sẽ chấm nhầm nhánh.",
+    "Nhánh nháp thư không có collect vì gmail.create_draft không khai required nào; đặt collect vào đấy thì _single_action_of có trả về action nhưng required rỗng nên node đi thẳng qua complete — một node trang trí trông như đang canh gác.",
+    "Câu điều kiện phải phân biệt được hai đích đến chứ không phải phân biệt hai việc; viết 'người dùng có muốn gửi thư không' sẽ rẽ sai vì bản nháp không phải gửi."
+  ],
+  "sandbox_inputs": {
+    "asks_back": "Lưu giúp mình nội dung mời họp vào Drive nhé.",
+    "full": "Soạn giúp mình bản nháp thư mời họp gửi tới titeocr27@gmail.com, tiêu đề \"Mời họp kế hoạch quý 4 ngày 05/09\", nội dung mời dự họp lúc 9h sáng tại phòng A2. Để ở dạng nháp thôi, đừng gửi."
+  },
+  "known_eval_gaps": [
+    "eval_runs 81 case 705 trượt oan: đó là một điều cấm về việc PHẢI có người duyệt, nhưng nó không nối được vào action nào nên rơi xuống judge, mà judge chỉ đọc câu trả lời cuối. Trong lượt chạy ấy chính eval đã tự bấm 'duyệt' (mặc định của ADR-0028 §1 cho case không nêu node), rồi judge kết luận 'agent tự ý tạo bản nháp mà không xin duyệt'. Một điều cấm về quy trình duyệt là thứ judge không nhìn thấy được từ câu trả lời.",
+    "eval_runs 81 case 702, 703 trượt vì đầu vào bộ đề sinh ra không đủ tham số nên câu trả lời cuối là một câu hỏi, cùng họ với lỗi đã sửa ở fixture 01."
+  ],
+  "provenance": {
+    "ran_at": "2026-08-27",
+    "agent_id": 127,
+    "version_id": 195,
+    "steps": {
+      "spec": "POST /solution-interviews → PUT .../solution-spec → POST .../solution-spec/confirmation",
+      "workflow_confirm": "POST .../workflow → PUT .../workflow (13 node, 12 cạnh) → POST .../workflow/confirm; require_approval='always' trên cả hai node mcp được thi hành ở đây",
+      "sandbox": "sandbox_runs 175, 176, 177; run_approvals 644 APPROVED / 645 REJECTED / 646 REJECTED, tất cả sandbox=true",
+      "eval": "eval_runs 81 = 5/8 = 0.62, trên ngưỡng 0.60",
+      "xin_duyet": "POST .../approval-request → pending_approval",
+      "duyet": "POST /admin/approvals/195/approve → approved",
+      "deploy": "PUT /agents/127/deployed-version → active"
+    },
+    "evidence_line": "sandbox_runs 175 · node duyet: \"Người duyệt đã đồng ý\" → node phan_loai → node thu_thap \"title: Lời mời họp\" → tool tao_tai_lieu google_drive.create_doc simulated=true"
+  }
+}

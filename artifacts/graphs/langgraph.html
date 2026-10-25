@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>LangGraph — workflow templates</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 960px; padding: 0 1rem; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 1rem 1.5rem; margin-bottom: 2rem; }
+  h2 { margin-bottom: .25rem; }
+  code { background: #f3f3f3; padding: 0 .3rem; border-radius: 4px; }
+  .description { color: #555; }
+</style>
+</head>
+<body>
+<h1>LangGraph — đồ thị của từng workflow template</h1>
+<p>Nét liền là <code>add_edge</code>; nét đứt có nhãn là <code>add_conditional_edges</code> (cổng ra của
+<code>IfElse</code>, <code>While</code>, <code>HumanApproval</code>).</p>
+<section>
+<h2>Hỏi đáp trên tài liệu</h2>
+<p><code>document_qa</code> — search: knowledge_search, answer: agent_llm, finish: end</p>
+<p class="description">Người dùng hỏi một câu, agent tìm trong tài liệu đã gắn rồi trả lời dựa trên đúng những gì tìm được. Hợp với trợ lý tra cứu quy định, sổ tay nghiệp vụ, tài liệu nội bộ — không thực hiện hành động nào ra bên ngoài.</p>
+<pre class="mermaid">
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([&lt;p&gt;__start__&lt;/p&gt;]):::first
+	search(search)
+	answer(answer)
+	finish(finish)
+	__end__([&lt;p&gt;__end__&lt;/p&gt;]):::last
+	__start__ --&gt; search;
+	answer --&gt; finish;
+	search --&gt; answer;
+	finish --&gt; __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+</pre>
+</section>
+<section>
+<h2>Hành động có người duyệt</h2>
+<p><code>action_with_approval</code> — search: knowledge_search, assess: agent_llm, gate: if_else, approval: human_approval, act: mcp, report: agent_llm, finish: end</p>
+<p class="description">Agent tra tài liệu, xét xem trường hợp này có đủ điều kiện không, xin một người duyệt, rồi mới thực hiện hành động thật ra bên ngoài (gửi thư, cập nhật hệ thống) và báo lại kết quả. Hợp với mọi bài toán mà một bước có tác dụng phụ không được xảy ra trước khi có người xác nhận.</p>
+<pre class="mermaid">
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([&lt;p&gt;__start__&lt;/p&gt;]):::first
+	search(search)
+	assess(assess)
+	gate(gate)
+	approval(approval)
+	act(act)
+	report(report)
+	finish(finish)
+	__end__([&lt;p&gt;__end__&lt;/p&gt;]):::last
+	__start__ --&gt; search;
+	act --&gt; report;
+	approval -. &amp;nbsp;approved&amp;nbsp; .-&gt; act;
+	approval -. &amp;nbsp;rejected&amp;nbsp; .-&gt; report;
+	assess --&gt; gate;
+	gate -. &amp;nbsp;true&amp;nbsp; .-&gt; approval;
+	gate -. &amp;nbsp;false&amp;nbsp; .-&gt; report;
+	report --&gt; finish;
+	search --&gt; assess;
+	finish --&gt; __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+</pre>
+</section>
+<section>
+<h2>Trợ lý trả lời trực tiếp</h2>
+<p><code>direct_assistant</code> — respond: agent_llm, finish: end</p>
+<p class="description">Agent đọc yêu cầu của người dùng rồi trả lời thẳng bằng năng lực của model — phân loại, tóm tắt, viết lại, trích xuất thông tin, dịch, soạn nội dung, tư vấn. Không tra tài liệu đính kèm, không tìm trên web, không gọi dịch vụ bên ngoài. Đây là bộ khung chung nhất: hợp với mọi bài toán chỉ cần model suy nghĩ rồi trả lời, và là nơi bắt đầu tốt khi bài toán chưa rõ cần tra cứu gì.</p>
+<pre class="mermaid">
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([&lt;p&gt;__start__&lt;/p&gt;]):::first
+	respond(respond)
+	finish(finish)
+	__end__([&lt;p&gt;__end__&lt;/p&gt;]):::last
+	__start__ --&gt; respond;
+	respond --&gt; finish;
+	finish --&gt; __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+</pre>
+</section>
+<section>
+<h2>Trợ lý lập kế hoạch</h2>
+<p><code>planning_helper</code> — plan: agent_llm, finish: end</p>
+<p class="description">Người dùng đưa ra một mục tiêu hoặc một việc cần làm, agent phân tích rồi trả lời bằng một kế hoạch từng bước để đạt được mục tiêu đó. Hợp với trợ lý lập kế hoạch, chia nhỏ công việc, gợi ý lộ trình — không tra cứu tài liệu nào, không thực hiện hành động nào ra bên ngoài.</p>
+<pre class="mermaid">
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([&lt;p&gt;__start__&lt;/p&gt;]):::first
+	plan(plan)
+	finish(finish)
+	__end__([&lt;p&gt;__end__&lt;/p&gt;]):::last
+	__start__ --&gt; plan;
+	plan --&gt; finish;
+	finish --&gt; __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+</pre>
+</section>
+<section>
+<h2>Chăm sóc khách hàng</h2>
+<p><code>customer_service</code> — search: knowledge_search, draft: agent_llm, approval: human_approval, send: mcp, report: agent_llm, finish: end</p>
+<p class="description">Khách hàng gửi câu hỏi hoặc khiếu nại, agent tra cứu tài liệu hỗ trợ liên quan, soạn một phản hồi, xin người quản lý duyệt rồi mới gửi thật cho khách qua hộp thư hoặc hệ thống đã kết nối, và báo lại kết quả. Hợp với đội chăm sóc khách hàng cần trả lời khách nhưng không được tự ý gửi khi chưa ai duyệt.</p>
+<pre class="mermaid">
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([&lt;p&gt;__start__&lt;/p&gt;]):::first
+	search(search)
+	draft(draft)
+	approval(approval)
+	send(send)
+	report(report)
+	finish(finish)
+	__end__([&lt;p&gt;__end__&lt;/p&gt;]):::last
+	__start__ --&gt; search;
+	approval -. &amp;nbsp;rejected&amp;nbsp; .-&gt; report;
+	approval -. &amp;nbsp;approved&amp;nbsp; .-&gt; send;
+	draft --&gt; approval;
+	report --&gt; finish;
+	search --&gt; draft;
+	send --&gt; report;
+	finish --&gt; __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+</pre>
+</section>
+<section>
+<h2>So sánh tài liệu</h2>
+<p><code>document_comparison</code> — search: knowledge_search, compare: agent_llm, finish: end</p>
+<p class="description">Người dùng cần so sánh nhiều tài liệu hoặc nhiều phiên bản đã gắn — ví dụ hai bản hợp đồng, hai bản chính sách — agent tìm trong các tài liệu đó rồi chỉ ra điểm giống và khác nhau. Không thực hiện hành động nào ra bên ngoài.</p>
+<pre class="mermaid">
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([&lt;p&gt;__start__&lt;/p&gt;]):::first
+	search(search)
+	compare(compare)
+	finish(finish)
+	__end__([&lt;p&gt;__end__&lt;/p&gt;]):::last
+	__start__ --&gt; search;
+	compare --&gt; finish;
+	search --&gt; compare;
+	finish --&gt; __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+</pre>
+</section>
+<section>
+<h2>Trợ lý tri thức nội bộ</h2>
+<p><code>internal_knowledge_assistant</code> — search: knowledge_search, answer: agent_llm, finish: end</p>
+<p class="description">Nhân viên nội bộ hỏi về quy trình, chính sách, tài liệu nội bộ của công ty, agent tìm trong kho tài liệu nội bộ đã gắn rồi trả lời dựa trên đúng những gì tìm được. Hợp với trợ lý tra cứu nội bộ cho nhân viên — không thực hiện hành động nào ra bên ngoài.</p>
+<pre class="mermaid">
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([&lt;p&gt;__start__&lt;/p&gt;]):::first
+	search(search)
+	answer(answer)
+	finish(finish)
+	__end__([&lt;p&gt;__end__&lt;/p&gt;]):::last
+	__start__ --&gt; search;
+	answer --&gt; finish;
+	search --&gt; answer;
+	finish --&gt; __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+</pre>
+</section>
+<section>
+<h2>Làm giàu dữ liệu</h2>
+<p><code>data_enrichment</code> — lookup: web_search, enrich: agent_llm, update: mcp, finish: end</p>
+<p class="description">Agent nhận một danh sách bản ghi — khách hàng, lead, danh bạ — tìm thêm thông tin liên quan trên web rồi cập nhật/bổ sung thông tin đó vào hệ thống đã kết nối. Hợp với làm giàu dữ liệu khách hàng hoặc lead từ nguồn công khai.</p>
+<pre class="mermaid">
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([&lt;p&gt;__start__&lt;/p&gt;]):::first
+	lookup(lookup)
+	enrich(enrich)
+	update(update)
+	finish(finish)
+	__end__([&lt;p&gt;__end__&lt;/p&gt;]):::last
+	__start__ --&gt; lookup;
+	enrich --&gt; update;
+	lookup --&gt; enrich;
+	update --&gt; finish;
+	finish --&gt; __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+
+</pre>
+</section>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true });
+</script>
+</body>
+</html>

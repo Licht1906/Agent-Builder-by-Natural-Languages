@@ -1,0 +1,18 @@
+{
+  "projects": {
+    "default": "project-d53af5b9-f901-4d5c-80d"
+  },
+  "targets": {
+    "project-d53af5b9-f901-4d5c-80d": {
+      "hosting": {
+        "c3app": [
+          "project-d53af5b9-f901-4d5c-80d"
+        ],
+        "new": [
+          "c3-app-065"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

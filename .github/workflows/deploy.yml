@@ -1,0 +1,357 @@
+# Deploys `backend` + `reranker` to Cloud Run after CI (.github/workflows/ci.yml)
+# passes on main. Does NOT touch `qdrant`/`policy`/`vault` (the internal-services
+# VM) or Cloud SQL — those are provisioned once by infra/gcp/setup.sh and change
+# rarely; see DEPLOYMENT.md for how to update them (e.g. authz.rego edits).
+# `frontend/` deploy lên Firebase Hosting ở job `deploy-frontend` cuối file.
+#
+# Auth is via Workload Identity Federation (infra/gcp/setup.sh sets this up) —
+# no GCP service-account JSON key stored in GitHub.
+#
+# Deploy phải sống chung với lịch bật/tắt 12/24 (infra/gcp/schedule.sh). Hai
+# hệ quả, cả hai đều nằm trong file này:
+#
+#   1. Push vào main lúc 2 giờ sáng thì Cloud SQL đang STOPPED và
+#      `alembic upgrade head` chết. Nên job `migrate` đánh thức hạ tầng
+#      trước, và job `deploy` gọi `reconcile` ở bước cuối để trả lại đúng
+#      trạng thái theo giờ — bật lại nếu đang trong khung giờ, tắt nếu không.
+#   2. min-instances không còn hardcode ở đây được nữa. Deploy với 0 rồi để
+#      `reconcile` quyết, nếu không mỗi lần deploy là một lần âm thầm bật
+#      hạ tầng lên 24/24 và cái lịch kia thành vô nghĩa.
+#
+# Khi GCP_SCHEDULER_URL chưa được set (chưa chạy schedule.sh — setup.sh cố ý
+# xếp nó sau lần deploy đầu tiên, vì job backend-vault-seed do chính file này
+# tạo ra), mọi bước lịch đều bị bỏ qua và deploy chạy 24/24 như cũ.
+
+name: Deploy to Cloud Run
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # required for google-github-actions/auth's WIF exchange
+
+env:
+  REGION: ${{ vars.GCP_REGION }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  AR_HOST: ${{ vars.GCP_REGION }}-docker.pkg.dev
+
+jobs:
+  build-and-push:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - id: tag
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker "$AR_HOST" --quiet
+
+      - name: Build & push backend
+        run: |
+          docker build -t "$AR_HOST/$PROJECT_ID/app/backend:${{ steps.tag.outputs.tag }}" .
+          docker push "$AR_HOST/$PROJECT_ID/app/backend:${{ steps.tag.outputs.tag }}"
+
+      - name: Build & push reranker
+        run: |
+          docker build -t "$AR_HOST/$PROJECT_ID/app/reranker:${{ steps.tag.outputs.tag }}" ./reranker
+          docker push "$AR_HOST/$PROJECT_ID/app/reranker:${{ steps.tag.outputs.tag }}"
+
+  migrate:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+          # ID token để gọi app-scheduler (function chạy --no-allow-unauthenticated).
+          # `gcloud auth print-identity-token` không dùng được ở đây: credential
+          # từ WIF là external account, không tự đúc ID token được.
+          # Chưa chạy schedule.sh thì không có audience nào để xin token, mà
+          # action lại bắt buộc phải có — nên hạ hẳn xuống access_token.
+          token_format: ${{ vars.GCP_SCHEDULER_URL != '' && 'id_token' || 'access_token' }}
+          id_token_audience: ${{ vars.GCP_SCHEDULER_URL || 'https://unused.invalid' }}
+          id_token_include_email: true
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # Chờ luôn ở đây: function chạy xong mới trả response, và nó chỉ trả về
+      # sau khi Cloud SQL đã RUNNABLE. Migrate ngay sau đó là an toàn.
+      - name: Đánh thức hạ tầng để migrate được
+        if: vars.GCP_SCHEDULER_URL != ''
+        run: |
+          curl -sSf -X POST \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.id_token }}" \
+            "${{ vars.GCP_SCHEDULER_URL }}?action=start"
+
+      - name: Resolve app-* secrets synced by infra/gcp/sync-secrets.sh
+        id: secrets
+        run: |
+          list=$(gcloud secrets list --filter="name:app-" --format="value(name)" \
+            | while read -r s; do
+                key=$(echo "$s" | sed 's/^app-//' | tr '[:lower:]-' '[:upper:]_')
+                printf '%s=%s:latest,' "$key" "$s"
+              done)
+          echo "set_secrets=${list%,}" >> "$GITHUB_OUTPUT"
+
+      - name: alembic upgrade head + verify UC-1 data surface (AC-6/AC-7)
+        run: |
+          # --network/--subnet là bắt buộc dù đã có --set-cloudsql-instances.
+          # Cloud SQL Auth Proxy đi qua public IP của instance theo mặc định, mà
+          # instance này tạo với --no-assign-ip nên chỉ có private IP — proxy
+          # quay sang 10.x:3307 và hết giờ. Lỗi hiện ra là
+          # `psycopg2.OperationalError: server closed the connection unexpectedly`,
+          # nói về Postgres chứ không nói rằng job thiếu đường vào VPC.
+          #
+          # --set-cloudsql-instances chứ không phải --add-: `gcloud run jobs deploy`
+          # chỉ có dạng --set, trong khi `gcloud run deploy` (service) có cả hai.
+          # Dùng nhầm thì lỗi là "unrecognized arguments", và job không được tạo
+          # nên bước execute ngay sau đó fail bằng NOT_FOUND — hai thông báo, cả
+          # hai đều không nói rằng cờ này chỉ sai ở *jobs*.
+          gcloud run jobs deploy backend-migrate \
+            --image="$AR_HOST/$PROJECT_ID/app/backend:${{ needs.build-and-push.outputs.tag }}" \
+            --region="$REGION" \
+            --service-account="${{ vars.GCP_RUN_SA }}" \
+            --set-cloudsql-instances="${{ vars.GCP_SQL_CONNECTION_NAME }}" \
+            --network=app-vpc --subnet=app-subnet --vpc-egress=private-ranges-only \
+            --set-secrets="${{ steps.secrets.outputs.set_secrets }}" \
+            --command="/bin/sh" \
+            --args="-c,alembic upgrade head && python scripts/verify_uc1_data_surface.py" \
+            --max-retries=0
+          gcloud run jobs execute backend-migrate --region="$REGION" --wait
+
+  deploy:
+    needs: [build-and-push, migrate]
+    runs-on: ubuntu-latest
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: ${{ vars.GCP_SCHEDULER_URL != '' && 'id_token' || 'access_token' }}
+          id_token_audience: ${{ vars.GCP_SCHEDULER_URL || 'https://unused.invalid' }}
+          id_token_include_email: true
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve app-* secrets synced by infra/gcp/sync-secrets.sh
+        id: secrets
+        run: |
+          list=$(gcloud secrets list --filter="name:app-" --format="value(name)" \
+            | while read -r s; do
+                key=$(echo "$s" | sed 's/^app-//' | tr '[:lower:]-' '[:upper:]_')
+                printf '%s=%s:latest,' "$key" "$s"
+              done)
+          echo "set_secrets=${list%,}" >> "$GITHUB_OUTPUT"
+
+      # backend needs Cloud SQL (unix socket) + the internal-services VM
+      # (qdrant/policy/vault). Direct VPC egress thay cho Serverless VPC Access
+      # connector: connector chạy tối thiểu hai e2-micro tính tiền 24/24 và
+      # không scale-to-zero, tức đúng thứ chi phí mà lịch bật/tắt sinh ra để
+      # loại bỏ. private-ranges-only vẫn giữ nguyên ý nghĩa cũ — gọi
+      # OpenAI/OpenRouter/Tavily đi thẳng ra Internet, không vòng qua VPC.
+      # `^@^` đổi dấu phân cách của --set-env-vars sang @: CORS_ORIGINS nhiều
+      # domain là một chuỗi có dấu phẩy, để mặc định thì gcloud cắt nó thành
+      # các biến rác và CORS im lặng sai.
+      # --port=8000 là bắt buộc, không phải tinh chỉnh: Dockerfile chạy
+      # `uvicorn --port 8000` cứng, còn Cloud Run mặc định gửi traffic vào 8080
+      # và coi container không nghe ở đó là khởi động thất bại. Không có cờ này
+      # thì revision không bao giờ READY, và thông báo lỗi nói về startup probe
+      # chứ không nói về port. reranker cũng vậy, với 8001.
+      - name: Deploy backend
+        run: |
+          gcloud run deploy backend \
+            --image="$AR_HOST/$PROJECT_ID/app/backend:${{ needs.build-and-push.outputs.tag }}" \
+            --region="$REGION" \
+            --service-account="${{ vars.GCP_RUN_SA }}" \
+            --add-cloudsql-instances="${{ vars.GCP_SQL_CONNECTION_NAME }}" \
+            --network=app-vpc --subnet=app-subnet --vpc-egress=private-ranges-only \
+            --port=8000 \
+            --min-instances=${{ vars.GCP_SCHEDULER_URL != '' && '0' || '1' }} --memory=1Gi --cpu=1 \
+            --set-secrets="${{ steps.secrets.outputs.set_secrets }}" \
+            --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:6333@OPA_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8181@VAULT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8200@CORS_ORIGINS=${{ vars.CORS_ORIGINS || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}@SMTP_HOST=${{ vars.SMTP_HOST }}@FRONTEND_URL=${{ vars.FRONTEND_URL || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}" \
+            --allow-unauthenticated
+
+      # No VPC connector: the reranker is a standalone model server, same
+      # unauthenticated trust model docker-compose.yml already gives it
+      # (reachable by URL, no data of its own) — see DEPLOYMENT.md.
+      #
+      # `--cpu=8`, not the 2 this used to say. A cross-encoder is CPU-bound work
+      # whose duration is a direct function of the cores it gets, and at 2 vCPU it
+      # takes 25.58s to score the 20 candidates one search sends (RRF fuses the
+      # two prefetches down to max(dense, sparse), not their sum — verified
+      # against a live index) — past any sane timeout. The failure
+      # was never a crash: `src/services/reranker.py` swallows it and returns the
+      # unthresholded fused order, so the service would have run 24/7, been billed
+      # in full, and produced the result of not existing. Measured on the
+      # 22-question regulation set: hit@8 19/22 -> 16/22, MRR 0.742 -> 0.498.
+      #
+      # 8 rather than 4 costs almost nothing per request — 8 vCPU x 5.52s and
+      # 4 vCPU x 12.26s are the same CPU-seconds of work — and buys back the ~7s
+      # of wall clock that would otherwise land on every chat turn. The thing 8
+      # vCPU would have cost is a bigger idle floor, and the 12/24 schedule above
+      # already removed it: with `min-instances=0` Cloud Run bills CPU while a
+      # request is served and not between them, so the higher number is close to
+      # free here in a way it would not be under a permanently warm instance.
+      #
+      # What `min-instances=0` costs instead is a cold start that loads a 2.2 GB
+      # cross-encoder before the first rerank answers. That is a latency spike and
+      # not a failure — `src/services/reranker.py` degrades to the fused order once
+      # `RERANKER_TIMEOUT_SECONDS` passes — but it means the first question after
+      # an idle period can come back measurably worse-ranked than the second.
+      # Worth pinning the reranker alone to `--min-instances=1` if that shows up.
+      #
+      # `--concurrency=4`: Cloud Run otherwise sends up to 80 requests to one
+      # instance, and 80 CPU-bound reranks on 8 cores queue until they time out.
+      # The vCPU number means nothing unless this is set with it.
+      - name: Deploy reranker
+        run: |
+          gcloud run deploy reranker \
+            --image="$AR_HOST/$PROJECT_ID/app/reranker:${{ needs.build-and-push.outputs.tag }}" \
+            --region="$REGION" \
+            --port=8001 \
+            --min-instances=${{ vars.GCP_SCHEDULER_URL != '' && '0' || '1' }} \
+            --memory=4Gi --cpu=8 --concurrency=4 \
+            --allow-unauthenticated
+
+      - name: Point backend at reranker's URL
+        run: |
+          RERANKER_URL=$(gcloud run services describe reranker --region="$REGION" --format='value(status.url)')
+          gcloud run services update backend --region="$REGION" \
+            --update-env-vars="RERANKER_URL=$RERANKER_URL"
+
+      # Job này không chạy ở đây, chỉ được *tạo/cập nhật* — app-scheduler gọi
+      # nó mỗi sáng sau khi VM lên. Lý do nó phải tồn tại: Vault chạy dev mode
+      # (spec §16.1) giữ secret trong memory, nên VM tắt mỗi đêm là mất sạch,
+      # và scripts/seed_vault_credentials.py ghi rõ hậu quả — secret thiếu bị
+      # `resolve_credential_via` hạ thành "", UC-1 trả `{"rows": []}` và agent
+      # nói nó không có dữ liệu. Không lỗi, không log nào nhắc tới Vault.
+      # Cần --network/--subnet vì Vault nằm trên VM trong VPC, không có IP public.
+      - name: Cập nhật job re-seed Vault (app-scheduler gọi nó mỗi sáng)
+        run: |
+          gcloud run jobs deploy backend-vault-seed \
+            --image="$AR_HOST/$PROJECT_ID/app/backend:${{ needs.build-and-push.outputs.tag }}" \
+            --region="$REGION" \
+            --service-account="${{ vars.GCP_RUN_SA }}" \
+            --set-cloudsql-instances="${{ vars.GCP_SQL_CONNECTION_NAME }}" \
+            --network=app-vpc --subnet=app-subnet --vpc-egress=private-ranges-only \
+            --set-secrets="${{ steps.secrets.outputs.set_secrets }}" \
+            --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:6333@OPA_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8181@VAULT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8200" \
+            --command=python --args="scripts/seed_vault_credentials.py" \
+            --max-retries=1
+
+      - name: Smoke test
+        run: |
+          BACKEND_URL=$(gcloud run services describe backend --region="$REGION" --format='value(status.url)')
+          curl -sf "$BACKEND_URL/health" || (echo "backend /health failed" && exit 1)
+
+
+  # Firebase Hosting vừa host SPA vừa reverse-proxy `/api/**` sang Cloud Run
+  # (xem firebase.json). Không phải lựa chọn thẩm mỹ: `frontend/src/lib/api.js`
+  # đặt `const BASE = "/api/v1"` — đường dẫn tương đối — và trong bundle không
+  # có `VITE_*` nào để trỏ sang host khác. `vite.config.js` nói rõ bản build
+  # production được thiết kế để chạy sau một reverse proxy map `/api` vào
+  # backend; rewrite của Hosting là proxy đó.
+  #
+  # Chạy sau `deploy` vì rewrite trỏ tới service Cloud Run `backend` theo tên —
+  # deploy hosting trước khi service tồn tại thì rewrite giải không ra.
+  deploy-frontend:
+    needs: [build-and-push, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build SPA
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # firebase-tools tự dùng Application Default Credentials, mà bước auth ở
+      # trên đã ghi ra file và set GOOGLE_APPLICATION_CREDENTIALS — nên không
+      # cần FIREBASE_TOKEN hay service-account key nào.
+      - name: Deploy lên Firebase Hosting
+        run: |
+          npx --yes firebase-tools@15 deploy --only hosting \
+            --project "${{ vars.GCP_PROJECT_ID }}" \
+            --non-interactive
+
+      # Kiểm tra đúng thứ dễ hỏng nhất: rewrite `/api/**`. Trang tĩnh lên được
+      # mà rewrite sai thì app trắng xoá và lỗi chỉ hiện trong console trình duyệt.
+      #
+      # Không dùng mã HTTP làm tiêu chí: mọi endpoint dưới /api/v1 đều cần đăng
+      # nhập, nên câu trả lời ĐÚNG ở đây là 401. Thứ phân biệt được "rewrite tới
+      # Cloud Run" với "Firebase trả index.html theo SPA fallback" là
+      # content-type — JSON nghĩa là FastAPI đã trả lời, HTML nghĩa là request
+      # chưa bao giờ rời khỏi Hosting.
+      - name: Smoke test rewrite /api
+        run: |
+          SITE="https://${{ vars.GCP_PROJECT_ID }}.web.app"
+          curl -sf "$SITE/" -o /dev/null || (echo "hosting không trả về trang" && exit 1)
+          CT=$(curl -s -o /dev/null -w '%{content_type}' "$SITE/api/v1/admin/config")
+          case "$CT" in
+            application/json*) echo "rewrite ok — backend trả lời ($CT)" ;;
+            *) echo "rewrite /api/** KHÔNG tới được Cloud Run: content-type=$CT" && exit 1 ;;
+          esac
+
+  # Job riêng, chạy sau tất cả: `reconcile` hỏi app-scheduler "bây giờ lẽ ra
+  # phải bật hay tắt" rồi đưa hạ tầng về đúng trạng thái đó — deploy trong giờ
+  # làm việc thì để nguyên, deploy lúc nửa đêm thì tắt lại thứ mà job `migrate`
+  # đã đánh thức.
+  #
+  # Phải là job cuối chứ không phải bước cuối của `deploy`: smoke test của
+  # `deploy-frontend` gọi `/api/v1/openapi.json` xuyên qua Cloud Run, nên tắt
+  # hạ tầng trước đó là tự làm hỏng bước kiểm tra của chính mình.
+  #
+  # `if: always()` để hạ tầng vẫn được tắt lại kể cả khi deploy fail giữa chừng
+  # — bỏ qua sẽ để Cloud SQL chạy suốt đêm sau một lần deploy hỏng.
+  reconcile:
+    needs: [deploy, deploy-frontend]
+    if: always() && vars.GCP_SCHEDULER_URL != ''
+    runs-on: ubuntu-latest
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+          token_format: id_token
+          id_token_audience: ${{ vars.GCP_SCHEDULER_URL }}
+          id_token_include_email: true
+
+      - name: Trả hạ tầng về đúng trạng thái theo lịch
+        run: |
+          curl -sSf -X POST \
+            -H "Authorization: Bearer ${{ steps.auth.outputs.id_token }}" \
+            "${{ vars.GCP_SCHEDULER_URL }}?action=reconcile"

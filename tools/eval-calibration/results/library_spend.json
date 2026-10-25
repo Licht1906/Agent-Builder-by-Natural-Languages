@@ -1,0 +1,54 @@
+{
+  "stage": "ragas + deepeval",
+  "model": "gpt-4.1-mini",
+  "estimated_usd": 0.6144,
+  "actual_usd": 0.314537,
+  "calls": 960,
+  "input_tokens": 399483,
+  "output_tokens": 96715,
+  "resumed_segments": 1,
+  "by_grader_this_segment": {
+    "ragas_faithfulness": {
+      "calls": 78,
+      "input_tokens": 47861,
+      "output_tokens": 7922
+    },
+    "ragas_answer_relevancy": {
+      "calls": 39,
+      "input_tokens": 14303,
+      "output_tokens": 3920
+    },
+    "deepeval_faithfulness": {
+      "calls": 156,
+      "input_tokens": 58581,
+      "output_tokens": 19268
+    },
+    "deepeval_answer_relevancy": {
+      "calls": 117,
+      "input_tokens": 44098,
+      "output_tokens": 17013
+    }
+  },
+  "embeddings_note": "text-embedding-3-small cho ragas answer_relevancy, không đếm ở đây (LangChain không phát callback cho embeddings); ~$0.00002/fixture ở giá $0.02/1M token",
+  "wall_seconds": 1184.4,
+  "stopped_early": false,
+  "telemetry_opt_outs": {
+    "deepeval.telemetry.client.telemetry_opt_out()": true,
+    "ragas._analytics.do_not_track()": true,
+    "deepeval CONFIDENT_API_KEY set": false
+  },
+  "hosts_resolved": [
+    "api.openai.com"
+  ],
+  "hosts_blocked": [],
+  "versions": {
+    "ragas": "0.4.3",
+    "deepeval": "4.2.0",
+    "langchain-core": "0.3.86",
+    "langchain-openai": "0.3.35",
+    "langchain-community": "0.3.31",
+    "openai": "2.54.0",
+    "pydantic": "2.13.4"
+  },
+  "reconstruction_note": "Lượt chạy đầy đủ đầu tiên treo ở hàng 57/96 (request không có deadline) và bị kill trước khi ghi meter. Phần token của 57 hàng ấy là SUY RA từ nhịp đo được của lần chạy thử 2 hàng (20 lời gọi / 8233 input / 1705 output cho 2 hàng) → 570 lời gọi / 234640 input / 48592 output ≈ $0.1716. 39 hàng còn lại chạy ở segment resume và được ĐO thật: 390 lời gọi / 164843 input / 48123 output ≈ $0.1429. Tổng $0.3145 = $0.1716 suy ra + $0.1429 đo được."
+}

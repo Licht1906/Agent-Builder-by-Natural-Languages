@@ -1,0 +1,124 @@
+{
+  "id": "doi-chung-tra-loi-thang",
+  "name": "Đối chứng — trợ lý trả lời thẳng, hai node",
+  "level": "control",
+  "capabilities": [],
+  "control_note": "Mục đối chứng thật dễ. Nó chính là hình dạng mà cả fleet 105-108 đang có: một node agent_llm nối thẳng vào end, không nhánh, không vòng lặp, không duyệt, không tool. Một model yếu phải làm đúng mục này. Nếu một lượt chấm cho thấy mục này cũng trượt thì lỗi nằm ở hạ tầng đo chứ không nằm ở model — đó là toàn bộ công dụng của nó.",
+  "spec": {
+    "goal": "Trả lời thẳng các câu hỏi chung về giờ làm việc và cách liên hệ của công ty, bằng tiếng Việt, ngắn gọn",
+    "users": [
+      "Nhân viên mới vào công ty"
+    ],
+    "data": [
+      {
+        "name": "Câu hỏi người dùng gõ trong khung chat",
+        "kind": "user_input"
+      }
+    ],
+    "actions": [
+      "Đọc câu hỏi của nhân viên",
+      "Trả lời bằng một đoạn ngắn tiếng Việt",
+      "Nói rõ là không biết khi câu hỏi nằm ngoài phạm vi"
+    ],
+    "expected_outcome": [
+      "Nhân viên nhận được một câu trả lời tiếng Việt ngắn, đúng trọng tâm câu hỏi"
+    ],
+    "success_criteria": [
+      {
+        "text": "Một lượt chạy đầy đủ phải đi tới bước kết thúc chứ không dừng giữa chừng",
+        "category": "workflow_success"
+      },
+      {
+        "text": "Câu trả lời phải nói đúng vào thứ người dùng vừa hỏi, không lạc sang chuyện khác",
+        "category": "relevance"
+      },
+      {
+        "text": "Câu hỏi nằm ngoài phạm vi thì phải nói thẳng là không biết chứ không được đoán",
+        "category": "correctness"
+      }
+    ],
+    "prohibitions": [
+      "Không được bịa ra quy định nội bộ mà agent không hề được cho biết",
+      "Không được trả lời bằng tiếng Anh khi người dùng hỏi bằng tiếng Việt"
+    ]
+  },
+  "workflow": {
+    "start_node_id": "tra_loi",
+    "nodes": [
+      {
+        "id": "tra_loi",
+        "type": "agent_llm",
+        "config": {
+          "prompt": "Bạn là trợ lý nội bộ. Trả lời câu hỏi của nhân viên bằng tiếng Việt, tối đa ba câu. Nếu câu hỏi hỏi về một quy định cụ thể mà bạn không được cho biết, hãy nói thẳng là bạn không có thông tin đó và bảo họ hỏi phòng nhân sự — tuyệt đối không đoán.",
+          "model": "gpt-4.1-mini"
+        },
+        "position": {
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": "ket_thuc",
+        "type": "end",
+        "config": {},
+        "position": {
+          "x": 260,
+          "y": 0
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "source_node_id": "tra_loi",
+        "source_port": "done",
+        "target_node_id": "ket_thuc"
+      }
+    ],
+    "metadata": {
+      "budget": {
+        "max_total_tokens": 20000,
+        "max_wall_seconds": 120
+      },
+      "template_id": null,
+      "disclaimer": ""
+    }
+  },
+  "structure": {
+    "node_count": 2,
+    "edge_count": 1,
+    "must_have_nodes": {
+      "tra_loi": {
+        "type": "agent_llm",
+        "prompt_non_empty": true,
+        "model_in_allowlist": true
+      }
+    },
+    "invariants": [
+      "Không có node mcp nên approval_guards_every_mcp_path đúng một cách rỗng, và side_effecting_actions trả về tuple rỗng: TakesNoAction luôn đúng trên graph này, nên đừng dùng graph này để chấm TakesNoAction"
+    ]
+  },
+  "why_hard": [
+    "Không khó chút nào, và đó là chủ ý. Mục này tồn tại để trả lời câu hỏi 'thang đo có đang chạy không', không phải câu hỏi 'model có giỏi không'.",
+    "Nó cũng là mốc so sánh về cấu trúc: mọi mục còn lại trong bộ này phải chứng minh được cái gì đó mà mục này không chứng minh được."
+  ],
+  "sandbox_inputs": {
+    "full": "Công ty mình làm việc từ mấy giờ tới mấy giờ vậy bạn?"
+  },
+  "provenance": {
+    "ran_at": "2026-08-27",
+    "agent_id": 123,
+    "version_id": 186,
+    "steps": {
+      "spec": "POST /solution-interviews → PUT .../solution-spec → POST .../solution-spec/confirmation",
+      "workflow_confirm": "POST .../workflow (template direct_assistant) → PUT .../workflow → POST .../workflow/confirm → WORKFLOW_CONFIRMED",
+      "sandbox": "sandbox_runs 169, SUCCEEDED",
+      "eval": "eval_runs 72 — 7/8 = 0.88",
+      "xin_duyet": "POST .../approval-request → pending_approval",
+      "duyet": "POST /admin/approvals/186/approve → approved",
+      "deploy": "PUT /agents/123/deployed-version → active"
+    },
+    "evidence_line": "sandbox_runs 169 · node tra_loi: \"Tôi không có thông tin cụ thể về giờ làm việc của công ty bạn. Bạn vui lòng hỏi phòng nhân sự.\"",
+    "deployed_chat_checked": "POST /agents/123/deployed-workflow-chat trả lời thật, đi qua tra_loi → ket_thuc"
+  }
+}
