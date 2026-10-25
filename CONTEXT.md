@@ -4,14 +4,58 @@ A platform where a person describes a business problem in their own words and
 gets back a working agent: interviewed into a specification, compiled into a
 workflow, rehearsed in a sandbox, evaluated, approved, and published.
 
-> **Note (2026-10-26):** the vocabulary below describes the V2 architecture
-> that `src/` currently implements. Per [ADR-0046](docs/adr/0046-uc1-architecture-supersedes-v2.md),
-> UC-1's architecture (`docs/usecase_spec/uc1-ar-assistant/`) is now the
-> platform's build target and uses a different vocabulary (`AgentSpec`,
-> `capability`, `connection`, `data_scope`, …) not yet reconciled here. Don't
-> assume the terms below still apply without checking ADR-0046 first.
+> **Note (2026-10-25):** V2 is the platform's architecture. UC-1's mechanisms
+> are being folded into it as capabilities of a described agent, not kept as a
+> parallel pipeline — [ADR-0059](docs/adr/0059-hop-nhat-uc1-vao-v2-thanh-nang-luc-data-source.md),
+> spec [`docs/specs/data-source-agent.md`](docs/specs/data-source-agent.md).
+> UC-1's own words (`AgentSpec`, `capability`, `connection`, `data_scope`) are
+> on their way out of `src/`; don't introduce new uses of them.
 
 ## Language
+
+### Data Sources
+
+**Data Source**:
+Anything an agent can read. Two kinds: a **Knowledge Base** (Documents,
+searched by meaning) and a **Database** (a business database, queried by
+structure). In the spec, `DataSource.kind` names which, and `ref` points at the
+one a person attached.
+_Vietnamese_: nguồn dữ liệu
+_Avoid_: connection, datasource config
+
+**Database**:
+A business database a creator registered as a Data Source: its dialect
+(PostgreSQL, SQL Server, MySQL), a DSN held only in the secret store, the views
+an agent may read, and its Access Rules. On the platform it points at a sample
+or staging copy with the real schema; the production DSN is filled in only
+inside an Exported Package.
+_Vietnamese_: hệ CSDL
+_Avoid_: ERP connection, UC1Connection, external connection (that is a BYODB vector store)
+
+**Access Rules**:
+Which rows of which view each position may see — an `identity` (the employee
+view, the column the authenticated value matches, the attributes read off it)
+and `rules` (position → view → `all` or `where` view column = principal
+attribute). Deny by default. Applied in code to every query; a model never
+chooses a scope.
+_Vietnamese_: quy tắc truy cập
+_Avoid_: data_scope, RLS policy, authz
+
+**Principal**:
+The authenticated person a run answers to, with the attributes Access Rules
+read from the employee view. Comes from authentication (or, in the sandbox,
+from the creator's "run as" choice) — never from what was said in the
+conversation.
+_Vietnamese_: người hỏi
+_Avoid_: user (that is a platform account), requester
+
+**Exported Package**:
+What a creator downloads to run an approved agent inside a company's own
+infrastructure: a fixed runtime, the agent bundle, `access.yaml` and
+`runtime.yaml`. The company edits configuration and the auth adapter, never the
+runtime.
+_Vietnamese_: gói chạy độc lập
+_Avoid_: export (alone — the JSON bundle that re-imports into the platform is also an export)
 
 ### Retrieval
 
@@ -44,6 +88,15 @@ description.
 _Avoid_: source id, kb id, doc ref
 
 ### Workflow
+**Data Query**:
+The `data_query` node: the model fills a structured query (view, columns,
+whitelisted filters, aggregates, order, limit) against one Database; code
+builds parameterised SQL and always ANDs the Principal's scope. Every row it
+returns is cited (Data Source, view, row key) and marked untrusted for later
+steps. Never text-to-SQL.
+_Vietnamese_: truy vấn dữ liệu
+_Avoid_: SQL node, erp tool
+
 **Collector**:
 The `collect` node in front of an action: it reads the bound action's required
 parameters off the schema, asks the user for exactly the missing ones, and
