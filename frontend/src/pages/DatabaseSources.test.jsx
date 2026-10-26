@@ -124,6 +124,23 @@ describe("the Databases tab", () => {
     expect(await screen.findByText("SQL Server")).toBeInTheDocument();
   });
 
+  it("says beside a MySQL source, and when MySQL is picked, that the scope is filtered in code only", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.list.mockResolvedValue([source({ dialect: "mysql" }), source({ id: 5, name: "ERP PG" })]);
+    draw();
+
+    const card = (await screen.findByText("ERP staging")).closest(".card");
+    expect(within(card).getByRole("note")).toHaveTextContent(/only|chỉ/);
+    expect(within(screen.getByText("ERP PG").closest(".card")).queryByRole("note")).toBeNull();
+
+    await actor.click(screen.getByRole("button", { name: /Add a database/ }));
+    const form = screen.getByLabelText(/Database type/).closest("form");
+    expect(within(form).queryByRole("note")).toBeNull();
+    await actor.selectOptions(screen.getByLabelText(/Database type/), "mysql");
+    expect(within(form).getByRole("note")).toBeInTheDocument();
+    expect(screen.getByLabelText(/DSN/)).toHaveAttribute("placeholder", expect.stringContaining("mysql://"));
+  });
+
   it("saves the views that are ticked", async () => {
     const actor = userEvent.setup();
     api.databaseSources.update.mockResolvedValue(source({ allowed_views: ["v_ar_open", "v_customer_safe"] }));

@@ -101,3 +101,39 @@ Thuộc tính của người hỏi được đặt vào phiên bằng `sp_set_se
 
 So sánh với bảng nhân viên theo collation của database — thường không phân biệt
 hoa thường, nên `AN@cty.vn` khớp `an@cty.vn`.
+
+## MySQL
+
+Dạng URL (`mysql+pymysql://` và `jdbc:mysql://` cũng được nhận):
+
+```
+mysql://agent_ro:mat-khau@erp-staging.example.com:3306/erp
+mysql://agent_ro:mat-khau@erp-staging.example.com:3306/erp?ssl-mode=REQUIRED
+```
+
+- **Bắt buộc** có tài khoản và database. Một Hệ CSDL MySQL là đúng một database:
+  view được liệt kê bằng tên trần, không kèm tên database.
+- Ký tự đặc biệt trong mật khẩu phải được mã hoá URL (`@` → `%40`, `:` → `%3A`).
+- Tham số duy nhất được nhận: `ssl-mode` = `DISABLED`, `PREFERRED` (mặc định —
+  dùng TLS nếu máy chủ hỗ trợ) hoặc `REQUIRED` (từ chối nếu phiên không được mã
+  hoá). `VERIFY_CA`/`VERIFY_IDENTITY` chưa được hỗ trợ. Tham số khác —
+  `unix_socket`, `local_infile`, `read_default_file`, `init_command`, … — bị từ
+  chối.
+
+Tài khoản chỉ đọc mẫu:
+
+```sql
+CREATE USER 'agent_ro'@'%' IDENTIFIED BY 'mat-khau';
+GRANT SELECT ON erp.v_ar_open TO 'agent_ro'@'%';
+GRANT SELECT ON erp.v_staff TO 'agent_ro'@'%';
+```
+
+Mọi phiên chạy `SET SESSION TRANSACTION READ ONLY` — MySQL tự từ chối mọi câu
+ghi, kể cả `CREATE TABLE` — và mỗi truy vấn chạy trong
+`START TRANSACTION READ ONLY, WITH CONSISTENT SNAPSHOT` rồi rollback.
+
+> **MySQL không có lớp phòng thủ thứ hai.** MySQL không có chỗ nào trong phiên
+> để đặt thuộc tính của người hỏi, nên phạm vi dữ liệu **chỉ** được lọc ở tầng
+> code của nền tảng (điều kiện `WHERE` theo quy tắc truy cập). RLS phía khách
+> không đọc được người hỏi là ai. Màn hình Hệ CSDL ghi chú điều này bên cạnh mọi
+> Hệ CSDL MySQL. Nếu cần lớp phòng thủ trong CSDL, dùng PostgreSQL hoặc SQL Server.

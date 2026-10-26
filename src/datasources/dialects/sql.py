@@ -1,7 +1,7 @@
 """A checked structured query as a SQLAlchemy Core statement — the engine-free half of compiling one.
 
 Every dialect compiles the same `Select` with its own SQLAlchemy dialect
-(`postgresql`, `mssql`, later `mysql`), so the rules live here once:
+(`postgresql`, `mssql`, `mysql`), so the rules live here once:
 
 - **Values are bind parameters, always.** Nothing a model wrote becomes SQL
   text; a column or view name only ever arrives as an identifier SQLAlchemy
@@ -10,7 +10,8 @@ Every dialect compiles the same `Select` with its own SQLAlchemy dialect
   and so before any `GROUP BY` — an aggregate over rows the asker may not see
   is a leak with a sum on it.
 - **A bare view name is the engine's default schema** (`public`, `dbo`), as
-  the probe listed it — never whatever the session's search path says.
+  the probe listed it — never whatever the session's search path says. MySQL
+  has none to name: its views are the connection's own database's, unqualified.
 """
 
 from collections.abc import Callable
@@ -31,13 +32,13 @@ _AGGREGATES: dict[AggregateFn, Callable[..., ColumnElement[Any]]] = {
 }
 
 
-def source_table(view: str, columns: tuple[str, ...], *, default_schema: str) -> TableClause:
+def source_table(view: str, columns: tuple[str, ...], *, default_schema: str | None) -> TableClause:
     """`view` as a creator names it (`v_x`, `sales.v_x`) with `columns`, a bare name placed in `default_schema`."""
     schema, _, name = view.rpartition(".")
     return table(name, *(column(column_name) for column_name in columns), schema=schema or default_schema)
 
 
-def select_for(request: QueryRequest, *, default_schema: str) -> Select[Any]:
+def select_for(request: QueryRequest, *, default_schema: str | None) -> Select[Any]:
     """The statement `request` describes — filters and scope in `WHERE`, then grouping, order and the ceiling."""
     query = request.query
     source = source_table(query.view, request.view_columns, default_schema=default_schema)

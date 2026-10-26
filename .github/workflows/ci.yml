@@ -46,11 +46,25 @@ jobs:
           --health-retries 12
           --health-start-period 20s
 
+      # DS-07: the MySQL the dialect suites run against a third time.
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: DsTest-Passw0rd
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pDsTest-Passw0rd --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     env:
       APP_ENV: test
       OPENAI_API_KEY: test-key
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app_test
       TEST_MSSQL_URL: mssql://sa:DsTest-Passw0rd@localhost:1433/agent_builder_ds_test
+      TEST_MYSQL_URL: mysql://root:DsTest-Passw0rd@127.0.0.1:3306/agent_builder_ds_test
 
     steps:
       - uses: actions/checkout@v4

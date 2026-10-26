@@ -40,6 +40,9 @@ psycopg2-binary>=2.9.0
 # inside them, so the image needs no ODBC driver; 2.3 is the first with
 # `encryption=` on `connect`.
 pymssql>=2.3.0
+# The MySQL dialect (DS-07): pure Python; `cryptography` above covers
+# `caching_sha2_password` over a connection without TLS.
+pymysql>=1.1.0
 
 # Conversation memory (#6) — the checkpointer is Postgres-only, and it talks
 # psycopg3 rather than the psycopg2 SQLAlchemy uses. Both drivers, one database.

@@ -61,6 +61,11 @@ def _run(
     return [dict(zip(found.columns, row, strict=True)) for row in found.rows]
 
 
+def _needs_session_attributes(backend: Backend) -> None:
+    if not backend.carries_session_attributes:
+        pytest.skip("MySQL has no session attributes — the scope is the code's WHERE alone (ADR-0059 §8)")
+
+
 def test_filters_order_and_columns_are_what_the_query_asked_for(backend: Backend) -> None:
     rows = _run(
         backend,
@@ -154,6 +159,7 @@ def test_the_row_ceiling_is_kept(backend: Backend) -> None:
 
 
 def test_the_askers_attributes_are_on_the_session_for_the_query(backend: Backend) -> None:
+    _needs_session_attributes(backend)
     rows = _run(backend, {"view": "v_test_who"}, session={"employee_code": "E102"}, view_columns=("who",))
 
     assert rows == [{"who": "E102"}]
@@ -167,6 +173,7 @@ def test_an_attribute_name_that_is_not_a_plain_name_never_reaches_the_session(ba
 
 def test_an_attribute_named_in_capitals_still_reaches_the_session(backend: Backend) -> None:
     """Setting names are case-insensitive in Postgres; an employee view's `Employee_Code` is the same setting."""
+    _needs_session_attributes(backend)
     rows = _run(backend, {"view": "v_test_who"}, session={"Employee_Code": "E102"}, view_columns=("who",))
 
     assert rows == [{"who": "E102"}]

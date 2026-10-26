@@ -17,12 +17,29 @@ import AccessRulesEditor from "./AccessRulesEditor";
    the API refuses one ticked anyway.
    ============================================================ */
 
-//: What the dialect select offers, each with the DSN shape it takes. MySQL
-//: (DS-07) joins when its dialect lands, not before.
+//: What the dialect select offers, each with the DSN shape it takes.
+//: `sessionAttributes: false` is MySQL's missing defence (ADR-0059 §8): the
+//: asker's attributes never reach the database session, so a customer's own
+//: row-level security has nothing to read — said beside every MySQL source.
 const DIALECTS = [
-  { id: "postgresql", label: "PostgreSQL", placeholder: "postgresql://user:password@host:5432/erp" },
-  { id: "sqlserver", label: "SQL Server", placeholder: "Server=host,1433;Database=erp;User Id=user;Password=password" },
+  { id: "postgresql", label: "PostgreSQL", placeholder: "postgresql://user:password@host:5432/erp", sessionAttributes: true },
+  { id: "sqlserver", label: "SQL Server", placeholder: "Server=host,1433;Database=erp;User Id=user;Password=password", sessionAttributes: true },
+  { id: "mysql", label: "MySQL", placeholder: "mysql://user:password@host:3306/erp", sessionAttributes: false },
 ];
+
+const dialectOf = (id) => DIALECTS.find((dialect) => dialect.id === id);
+
+/** The note a dialect without session attributes carries wherever it is shown. */
+function CodeOnlyScopeNote({ dialect }) {
+  const { t } = useLang();
+  if (dialectOf(dialect)?.sessionAttributes !== false) return null;
+  return (
+    <p className="text-muted" role="note" style={{ fontSize: "var(--text-xs)", margin: "5px 0 0", lineHeight: 1.5, display: "flex", gap: 6 }}>
+      <ShieldCheck size={13} style={{ flex: "none", marginTop: 1 }} />
+      {t("MySQL has no session attributes: the asker's scope is filtered by the platform's code only — no second layer in the database.")}
+    </p>
+  );
+}
 
 const EMPTY_FORM = { name: "", dialect: "postgresql", dsn: "" };
 
@@ -136,6 +153,7 @@ function CreateDatabaseSource({ onCancel, onCreated }) {
         <select id="ds-dialect" className="input" value={form.dialect} onChange={(e) => edit({ dialect: e.target.value })}>
           {DIALECTS.map((dialect) => <option key={dialect.id} value={dialect.id}>{dialect.label}</option>)}
         </select>
+        <CodeOnlyScopeNote dialect={form.dialect} />
       </div>
       <div className="field">
         <label htmlFor="ds-dsn">DSN</label>
@@ -145,7 +163,7 @@ function CreateDatabaseSource({ onCancel, onCreated }) {
           type="password"
           autoComplete="off"
           value={form.dsn}
-          placeholder={DIALECTS.find((dialect) => dialect.id === form.dialect)?.placeholder}
+          placeholder={dialectOf(form.dialect)?.placeholder}
           onChange={(e) => edit({ dsn: e.target.value })}
         />
         <p className="text-muted" style={{ fontSize: "var(--text-xs)", margin: "5px 0 0", lineHeight: 1.5 }}>
@@ -197,8 +215,9 @@ function DatabaseSourceCard({ source, onChanged, onRemove, notify }) {
         <div style={{ flex: "1 1 200px", minWidth: 0 }}>
           <div className="card-title">{source.name}</div>
           <p className="text-muted" style={{ margin: 0, fontSize: "var(--text-xs)" }}>
-            {DIALECTS.find((dialect) => dialect.id === source.dialect)?.label || source.dialect}
+            {dialectOf(source.dialect)?.label || source.dialect}
           </p>
+          <CodeOnlyScopeNote dialect={source.dialect} />
         </div>
         <button type="button" className="btn btn-secondary btn-sm" onClick={test} disabled={testing || !source.has_dsn}>
           {testing ? <Spinner size={12} /> : <RefreshCw size={12} />}{t("Test connection")}

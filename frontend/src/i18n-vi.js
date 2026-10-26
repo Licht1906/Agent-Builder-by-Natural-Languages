@@ -59,6 +59,8 @@ export const VI = {
   "Deleted “{name}”": "Đã xoá “{name}”",
   "Name": "Tên",
   "Database type": "Loại CSDL",
+  "MySQL has no session attributes: the asker's scope is filtered by the platform's code only — no second layer in the database.":
+    "MySQL không có thuộc tính phiên: phạm vi dữ liệu của người hỏi chỉ được lọc ở tầng code của nền tảng — không có lớp phòng thủ thứ hai trong CSDL.",
   "Point it at a sample or staging database with the same schema, using a read-only account. The DSN is kept in the secret store and never shown again.":
     "Trỏ tới DB mẫu hoặc staging cùng schema, dùng tài khoản chỉ đọc. DSN được cất trong kho bí mật và không bao giờ hiển thị lại.",
   "Save and test": "Lưu và kiểm tra",

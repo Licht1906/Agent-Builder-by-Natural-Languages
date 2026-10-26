@@ -31,6 +31,8 @@ dependencies = [
     "psycopg2-binary>=2.9.0",
     # The SQL Server dialect of a Hệ CSDL (DS-06) — FreeTDS ships in the wheel.
     "pymssql>=2.3.0",
+    # The MySQL dialect of a Hệ CSDL (DS-07).
+    "pymysql>=1.1.0",
     # The conversation checkpointer (#6) speaks psycopg3, not the psycopg2
     # SQLAlchemy uses — same database, two drivers.
     "langgraph-checkpoint-postgres>=2.0.0",
