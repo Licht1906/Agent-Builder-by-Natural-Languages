@@ -74,7 +74,9 @@ jobs:
       # every migration — fails the build if a PR widens agt_ar_assistant_ro's
       # grants, turns off RLS, or breaks the audit_log hash chain's detection.
       - name: Verify UC-1 data surface (AC-6/AC-7)
-        run: python scripts/verify_uc1_data_surface.py
+        # `PYTHONPATH=.`: a script run by path puts `scripts/` first on the path,
+        # not the checkout, so `import src` would fail before any check runs.
+        run: PYTHONPATH=. python scripts/verify_uc1_data_surface.py
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
