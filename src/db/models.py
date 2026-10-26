@@ -1389,6 +1389,12 @@ class RunApproval(Base):
     transcript: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON, default=list, doc="Các dòng transcript trước lúc dừng, để lần chạy nối lại lưu thành một bản ghi"
     )
+    #: DS-08: the calls this pause stands in front of, `{node_id, tool, args,
+    #: hash}` each — what the card shows verbatim and what the action node
+    #: recomputes `hash` against before calling. Written once, with the row.
+    actions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, default=list, doc="Các lời gọi node duyệt này đứng trước — payload nguyên văn và hash của nó"
+    )
     elapsed_seconds: Mapped[float] = mapped_column(default=0.0, doc="Thời gian *chạy* trước lúc dừng, không tính chờ")
     usage_by_model: Mapped[dict[str, Any]] = mapped_column(
         JSON, default=dict, doc="Token đã tiêu trước lúc dừng, để trần token vẫn tính cho cả lần chạy"

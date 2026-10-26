@@ -214,6 +214,13 @@ describe("turnsFromHistory — lịch sử dựng lại y như lượt sống", 
     expect(last.approval).toMatchObject({ id: 610, decided: false });
   });
 
+  it("thẻ duyệt mở lại vẫn mang nguyên lời gọi sẽ thực hiện (DS-08)", () => {
+    const actions = [{ node_id: "send", tool: "gmail.send_email", action: "send_email", args: { to: "a@b.c", body: "x" }, hash: "h" }];
+    const pending = { approval_id: 610, node_id: "approval_send_email", approver_role: "", message: "Duyệt?", actions };
+    const turns = turnsFromHistory(HISTORY.slice(0, 3), pending);
+    expect(turns[turns.length - 1].approval.actions).toEqual(actions);
+  });
+
   it("dòng không nhãn (V1, checkpoint cũ) là lời nói — như trước nay", () => {
     const [, turn] = turnsFromHistory([
       { role: "user", content: "hỏi" },

@@ -7,6 +7,7 @@ import { AgentBusy } from "../../components/mascot";
 import { useAgentActivity } from "../../components/agent-presence";
 import { useLang } from "../../i18n";
 import SourcesPanel from "../../components/SourcesPanel";
+import ApprovalPayload from "../../components/ApprovalPayload";
 import { CITING_TOOLS } from "../../lib/turns";
 
 /* ============================================================
@@ -230,6 +231,7 @@ export default function SandboxTab({ agentId, versionId, readsDatabase = false, 
               <ShieldCheck size={16} />{t("Waiting on {who}", { who: pending.approver_role || t("an approver") })}
             </p>
             <p style={{ margin: "0 0 12px", fontSize: "var(--text-sm)", lineHeight: 1.6 }}>{pending.message}</p>
+            <div style={{ marginBottom: 12 }}><ApprovalPayload actions={pending.actions} /></div>
             <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
               <input
                 className="input"

@@ -805,6 +805,23 @@ class PendingApprovalResponse(BaseModel):
     node_id: str
     approver_role: str
     message: str
+    actions: list["ApprovalActionResponse"] = Field(
+        default_factory=list, description="Các lời gọi lần duyệt này đứng trước, nguyên văn (DS-08)"
+    )
+
+
+class ApprovalActionResponse(BaseModel):
+    """One call a pause stands in front of, exactly as it will be made — DS-08.
+
+    `args` verbatim: the card shows this, and the action node refuses anything
+    whose `hash` differs from it.
+    """
+
+    node_id: str
+    tool: str = Field(..., description="tool.action sẽ gọi, ví dụ gmail.send_email")
+    action: str
+    args: dict[str, Any] = Field(..., description="Tham số nguyên văn sẽ gửi đi")
+    hash: str = Field(..., description="Hash chuẩn hoá của payload đã hiển thị")
 
 
 class ThreadHistoryResponse(BaseModel):

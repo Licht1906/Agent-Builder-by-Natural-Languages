@@ -135,7 +135,7 @@ export function runReducer() {
         return {
           ...fold(turn),
           pending: false,
-          approval: { id: data.approval_id, nodeId: data.node_id, role: data.approver_role || "", message: data.message || "", decided: false, approved: null },
+          approval: { id: data.approval_id, nodeId: data.node_id, role: data.approver_role || "", message: data.message || "", actions: data.actions || [], decided: false, approved: null },
         };
 
       case "budget_exceeded":
@@ -218,7 +218,7 @@ export function turnsFromHistory(lines, pendingApproval = null) {
     }
     const folded = fold(current);
     Object.assign(current, folded, {
-      approval: { id: pendingApproval.approval_id, nodeId: pendingApproval.node_id, role: pendingApproval.approver_role || "", message: pendingApproval.message || "", decided: false, approved: null },
+      approval: { id: pendingApproval.approval_id, nodeId: pendingApproval.node_id, role: pendingApproval.approver_role || "", message: pendingApproval.message || "", actions: pendingApproval.actions || [], decided: false, approved: null },
     });
   }
   return out.map((turn) => (turn.from === "agent" ? settle(turn) : turn));

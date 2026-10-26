@@ -82,6 +82,7 @@ from src.models.schemas import (
     AgentResponse,
     AgentVersionResponse,
     AgentVersionSpecResponse,
+    ApprovalActionResponse,
     ChatMessageRequest,
     ConversationRenameRequest,
     ConversationResponse,
@@ -1431,7 +1432,11 @@ def _pending_pause_of(db: Session, agent: Agent, thread: ThreadRef) -> PendingAp
     if row is None:
         return None
     return PendingApprovalResponse(
-        approval_id=row.id, node_id=row.node_id, approver_role=row.approver_role, message=row.message
+        approval_id=row.id,
+        node_id=row.node_id,
+        approver_role=row.approver_role,
+        message=row.message,
+        actions=[ApprovalActionResponse.model_validate(action) for action in row.actions or []],
     )
 
 

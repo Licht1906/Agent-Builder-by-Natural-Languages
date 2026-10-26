@@ -7,6 +7,7 @@ import { useAgentActivity, useAgentSide } from "../components/agent-presence";
 import { useLang } from "../i18n";
 import SourcesPanel from "../components/SourcesPanel";
 import Markdown from "../components/Markdown";
+import ApprovalPayload from "../components/ApprovalPayload";
 import { decided, newTurn, runReducer, settle, turnsFromHistory } from "../lib/turns";
 
 /* ============================================================
@@ -728,6 +729,7 @@ export function ApprovalCard({ approval, canDecide, busy, onDecide }) {
           <Markdown text={approval.message} />
         </p>
       )}
+      {waiting && <ApprovalPayload actions={approval.actions} />}
       {waiting && (
         canDecide
           ? <ApprovalButtons disabled={busy} onDecide={onDecide} />

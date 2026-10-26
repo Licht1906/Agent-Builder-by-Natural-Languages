@@ -126,6 +126,28 @@ describe("ApprovalCard", () => {
     expect(screen.getByText(/Approved|Đã duyệt/)).toBeInTheDocument();
   });
 
+  it("hiện nguyên văn lời gọi sẽ được thực hiện — người nhận, tiêu đề, nội dung (DS-08)", () => {
+    const body = "Chào anh,\n\n**Khiếu nại** đã được xử lý.";
+    const actions = [
+      { node_id: "send", tool: "gmail.send_email", action: "send_email", args: { to: "khach@example.com", subject: "Về khiếu nại", body }, hash: "h" },
+    ];
+    draw(<ApprovalCard approval={{ ...waiting, actions }} canDecide={true} busy={false} onDecide={() => {}} />);
+
+    const shown = screen.getByTestId("approval-payload");
+    expect(shown).toHaveTextContent("gmail.send_email");
+    expect(shown).toHaveTextContent("khach@example.com");
+    expect(shown).toHaveTextContent("Về khiếu nại");
+    // Verbatim: the asterisks stay — nothing is rendered as Markdown here.
+    expect(shown.textContent).toContain("**Khiếu nại** đã được xử lý.");
+  });
+
+  it("đã quyết thì không còn hiện lời gọi chờ duyệt", () => {
+    const actions = [{ node_id: "send", tool: "gmail.send_email", action: "send_email", args: { to: "a@b.c" }, hash: "h" }];
+    draw(<ApprovalCard approval={{ ...waiting, actions, decided: true, approved: true }} canDecide={true} busy={false} onDecide={() => {}} />);
+
+    expect(screen.queryByTestId("approval-payload")).toBeNull();
+  });
+
   it("dựng markdown trong thông điệp duyệt", () => {
     draw(<ApprovalCard approval={waiting} canDecide={false} busy={false} onDecide={() => {}} />);
 

@@ -209,10 +209,10 @@ def decides(holds: bool, reason: str = "vì hồ sơ nói vậy") -> AIMessage:
 def fills_email() -> AIMessage:
     """The model filling `send_email`'s arguments from the conversation.
 
-    Since the MCP node reads typed arguments off the conversation, the resumed
-    leg makes one model call *before* the action — this one. A test scripting
-    the resume with only the `report` node's answer would hand that answer to
-    the filler and leave `report` with no script at all.
+    Made by the `human_approval` node, before it stops (DS-08): the person
+    approves the call itself, so it has to exist to be shown. The paused leg
+    therefore ends with this call, and the resumed leg sends what it filled
+    without asking the model again — its script is the `report` answer alone.
     """
     return AIMessage(
         content="",
@@ -347,12 +347,12 @@ async def test_approving_lets_the_action_run_and_stores_one_transcript_for_the_w
     db_session: Session,
 ) -> None:
     """AC 5. The demo runs end to end: the MCP action fires only after a real decision."""
-    scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)]])
+    scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)], [fills_email()]])
     version = confirmed()
     await trial_workflow(client, version, "khách khiếu nại đổi trả", creator_token)
     waiting = await pending(client, version, creator_token)
 
-    scripted_chat_model_factory([[fills_email()], [answers("Đã gửi thư cho khách.")]])
+    scripted_chat_model_factory([[answers("Đã gửi thư cho khách.")]])
     resumed = await decide(client, version, waiting[0]["approval_id"], creator_token, approved=True)
 
     assert resumed.status_code == 200, resumed.text
@@ -434,11 +434,11 @@ async def test_an_approval_cannot_be_decided_twice(
     scripted_chat_model_factory: Callable[[list[list[AIMessage]]], ScriptedRun],
 ) -> None:
     """The second decider is told the run has moved on rather than resuming it again."""
-    scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)]])
+    scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)], [fills_email()]])
     version = confirmed()
     await trial_workflow(client, version, "khách khiếu nại đổi trả", creator_token)
     waiting = await pending(client, version, creator_token)
-    scripted_chat_model_factory([[fills_email()], [answers("Đã gửi thư.")]])
+    scripted_chat_model_factory([[answers("Đã gửi thư.")]])
     await decide(client, version, waiting[0]["approval_id"], creator_token, approved=True)
 
     again = await decide(client, version, waiting[0]["approval_id"], creator_token, approved=True)
@@ -476,13 +476,13 @@ async def test_time_spent_waiting_for_a_decision_does_not_count_against_the_wall
     tests. A clock only the test moves is what keeps the assertion about the one
     thing ADR-0024 §7 promises, and about nothing the test suite's load did.
     """
-    scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)]])
+    scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)], [fills_email()]])
     version = confirmed(action_with_approval(documents, budget={"max_total_tokens": 100_000, "max_wall_seconds": 1}))
     await trial_workflow(client, version, "khách khiếu nại đổi trả", creator_token)
     waiting = await pending(client, version, creator_token)
 
     fake_clock.advance(1.2)
-    scripted_chat_model_factory([[fills_email()], [answers("Đã gửi thư cho khách.")]])
+    scripted_chat_model_factory([[answers("Đã gửi thư cho khách.")]])
     resumed = await decide(client, version, waiting[0]["approval_id"], creator_token, approved=True)
 
     assert "budget_exceeded" not in event_names(resumed), resumed.text
@@ -615,7 +615,7 @@ async def test_a_deployed_agents_paused_run_can_be_decided_and_resumed(
     # The pause has to be made through the door a published agent actually
     # uses: the trial door refuses an `approved` version outright, which is the
     # very asymmetry this test is about.
-    scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)]])
+    scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)], [fills_email()]])
     started = await client.post(
         f"/api/v1/agents/{agent.id}/deployed-workflow-chat",
         json={"message": "khách khiếu nại đổi trả"},
@@ -625,7 +625,7 @@ async def test_a_deployed_agents_paused_run_can_be_decided_and_resumed(
     waiting = await pending(client, version, creator_token)
     assert waiting, "the run did not pause — the rest of this test proves nothing"
 
-    scripted_chat_model_factory([[fills_email()], [answers("Đã gửi thư cho khách.")]])
+    scripted_chat_model_factory([[answers("Đã gửi thư cho khách.")]])
     try:
         resumed = await decide(client, version, waiting[0]["approval_id"], creator_token, approved=True)
 
@@ -661,7 +661,11 @@ async def test_a_reopened_conversation_tells_speech_from_what_the_run_did(
     db_session.add(agent)
     db_session.flush()
     version = AgentVersion(
-        agent_id=agent.id, spec=None, solution_spec=SPEC, workflow=action_with_approval(documents), status=VersionStatus.APPROVED
+        agent_id=agent.id,
+        spec=None,
+        solution_spec=SPEC,
+        workflow=action_with_approval(documents),
+        status=VersionStatus.APPROVED,
     )
     db_session.add(version)
     db_session.flush()
@@ -679,7 +683,7 @@ async def test_a_reopened_conversation_tells_speech_from_what_the_run_did(
     history = f"/api/v1/agents/{agent.id}/conversations/{conversation}/messages"
 
     try:
-        scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)]])
+        scripted_chat_model_factory([[answers("Khiếu nại hợp lệ.")], [decides(True)], [fills_email()]])
         started = await client.post(
             f"/api/v1/agents/{agent.id}/deployed-workflow-chat",
             json={"message": "khách khiếu nại đổi trả", "conversation_id": conversation},
@@ -697,9 +701,17 @@ async def test_a_reopened_conversation_tells_speech_from_what_the_run_did(
             "node_id": "approval",
             "approver_role": waiting[0]["approver_role"],
             "message": waiting[0]["message"],
+            "actions": waiting[0]["actions"],
         }
+        # DS-08: the card shows the call itself, as it will be made.
+        [shown] = waiting[0]["actions"]
+        assert (shown["node_id"], shown["tool"]) == ("act", f"{GMAIL}.send_email")
+        # Without `to`: the user never typed that address, so the fill's guess at
+        # it is dropped (`ToolAction.verbatim`) — and the card says so by not
+        # showing a recipient, rather than showing one that will not be sent.
+        assert shown["args"] == {"subject": "Về khiếu nại", "body": "Đã xử lý."}
 
-        scripted_chat_model_factory([[fills_email()], [answers("Đã gửi thư cho khách.")]])
+        scripted_chat_model_factory([[answers("Đã gửi thư cho khách.")]])
         resumed = await decide(client, version, waiting[0]["approval_id"], creator_token, approved=True)
         assert resumed.status_code == 200, resumed.text
 

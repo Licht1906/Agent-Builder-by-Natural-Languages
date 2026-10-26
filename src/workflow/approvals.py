@@ -28,6 +28,15 @@ reviewer sees and the leg a run resumes from):
   `rejected` port routing into a "revise and resubmit" branch has nothing to
   revise against if nobody said what was wrong.
 
+**An approval is of a payload, not of a node** (DS-08 / ADR-0059 §7). V2 puts
+no limit on who an email may go to, so the person deciding is the only thing
+between a model and the outside world, and a "yes" is only worth something if
+it is a yes to exactly what was shown. A row therefore carries `actions` — the
+call each guarded action node will make, `{node_id, tool, args, hash}` — and
+the card shows them verbatim. `action_hash` is the canonical digest of one
+call; the action node recomputes it right before calling and refuses on any
+difference (`approved_action_hash` is the database's side of that check).
+
 **There is no auto-approval path here, and that is the point** (ADR-0024 §7). No
 function in this module writes `approved` without a person's id and a real call,
 and a sandbox run reaches exactly these functions rather than a permissive
@@ -39,7 +48,9 @@ by the time a pause happens the response body is already streaming and the
 request's session is long closed.
 """
 
-from collections.abc import Sequence
+import hashlib
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final, TypedDict
@@ -64,6 +75,38 @@ from src.models.schemas import SandboxTranscriptEntry
 AWAITING_APPROVAL_EVENT: Final = "awaiting_approval"
 
 
+def action_hash(tool: str, args: Mapping[str, Any]) -> str:
+    """The canonical digest of one call — the thing an approval is *of* (DS-08).
+
+    Canonical JSON: keys sorted, no whitespace, non-ASCII kept as itself, so
+    the same call hashes the same however its dict was built, and changing so
+    much as one character of a body changes it. Values are not trimmed or
+    case-folded: what the person read is exactly what is hashed, and a
+    "normalisation" that equated two bodies would approve one and send the
+    other. `default=str` only so a value JSON cannot carry still hashes.
+    """
+    canonical = json.dumps(
+        {"tool": tool, "args": dict(args)}, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class ApprovalAction(TypedDict):
+    """One call a pause stands in front of, exactly as the action node will make it — DS-08.
+
+    `node_id` is the action node that will make it; `tool` the wire name
+    (`gmail.send_email`) and `action` the action's own name on its connection
+    (`send_email`); `args` the arguments, verbatim; `hash` their
+    `action_hash`, written once when the pause opens.
+    """
+
+    node_id: str
+    tool: str
+    action: str
+    args: dict[str, Any]
+    hash: str
+
+
 class ApprovalRequest(TypedDict):
     """What a reviewer is shown, and what `interrupt()` carries as its payload.
 
@@ -79,6 +122,8 @@ class ApprovalRequest(TypedDict):
     occurrence_index: int
     approver_role: str
     message: str
+    #: The calls this pause guards (DS-08) — empty for a gate with nothing but prose behind it.
+    actions: list[ApprovalAction]
 
 
 class ApprovalDecision(TypedDict):
@@ -160,7 +205,48 @@ def _request_of(row: RunApproval) -> ApprovalRequest:
         occurrence_index=row.occurrence_index,
         approver_role=row.approver_role,
         message=row.message,
+        actions=[ApprovalAction(**action) for action in row.actions or []],
     )
+
+
+def find_approval(*, run_id: str, node_id: str, occurrence_index: int) -> ApprovalRequest | None:
+    """The row for this pause if it was already opened — what a resumed node reads instead of preparing again.
+
+    `open_approval` is idempotent about the *row*; this is what makes the
+    payload idempotent too. The calls a pause shows are prepared by a model,
+    and a second preparation on resume could word the body differently from
+    the one the person just approved — so the resumed node reads the approved
+    one back rather than asking again.
+    """
+    db: Session = SessionLocal()
+    try:
+        row = db.scalars(
+            select(RunApproval).where(
+                RunApproval.run_id == run_id,
+                RunApproval.node_id == node_id,
+                RunApproval.occurrence_index == occurrence_index,
+            )
+        ).one_or_none()
+        return None if row is None else _request_of(row)
+    finally:
+        db.close()
+
+
+def approved_action_hash(approval_id: int, node_id: str) -> str | None:
+    """The hash `approval_id` approved for `node_id`'s call — `None` unless that row is approved and has one.
+
+    The database's half of the check an action node makes before calling
+    (DS-08): what the graph state says was approved is compared against what
+    the row says, so a checkpoint cannot claim an approval nobody gave.
+    """
+    db: Session = SessionLocal()
+    try:
+        row = db.get(RunApproval, approval_id)
+        if row is None or row.status is not RunApprovalStatus.APPROVED:
+            return None
+        return next((action["hash"] for action in row.actions or [] if action.get("node_id") == node_id), None)
+    finally:
+        db.close()
 
 
 def open_approval(
@@ -174,11 +260,14 @@ def open_approval(
     input_message: str,
     sandbox: bool,
     run_as: str | None = None,
+    actions: Sequence[ApprovalAction] = (),
 ) -> ApprovalRequest:
     """The pending row for this pause — found if it is already there, written if not.
 
     `run_as` is the asker the run's `data_query` reads were scoped to (DS-05),
-    kept so the resumed leg reads as the same person.
+    kept so the resumed leg reads as the same person. `actions` are the calls
+    the pause guards (DS-08), written once with the row and never rewritten:
+    an existing row keeps the payload it was opened with.
 
     Idempotent because it has to be. `interrupt()` suspends a node and, on
     resume, runs that node's function again from the top: everything before the
@@ -220,6 +309,7 @@ def open_approval(
             message=message,
             input_message=input_message,
             run_as=run_as,
+            actions=[dict(action) for action in actions],
             status=RunApprovalStatus.PENDING,
             transcript=[],
             elapsed_seconds=0.0,

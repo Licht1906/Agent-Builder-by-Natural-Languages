@@ -75,7 +75,7 @@ import textwrap
 import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import partial
 from typing import Annotated, Any, Literal, Protocol, TypedDict, cast
@@ -117,6 +117,7 @@ from src.models.node_registry import (
     IfElseConfig,
     KnowledgeSearchConfig,
     McpActionMode,
+    McpApproval,
     McpConfig,
     NodeType,
     WebSearchConfig,
@@ -127,8 +128,12 @@ from src.models.workflow import Edge, NodeInstance, WorkflowJSON
 from src.services.llm import document_model
 from src.workflow.approvals import (
     AWAITING_APPROVAL_EVENT,
+    ApprovalAction,
     ApprovalDecision,
     ApprovalRequest,
+    action_hash,
+    approved_action_hash,
+    find_approval,
     open_approval,
     park_ledger,
 )
@@ -331,6 +336,14 @@ class WorkflowState(TypedDict):
     #: node does because of it is something the data asked for. Per turn,
     #: like `findings`, and only ever appended to within one.
     untrusted: list[str]
+    #: DS-08: the calls a person approved this turn, keyed by the `mcp` node
+    #: that will make each — `ApprovalAction` plus the action's own name, the
+    #: gate that approved it, the `run_approvals` row (`None` under eval's
+    #: scripted decisions) and `messages_at`, how long `messages` was right
+    #: after the decision. An action needing a person runs only against one of
+    #: these, and uses it up. Per turn like `collected`: an approval given in
+    #: one turn is not a licence for a call in the next.
+    approved_actions: dict[str, dict[str, Any]]
 
 
 def initial_state(message: str) -> WorkflowState:
@@ -350,6 +363,7 @@ def initial_state(message: str) -> WorkflowState:
         "collected": {},
         "spoken": "",
         "untrusted": [],
+        "approved_actions": {},
     }
 
 
@@ -942,6 +956,7 @@ def _untrusted_of(state: WorkflowState) -> list[str]:
 #: transcript; the asker hears `UNREAD_FOR_ASKER`.
 _NO_READABLE_SOURCE = "Hệ CSDL của node này không tồn tại, không thuộc về bạn, hoặc không còn view nào được đọc"
 
+
 async def _query_from_model(
     columns: Mapping[str, list[str]],
     config: DataQueryConfig,
@@ -1181,7 +1196,9 @@ async def _run_web_search(
         return NodeOutcome(content=reason, state_update={"searched": True})
 
     emit(_event("tool_result", _tool_result(node.id, tool.name, ok=True, result=found, simulated=simulated)))
-    finding = Finding(node_id=node.id, source=tool.name, text=found, doc_name=tool.name, section_path=None, page_number=None)
+    finding = Finding(
+        node_id=node.id, source=tool.name, text=found, doc_name=tool.name, section_path=None, page_number=None
+    )
     return NodeOutcome(content=found, state_update={"findings": [*state["findings"], finding], "searched": True})
 
 
@@ -1231,7 +1248,35 @@ async def _run_mcp(
     node whose job is to report what happened.
     """
     config = McpConfig.model_validate(node.config)
-    chosen, payload = await _action_and_args(config, state, node_id=node.id, run=run, emit=emit)
+    approved = state.get("approved_actions", {})
+    approval = approved.get(node.id)
+    if approval is not None and len(state["messages"]) == approval["messages_at"]:
+        # Nothing has been said since the person said yes, so the call this node
+        # would prepare is the one they were shown — read back, not prepared a
+        # second time by a model that might word the body differently.
+        chosen, payload = approval["action"], dict(approval["args"])
+    else:
+        chosen, payload = await _action_and_args(config, state, node_id=node.id, run=run, emit=emit)
+    outcome = await _run_resolved_mcp(node, config, chosen, payload, approval, state, run=run, emit=emit)
+    if node.id in approved:
+        # Used up whether it ran or was refused: one approval, one call.
+        remaining = {key: value for key, value in approved.items() if key != node.id}
+        outcome = replace(outcome, state_update={**outcome.state_update, "approved_actions": remaining})
+    return outcome
+
+
+async def _run_resolved_mcp(
+    node: NodeInstance,
+    config: McpConfig,
+    chosen: str,
+    payload: dict[str, Any],
+    approval: dict[str, Any] | None,
+    state: WorkflowState,
+    *,
+    run: WorkflowRunContext,
+    emit: WorkflowEventSink,
+) -> NodeOutcome:
+    """`_run_mcp` once the call is known: resolve it, hold it to its approval, then make it (or its mock)."""
     resolved = resolved_action(config.tool_id, chosen)
     if resolved is None:
         return _mcp_refusal(
@@ -1268,6 +1313,11 @@ async def _run_mcp(
     # anywhere may be minted under a name this function did not write
     # (`certain_action_of`).
     called = wire_name(tool.id, action.name)
+    if _needs_approval(config, action):
+        # Before the mock too: a rehearsal refuses exactly what production would.
+        refusal = await _unapproved(node.id, called, payload, approval)
+        if refusal is not None:
+            return _mcp_refusal(node, config, payload, reason=refusal, emit=emit)
     simulated = run.sandbox and action.sandbox_behavior is SandboxBehavior.MOCK
     emit(
         _event(
@@ -1304,9 +1354,7 @@ async def _run_mcp(
         emit(
             _event(
                 "tool_result",
-                _tool_result(
-                    node.id, called, ok=False, result=reason, simulated=False, fault=fault_of_exception(exc)
-                ),
+                _tool_result(node.id, called, ok=False, result=reason, simulated=False, fault=fault_of_exception(exc)),
             )
         )
         return NodeOutcome(content=reason, state_update={"messages": [_note(node, reason, tool=called, ok=False)]})
@@ -1322,6 +1370,7 @@ async def _action_and_args(
     node_id: str,
     run: WorkflowRunContext,
     emit: WorkflowEventSink,
+    charged_to: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Which action this node calls, and the arguments it calls it with.
 
@@ -1349,7 +1398,8 @@ async def _action_and_args(
 
     Degrades rather than fails, at every step. No parameters to fill, no model,
     no usable reply: the legacy payload goes out and the tool's own refusal, if
-    any, is reported as it always was. This path must never be a *new* way for
+    any, is reported as it always was. A `human_approval` node in front of the
+    action calls this too (DS-08), to prepare the call it shows the person. This path must never be a *new* way for
     a run to die. The call is charged and deadline-bound like every other model
     call on the run (`_answer_within_deadline`), and not narrated: its output
     is arguments for the runtime, not words from the agent.
@@ -1374,8 +1424,16 @@ async def _action_and_args(
             # always given, so a connection written against `input` still works.
             return config.action, fallback
 
+    # `charged_to`: a gate preparing the call it will show (DS-08) pays for the
+    # model call itself, rather than putting it on a node that has not started.
     filled = await _filled_by_model(
-        candidates, forced=forced, task=fallback[MCP_INPUT_KEY], state=state, node_id=node_id, run=run, emit=emit
+        candidates,
+        forced=forced,
+        task=fallback[MCP_INPUT_KEY],
+        state=state,
+        node_id=charged_to or node_id,
+        run=run,
+        emit=emit,
     )
     if filled is None:
         # The collector's values, when it ran, are the better fallback: each one
@@ -1509,6 +1567,7 @@ def _conversation_excerpt(state: WorkflowState) -> str:
         lines.append(f"{who}: {text}")
     return "\n".join(lines) or "(chưa có gì)"
 
+
 async def _run_collect(
     node: NodeInstance, state: WorkflowState, *, run: WorkflowRunContext, emit: WorkflowEventSink
 ) -> NodeOutcome:
@@ -1634,6 +1693,7 @@ _PARAMETER_LABELS: Mapping[str, str] = {
     "max_results": "số kết quả",
 }
 
+
 def _question_for(missing: Sequence[str], action: ToolAction) -> str:
     """One short question asking for exactly `missing`, in the user's words — and for nothing else.
 
@@ -1743,6 +1803,11 @@ async def _run_human_approval(
     for the approval that had just been granted, and the run would never leave
     this node.
 
+    **What the person approves is a payload** (DS-08). Before stopping, the
+    node prepares the call each guarded action node will make
+    (`_prepared_actions`) and the row carries them, so the card shows them
+    verbatim and a "yes" is a yes to exactly those calls.
+
     The decision, and its reason when it is a rejection, is written into
     `messages` before the node returns (ADR-0024 §6). The `rejected` port
     commonly routes into an `AgentLlm` node whose job is to explain what happened;
@@ -1751,6 +1816,12 @@ async def _run_human_approval(
     """
     config = HumanApprovalConfig.model_validate(node.config)
     occurrence = state["approvals"].get(node.id, 0)
+    # The calls to show are prepared once, on the first execution; on resume the
+    # row already holds what the person approved, and that is what is carried on.
+    opened = await asyncio.to_thread(
+        partial(find_approval, run_id=run.run_id, node_id=node.id, occurrence_index=occurrence)
+    )
+    actions = opened["actions"] if opened is not None else await _prepared_actions(node, state, run=run, emit=emit)
     request = await asyncio.to_thread(
         partial(
             open_approval,
@@ -1763,10 +1834,13 @@ async def _run_human_approval(
             input_message=run.input_message,
             sandbox=run.sandbox,
             run_as=_asker_of(run),
+            actions=actions,
         )
     )
     decision = cast(ApprovalDecision, interrupt(request))
-    return _decided(node, state, decision, occurrence=occurrence)
+    return _decided(
+        node, state, decision, occurrence=occurrence, actions=request["actions"], approval_id=request["approval_id"]
+    )
 
 
 async def _run_scripted_approval(
@@ -1805,10 +1879,21 @@ async def _run_scripted_approval(
     # instead of quietly approving everything.
     if scripted is None:
         raise UnsupportedNodeError(f"Node {node.id!r} chạy ở chế độ eval nhưng không có bảng quyết định nào")
-    return _decided(node, state, scripted.decision_for(node.id), occurrence=occurrence)
+    # Prepared here too, so the action node is held to an approved payload under
+    # eval exactly as under a person — there is just no row to verify it against.
+    actions = await _prepared_actions(node, state, run=run, emit=emit)
+    return _decided(node, state, scripted.decision_for(node.id), occurrence=occurrence, actions=actions)
 
 
-def _decided(node: NodeInstance, state: WorkflowState, decision: ApprovalDecision, *, occurrence: int) -> NodeOutcome:
+def _decided(
+    node: NodeInstance,
+    state: WorkflowState,
+    decision: ApprovalDecision,
+    *,
+    occurrence: int,
+    actions: Sequence[ApprovalAction] = (),
+    approval_id: int | None = None,
+) -> NodeOutcome:
     """What a `HumanApproval` node does once it has an answer, whoever gave it.
 
     Shared by the two execution modes on purpose. The port control leaves by, the
@@ -1817,13 +1902,25 @@ def _decided(node: NodeInstance, state: WorkflowState, decision: ApprovalDecisio
     not about how it arrived — and an eval case run down a second copy of this
     would be grading a graph that behaves differently from the one a person
     approves.
+
+    An approval licenses its `actions` (DS-08): each goes into
+    `approved_actions` under the node that will make it, with `messages_at` —
+    the length `messages` will have once this node's own note is in. Any
+    earlier licence this gate gave is withdrawn first, so a `While` pass that
+    is refused cannot spend the previous pass's yes.
     """
     approved = decision["status"] == RunApprovalStatus.APPROVED.value
     port = "approved" if approved else "rejected"
     said = APPROVAL_GRANTED if approved else f"{APPROVAL_REFUSED}: {decision.get('reason') or ''}".strip()
+    licensed = {key: value for key, value in state.get("approved_actions", {}).items() if value.get("gate") != node.id}
+    if approved:
+        after = len(state["messages"]) + 1
+        for action in actions:
+            licensed[action["node_id"]] = {**action, "gate": node.id, "approval_id": approval_id, "messages_at": after}
     return NodeOutcome(
         content=said,
         state_update={
+            "approved_actions": licensed,
             # `ok` carries the verdict the way it carries a tool's outcome, so a
             # replay draws "đồng ý" and "từ chối" apart without parsing the
             # sentence.
@@ -2222,7 +2319,9 @@ async def _answer_within_deadline(
         unit_id=node_id,
         model_id=model_id,
         ledger=run.ledger,
-        on_text=(lambda text: emit(_event("token", WorkflowTokenEvent(node_id=node_id, text=text)))) if speaks else _silent,
+        on_text=(lambda text: emit(_event("token", WorkflowTokenEvent(node_id=node_id, text=text))))
+        if speaks
+        else _silent,
     )
     emit(WorkflowEvent(event=USAGE_EVENT, data=measured_cost(run.ledger).as_payload()))
     return response
@@ -2905,6 +3004,100 @@ def _certain_actions(nodes: Iterable[NodeInstance]) -> tuple[str, ...]:
         if name is not None and name not in names:
             names.append(name)
     return tuple(names)
+
+
+def _guarded_action_nodes(workflow: WorkflowJSON | None, gate_id: str) -> list[NodeInstance]:
+    """The `mcp` nodes a gate's `approved` port leads to — the calls it stands in front of (DS-08).
+
+    Walked from `approved` (what lies down `rejected` is what the workflow does
+    *instead*) and stopped at the next `human_approval`, whose calls are its
+    own to show. Only nodes that can reach an action needing a person: a read
+    behind a gate is not something the gate is approving.
+    """
+    if workflow is None:
+        return []
+    onward: defaultdict[str, list[Edge]] = defaultdict(list)
+    for edge in workflow.edges:
+        onward[edge.source_node_id].append(edge)
+    pending = [edge.target_node_id for edge in onward[gate_id] if edge.source_port == "approved"]
+    seen = set(pending)
+    found: list[NodeInstance] = []
+    while pending:
+        node = workflow.node(pending.pop(0))
+        if node is None or node.type is NodeType.HUMAN_APPROVAL:
+            continue
+        if node.type is NodeType.MCP:
+            config = McpConfig.model_validate(node.config)
+            if any(_needs_approval(config, action) for _, action in _invocable_actions(config)):
+                found.append(node)
+        for edge in onward[node.id]:
+            if edge.target_node_id not in seen:
+                seen.add(edge.target_node_id)
+                pending.append(edge.target_node_id)
+    return found
+
+
+def _needs_approval(config: McpConfig, action: ToolAction) -> bool:
+    """Whether calling `action` from a node configured `config` needs a person to have approved the call.
+
+    The validator's two readings (`src.workflow.validation`), asked of the one
+    call being made: the action's own risk, or the node's `require_approval:
+    always`, which may only add a gate.
+    """
+    return action.requires_human_approval or config.require_approval is McpApproval.ALWAYS
+
+
+async def _prepared_actions(
+    gate: NodeInstance, state: WorkflowState, *, run: WorkflowRunContext, emit: WorkflowEventSink
+) -> list[ApprovalAction]:
+    """The call each guarded action node would make now — what the card shows and the approval binds (DS-08).
+
+    Prepared the way the action node prepares it (`_action_and_args`, the same
+    collected values and the same fill), so the action node, finding nothing
+    said since, sends exactly this. A node whose action does not resolve is
+    left off: it will refuse on its own, and there is no call to show.
+    """
+    actions: list[ApprovalAction] = []
+    for target in _guarded_action_nodes(run.workflow, gate.id):
+        config = McpConfig.model_validate(target.config)
+        chosen, args = await _action_and_args(config, state, node_id=target.id, run=run, emit=emit, charged_to=gate.id)
+        resolved = resolved_action(config.tool_id, chosen)
+        if resolved is None:
+            continue
+        tool = wire_name(resolved[0].id, resolved[1].name)
+        actions.append(
+            ApprovalAction(
+                node_id=target.id, tool=tool, action=resolved[1].name, args=args, hash=action_hash(tool, args)
+            )
+        )
+    return actions
+
+
+async def _unapproved(node_id: str, tool: str, payload: dict[str, Any], approval: dict[str, Any] | None) -> str | None:
+    """Why `payload` may not be sent by `node_id` — `None` when a person approved exactly it (DS-08).
+
+    The hash is recomputed here, right before the call, and compared twice:
+    with the licence in the graph state, and — when a person gave it — with
+    the `run_approvals` row, so a checkpoint cannot claim a yes nobody said.
+    The sentence names which arguments changed, never their values twice
+    over: the transcript already shows the payload that was attempted.
+    """
+    if approval is None:
+        return (
+            f"Không thực hiện {tool}: hành động này cần một lần duyệt đúng payload, nhưng node {node_id!r} "
+            f"không có lần duyệt nào còn hiệu lực — mỗi lần duyệt chỉ cho đúng một lần gọi"
+        )
+    computed = action_hash(tool, payload)
+    if computed != approval["hash"] or tool != approval["tool"]:
+        before = approval.get("args") or {}
+        changed = sorted(key for key in {*before, *payload} if before.get(key) != payload.get(key))
+        detail = f" (khác ở: {', '.join(changed)})" if changed else ""
+        return f"Không thực hiện {tool}: payload khác với payload đã được duyệt{detail} — cần duyệt lại"
+    if approval.get("approval_id") is not None:
+        stored = await asyncio.to_thread(approved_action_hash, approval["approval_id"], node_id)
+        if stored != computed:
+            return f"Không thực hiện {tool}: không tìm thấy lần duyệt khớp payload này trong sổ duyệt"
+    return None
 
 
 def _mcp_refusal(
