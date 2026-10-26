@@ -28,7 +28,11 @@ jinja2>=3.1.0
 cryptography>=43.0.0
 
 # Database
-sqlalchemy>=2.0.0
+# Below 2.1: 2.1 casts every bound value (`%(role)s::VARCHAR`), and the seed
+# migrations insert enum columns through plain-string `sa.table`s, which
+# Postgres then refuses ("column role is of type userrole"). Lift the cap
+# together with typing those columns as the enums they are.
+sqlalchemy>=2.0.0,<2.1
 alembic>=1.14.0
 psycopg2-binary>=2.9.0
 

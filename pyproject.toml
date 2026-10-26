@@ -25,7 +25,8 @@ dependencies = [
     # The secret store's envelope encryption (RAG-19 / ADR-0045) — AES-256-GCM
     # over each stored secret, keyed by SECRET_STORE_KEY.
     "cryptography>=43.0.0",
-    "sqlalchemy>=2.0.0",
+    # Below 2.1 — see requirements.txt: 2.1 breaks the seed migrations' enum inserts.
+    "sqlalchemy>=2.0.0,<2.1",
     "alembic>=1.14.0",
     "psycopg2-binary>=2.9.0",
     # The SQL Server dialect of a Hệ CSDL (DS-06) — FreeTDS ships in the wheel.
