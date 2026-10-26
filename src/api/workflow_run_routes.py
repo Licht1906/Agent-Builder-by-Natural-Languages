@@ -44,10 +44,11 @@ from src.api.agent_routes import (
 )
 from src.api.deployment_access import Caller, MeteredAgent
 from src.auth.dependencies import CurrentUser
+from src.datasources.graph import data_query_configs
 from src.datasources.reader import DatabaseReader, get_database_reader
 from src.db.base import get_db
 from src.db.models import Agent, AgentVersion
-from src.models.schemas import ApprovalDecisionRequest, SandboxRunRequest, WorkflowChatRequest
+from src.models.schemas import ApprovalDecisionRequest, AskerResponse, SandboxRunRequest, WorkflowChatRequest
 from src.models.workflow import WorkflowJSON
 from src.workflow.approvals import (
     ApprovalDecisionError,
@@ -435,10 +436,12 @@ async def decide_and_resume_my_versions_run(
     # `leg.input_message`, never the deciding request: the run was asked
     # something before this request existed, and a record naming the approver's
     # click as the user's question would describe a run that never happened.
+    # The asker likewise is the first leg's (DS-05), never the decider.
+    reader = databases.asked_by(leg.run_as)
     stream = (
-        _workflow_sandbox_stream(workflow, leg.input_message, run, knowledge, databases, resume=(leg, resumption))
+        _workflow_sandbox_stream(workflow, leg.input_message, run, knowledge, reader, resume=(leg, resumption))
         if leg.sandbox
-        else _workflow_event_stream(workflow, leg.input_message, run, knowledge, databases, resume=resumption)
+        else _workflow_event_stream(workflow, leg.input_message, run, knowledge, reader, resume=resumption)
     )
     return StreamingResponse(stream, media_type="text/event-stream")
 
@@ -468,11 +471,40 @@ async def trial_run_my_versions_workflow(
 
     The thread is always `trial`, never the caller's choice (AC 5): that is what
     keeps test chatter out of the agent's real conversation history.
+
+    `run_as` is who this turn's `data_query` reads are scoped to — the creator
+    standing in for one of their company's employees (DS-05, ADR-0059 §3),
+    legitimate only here, in a sandbox run by the person who registered the
+    sample database. Per turn, so the same thread can ask as a rep and then as
+    their lead.
     """
     workflow = runnable_workflow(version)
     conversation = conversation_for(agent, checkpointer, ThreadAddress(payload.conversation_id, ThreadNamespace.TRIAL))
     run = start_run(version.id, conversation)
     return StreamingResponse(
-        _workflow_sandbox_stream(workflow, payload.message, run, knowledge, databases),
+        _workflow_sandbox_stream(workflow, payload.message, run, knowledge, databases.asked_by(payload.run_as)),
         media_type="text/event-stream",
     )
+
+
+@router.get("/{agent_id}/versions/{version_id}/askers", response_model=list[AskerResponse])
+def my_versions_askers(
+    _agent: OwnedAgent, version: OwnedVersion, databases: Databases, q: str = ""
+) -> list[AskerResponse]:
+    """Who the creator can run this version's trial as — "Chạy với tư cách…"'s suggestions (DS-05).
+
+    Read off the employee view of every Hệ CSDL this version's `data_query`
+    nodes read, narrowed by `q` against both the sign-in value and the
+    position. Empty for a version with no `data_query` node — the screen hides
+    the box then — and for one with no workflow yet. Suggestions only: a
+    creator may still type anyone, and somebody the view does not know is
+    simply denied every read.
+    """
+    try:
+        workflow = workflow_of(version)
+    except WorkflowStageError:
+        return []
+    return [
+        AskerResponse(value=asker.value, position=asker.position, source=asker.source)
+        for asker in databases.askers(data_query_configs(workflow), q)
+    ]

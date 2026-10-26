@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from src.agents.runtime import Conversation
 from src.api.agent_routes import Checkpointer, StartRun
-from src.api.workflow_run_routes import Knowledge, _workflow_event_stream, _workflow_sandbox_stream
+from src.api.workflow_run_routes import Databases, Knowledge, _workflow_event_stream, _workflow_sandbox_stream
 from src.auth.dependencies import PmUser
 from src.db.base import get_db
 from src.db.models import AgentVersion, MetaAgentGateRun
@@ -990,6 +990,7 @@ async def decide_approval(
     start_run: StartRun,
     checkpointer: Checkpointer,
     knowledge: Knowledge,
+    databases: Databases,
 ) -> DecisionOut:
     """Decide one run waiting on a person; resume its graph in the background if one is really waiting.
 
@@ -1043,10 +1044,12 @@ async def decide_approval(
         carried_seconds=leg.carried_seconds,
         carried_usage=leg.carried_usage,
     )
+    # The asker the first leg read data as (DS-05) — a PM's approval does not change who was asking.
+    reader = databases.asked_by(leg.run_as)
     stream = (
-        _workflow_sandbox_stream(workflow, leg.input_message, run, knowledge, resume=(leg, resumption))
+        _workflow_sandbox_stream(workflow, leg.input_message, run, knowledge, reader, resume=(leg, resumption))
         if leg.sandbox
-        else _workflow_event_stream(workflow, leg.input_message, run, knowledge, resume=resumption)
+        else _workflow_event_stream(workflow, leg.input_message, run, knowledge, reader, resume=resumption)
     )
 
     # Drained *inside* the request, not as a `BackgroundTasks` job. A

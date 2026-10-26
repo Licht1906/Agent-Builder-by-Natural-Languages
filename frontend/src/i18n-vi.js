@@ -438,6 +438,14 @@ export const VI = {
   "This database has no ticked views yet — tick some on the Data sources page.":
     "Hệ CSDL này chưa có view nào được tick — tick ở trang Nguồn dữ liệu.",
   "{view} (not ticked)": "{view} (chưa được tick)",
+  /* ── Chạy với tư cách… (DS-05) ── */
+  "Run as": "Chạy với tư cách",
+  "Run as…": "Chạy với tư cách…",
+  "An employee's email — whose data the run may read": "Email nhân viên — lần chạy được đọc dữ liệu của người đó",
+  "Ran as {who}": "Đã chạy với tư cách {who}",
+  "Ran as nobody — every database read is denied": "Không chạy với tư cách ai — mọi lần đọc CSDL đều bị cấm",
+  "Who asks this case's question": "Ai là người hỏi câu của case này",
+  "as {who}": "với tư cách {who}",
   "Web Search": "Tìm trên web",
   "MCP Service": "Dịch vụ MCP",
   "Collect": "Thu thập thông tin",

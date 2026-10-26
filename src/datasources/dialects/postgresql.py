@@ -31,6 +31,7 @@ from src.datasources.dialects.base import (
     ColumnRef,
     DatabaseProbeError,
     IdentityLookup,
+    IdentitySearch,
     Introspection,
     ProbeFailure,
     QueryRequest,
@@ -134,6 +135,24 @@ class PostgresDialect:
         ).format(column=sql.Identifier(column.column), view=_qualified(column.view), limit=sql.Literal(_DISTINCT_LIMIT))
         with self._reading(dsn, trusted_hosts) as connection:
             return [row[0] for row in connection.execute(statement)]
+
+    def identity_candidates(
+        self, dsn: str, search: IdentitySearch, *, trusted_hosts: frozenset[str]
+    ) -> list[tuple[Any, Any]]:
+        """Distinct `(match, label)` pairs whose text contains `search.text` — bound as a parameter, wildcards escaped."""
+        escaped = search.text.replace("\\", r"\\").replace("%", r"\%").replace("_", r"\_")
+        pattern = f"%{escaped}%"
+        statement = sql.SQL(
+            "SELECT DISTINCT {match}::text, {label}::text FROM {view} "
+            "WHERE {match}::text ILIKE %s OR {label}::text ILIKE %s ORDER BY 1 LIMIT {limit}"
+        ).format(
+            match=sql.Identifier(search.match.column),
+            label=sql.Identifier(search.label_column),
+            view=_qualified(search.match.view),
+            limit=sql.Literal(search.limit),
+        )
+        with self._reading(dsn, trusted_hosts) as connection:
+            return [(row[0], row[1]) for row in connection.execute(statement, (pattern, pattern))]
 
     def run_query(self, dsn: str, request: QueryRequest, *, trusted_hosts: frozenset[str]) -> QueryRows:
         """`request` as one read-only transaction: the asker's attributes set locally, then the statement.

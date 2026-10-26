@@ -38,7 +38,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from src.api.agent_routes import Checkpointer, OwnedAgent, OwnedVersion, validated_spec
-from src.api.workflow_run_routes import Knowledge, runnable_workflow
+from src.api.workflow_run_routes import Databases, Knowledge, runnable_workflow
 from src.db.base import get_db
 from src.db.models import EvalCase, EvalRun
 from src.evals.cases import (
@@ -246,6 +246,7 @@ def add_my_versions_eval_case(
             criterion=payload.criterion,
             input_message=payload.input_message,
             expected=payload.expected,
+            run_as=payload.run_as,
         )
     except EvalCaseError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
@@ -292,6 +293,7 @@ def change_my_versions_eval_case(
             criterion=payload.criterion,
             input_message=payload.input_message,
             expected=payload.expected,
+            run_as=payload.run_as,
         )
     except EvalCaseError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
@@ -346,6 +348,7 @@ async def run_my_versions_workflow_eval(
     db: Annotated[Session, Depends(get_db)],
     services: EvalRunServices,
     knowledge: Knowledge,
+    databases: Databases,
     payload: EvalRunRequest | None = None,
 ) -> EvalRunResponse:
     """Run the whole test set against this version's confirmed workflow, and score it.
@@ -380,6 +383,7 @@ async def run_my_versions_workflow_eval(
             cases=_selected(list_cases(db, version.agent_id), payload),
             services=services,
             knowledge=knowledge,
+            databases=databases,
             success_criteria=frozenset(criterion.text for criterion in solution_spec.success_criteria),
         )
     except EvalRunError as exc:

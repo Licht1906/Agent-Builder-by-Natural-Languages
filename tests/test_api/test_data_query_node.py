@@ -159,12 +159,16 @@ def _writes(query: dict[str, Any]) -> AIMessage:
     return AIMessage(content="", tool_calls=[{"name": "data_query", "args": query, "id": "call_1"}])
 
 
-async def _chat(client: AsyncClient, version: AgentVersion, token: str, *, sandbox: bool = False) -> Any:
+async def _chat(
+    client: AsyncClient, version: AgentVersion, token: str, *, sandbox: bool = False, run_as: str | None = None
+) -> Any:
+    """One turn. A trial says who it asks as itself (DS-05); the chat door takes whoever `asking` installed."""
     route = "workflow-sandbox-runs" if sandbox else "workflow-chat"
+    body: dict[str, Any] = {"message": "khách nào quá hạn trên 30 ngày?"}
+    if sandbox:
+        body["run_as"] = run_as
     return await client.post(
-        f"/api/v1/agents/{version.agent_id}/versions/{version.id}/{route}",
-        json={"message": "khách nào quá hạn trên 30 ngày?"},
-        headers=auth_header(token),
+        f"/api/v1/agents/{version.agent_id}/versions/{version.id}/{route}", json=body, headers=auth_header(token)
     )
 
 
@@ -343,7 +347,7 @@ async def test_a_trial_run_reads_for_real_and_needs_no_approval(
     asking("an@cty.vn")
     scripted_chat_model_factory([[_writes(OVERDUE)], [AIMessage(content="C1")]])
 
-    response = await _chat(client, version, creator_token, sandbox=True)
+    response = await _chat(client, version, creator_token, sandbox=True, run_as="an@cty.vn")
 
     result = _result(response)
     assert result["simulated"] is False

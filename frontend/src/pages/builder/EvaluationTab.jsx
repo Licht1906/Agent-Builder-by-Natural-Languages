@@ -59,7 +59,7 @@ const muted = "color-mix(in srgb, var(--color-text) 58%, transparent)";
 const faint = "color-mix(in srgb, var(--color-text) 45%, transparent)";
 const warn = "#b45309";
 
-export default function EvaluationTab({ agentId, versionId, notify }) {
+export default function EvaluationTab({ agentId, versionId, readsDatabase = false, notify }) {
   const { t } = useLang();
   const [cases, setCases] = useState([]);
   const [result, setResult] = useState(null);
@@ -87,6 +87,16 @@ export default function EvaluationTab({ agentId, versionId, notify }) {
   }, [agentId, versionId]);
 
   useEffect(() => { load(); }, [load]);
+
+  /** Who a case asks as (DS-05) — blank clears it, "nobody asking". */
+  async function saveRunAs(testCase, runAs) {
+    try {
+      const saved = await api.evaluation.updateCase(agentId, versionId, testCase.id, { run_as: runAs });
+      setCases((current) => current.map((entry) => (entry.id === saved.id ? saved : entry)));
+    } catch (err) {
+      notify(err.message, "error");
+    }
+  }
 
   async function generate() {
     setBusy("generate");
@@ -367,6 +377,8 @@ export default function EvaluationTab({ agentId, versionId, notify }) {
                     checked={selected.has(testCase.id)}
                     onToggle={() => toggleSelected(testCase.id)}
                     onDelete={() => setDoomed(testCase)}
+                    readsDatabase={readsDatabase}
+                    onRunAs={(runAs) => saveRunAs(testCase, runAs)}
                     busy={!!busy}
                   />
                 ))}
@@ -462,7 +474,7 @@ function Meter({ segments, notch, title }) {
 
 /* ── One golden-set case ──────────────────────────────────────────────── */
 
-function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete, busy }) {
+function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete, readsDatabase, onRunAs, busy }) {
   const { t } = useLang();
   const ruleBased = Boolean(testCase.expected_check);
   const orphan = verdict?.applicability === "orphan";
@@ -509,6 +521,8 @@ function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete
           {testCase.category && <span className="ab-chip">{t(testCase.category.replace(/_/g, " "))}</span>}
           <span className="ab-chip">{t(ORIGIN_LABELS[testCase.origin] || testCase.origin)}</span>
           {(testCase.tags || []).map((tag) => <span key={tag} className="ab-chip">#{tag}</span>)}
+          {testCase.run_as && <span className="ab-chip" title={t("Who asks this case's question")}>{t("as {who}", { who: testCase.run_as })}</span>}
+          {readsDatabase && <RunAsEditor value={testCase.run_as} disabled={busy} onSave={onRunAs} />}
           {orphan && (
             <span className="ab-chip" style={{ color: warn, borderColor: "rgba(245,158,11,.4)" }} title={t("Still run and judged against its own expected answer")}>
               <AlertTriangle size={11} />{t("criterion no longer in this version")}
@@ -733,5 +747,41 @@ function Evidence({ calls }) {
         ))}
       </ul>
     </details>
+  );
+}
+
+
+/** "Run as…" on one case: a button that opens one input. Enter or leaving the
+ *  box saves what was typed; Escape leaves the case as it was. Blank saves
+ *  "nobody", which every database read denies. */
+function RunAsEditor({ value, disabled, onSave }) {
+  const { t } = useLang();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value || "");
+  if (!open) {
+    return (
+      <button type="button" className="ab-chip" disabled={disabled} onClick={() => { setDraft(value || ""); setOpen(true); }}>
+        {t("Run as…")}
+      </button>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      className="ab-input"
+      style={{ fontSize: "var(--text-xs)", width: 200 }}
+      aria-label={t("Run as")}
+      placeholder={t("An employee's email — whose data the run may read")}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") { setDraft(value || ""); setOpen(false); }
+      }}
+      onBlur={() => {
+        setOpen(false);
+        if (draft.trim() !== (value || "")) onSave(draft.trim());
+      }}
+    />
   );
 }

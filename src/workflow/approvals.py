@@ -120,6 +120,8 @@ class ParkedLeg:
     carried_seconds: float
     carried_usage: dict[str, ModelUsage]
     transcript: list[SandboxTranscriptEntry]
+    #: Who the first leg read data as (DS-05) — the resumed leg asks as them too.
+    run_as: str | None = None
 
 
 def _identity_of(row: RunApproval) -> RunIdentity:
@@ -171,8 +173,12 @@ def open_approval(
     message: str,
     input_message: str,
     sandbox: bool,
+    run_as: str | None = None,
 ) -> ApprovalRequest:
     """The pending row for this pause — found if it is already there, written if not.
+
+    `run_as` is the asker the run's `data_query` reads were scoped to (DS-05),
+    kept so the resumed leg reads as the same person.
 
     Idempotent because it has to be. `interrupt()` suspends a node and, on
     resume, runs that node's function again from the top: everything before the
@@ -213,6 +219,7 @@ def open_approval(
             approver_role=approver_role,
             message=message,
             input_message=input_message,
+            run_as=run_as,
             status=RunApprovalStatus.PENDING,
             transcript=[],
             elapsed_seconds=0.0,
@@ -346,6 +353,7 @@ def parked_leg(db: Session, row: RunApproval) -> ParkedLeg:
         carried_seconds=row.elapsed_seconds,
         carried_usage=usage_of_payload(row.usage_by_model),
         transcript=[SandboxTranscriptEntry.model_validate(entry) for entry in row.transcript],
+        run_as=row.run_as,
     )
 
 

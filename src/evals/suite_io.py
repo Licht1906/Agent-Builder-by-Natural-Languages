@@ -49,7 +49,7 @@ RowStatus = Literal["added", "skipped", "error"]
 MAX_ROWS = 500
 
 #: The columns the general schema names. Anything else lands in `extra`.
-CANONICAL_COLUMNS = frozenset({"input", "expected", "criterion", "category", "expected_check", "tags"})
+CANONICAL_COLUMNS = frozenset({"input", "expected", "criterion", "category", "expected_check", "tags", "run_as"})
 
 #: Columns accepted in place of `expected` when it is absent — ADR-0054 §2's own
 #: reconciliation of UC-1's golden-set shape (`expected_output`,
@@ -64,7 +64,7 @@ _TAG_ALIASES = ("group",)
 #: ADR-0054 §2: a row with no `criterion` is the creator's own case, judge-graded.
 DEFAULT_CRITERION = "Người tạo tự nạp"
 
-_TEMPLATE_HEADER = ["input", "expected", "criterion", "category", "expected_check", "tags"]
+_TEMPLATE_HEADER = ["input", "expected", "criterion", "category", "expected_check", "tags", "run_as"]
 _TEMPLATE_ROWS = [
     [
         "Khách hỏi phí giao hàng nội thành bao nhiêu?",
@@ -109,6 +109,8 @@ class ImportedRow:
     expected_check_raw: object | None
     tags: list[str]
     extra: dict[str, Any]
+    #: Who asks this row's question (DS-05) — the value `identity.match_by` matches.
+    run_as: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +245,7 @@ def _normalize(raw: dict[str, Any], row_number: int) -> ImportedRow:
         expected_check_raw=raw.get("expected_check") or None,
         tags=tags,
         extra=extra,
+        run_as=_clean_str(raw.get("run_as")),
     )
 
 
@@ -385,6 +388,7 @@ def _validate_row(
         expected_check=None if expected_check is None else check_payload(expected_check),
         tags=row.tags,
         extra=row.extra or None,
+        run_as=row.run_as,
     )
 
     # Classified whether or not the row carries a rule. Since ADR-0054 §4's
@@ -442,6 +446,7 @@ def _row_of(case: EvalCase) -> dict[str, Any]:
         "category": case.category.value if case.category else "",
         "expected_check": case.expected_check or "",
         "tags": list(case.tags or []),
+        "run_as": case.run_as or "",
     }
     if case.extra:
         payload.update(case.extra)

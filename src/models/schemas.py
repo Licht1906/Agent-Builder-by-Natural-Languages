@@ -907,6 +907,22 @@ class SandboxRunRequest(BaseModel):
         pattern=CONVERSATION_ID_PATTERN.pattern,
         description="Thread thử cần tiếp tục; bỏ trống để mỗi lần chạy thử là một hội thoại mới",
     )
+    run_as: str | None = Field(
+        default=None,
+        max_length=320,
+        description=(
+            "Chạy với tư cách ai (DS-05) — giá trị khớp identity.match_by của Hệ CSDL, ví dụ email; "
+            "đổi được giữa các lượt trong cùng thread; bỏ trống = không ai hỏi, mọi lần đọc dữ liệu bị cấm"
+        ),
+    )
+
+
+class AskerResponse(BaseModel):
+    """One person a creator can run a trial as — "Chạy với tư cách…"'s suggestion (DS-05)."""
+
+    value: str = Field(..., description="Giá trị khớp identity.match_by — thứ gửi lại trong run_as")
+    position: str | None = Field(default=None, description="Chức vụ, đọc từ view nhân viên")
+    source: str = Field(..., description="Hệ CSDL người này được tìm thấy")
 
 
 class SandboxTranscriptEntry(BaseModel):
@@ -1160,6 +1176,7 @@ class EvalCaseResponse(BaseModel):
         default=None, description="Luật đọc thẳng transcript; null = case do LLM judge chấm"
     )
     tags: list[str] = Field(default_factory=list, description="Nhãn của người tạo, để lọc — ADR-0054 §1")
+    run_as: str | None = Field(default=None, description="Case chạy với tư cách ai (DS-05); null = không ai hỏi")
     # Two columns a retired feature left on the row (ADR-0065). They are still
     # reported because rows carrying them still exist and a creator looking at
     # one should see everything it holds; nothing writes them any more.
@@ -1175,6 +1192,7 @@ class EvalCaseCreateRequest(BaseModel):
     criterion: str = Field(..., min_length=1, description="Tiêu chí thành công case này kiểm")
     input_message: str = Field(..., min_length=1, description="Đầu vào đưa cho agent")
     expected: str = Field(..., min_length=1, description="Thế nào là đạt")
+    run_as: str | None = Field(default=None, max_length=320, description="Chạy với tư cách ai (DS-05)")
 
 
 class EvalCaseUpdateRequest(BaseModel):
@@ -1190,6 +1208,9 @@ class EvalCaseUpdateRequest(BaseModel):
     criterion: str | None = Field(default=None, min_length=1)
     input_message: str | None = Field(default=None, min_length=1)
     expected: str | None = Field(default=None, min_length=1)
+    run_as: str | None = Field(
+        default=None, max_length=320, description="Chạy với tư cách ai (DS-05); chuỗi rỗng = bỏ, không ai hỏi"
+    )
 
 
 class EvalGenerationResponse(BaseModel):

@@ -877,15 +877,20 @@ async def _run_data_query(
     """
     config = DataQueryConfig.model_validate(node.config)
     reader = run.databases
+    # Who this read is for, on every `tool` line it writes — the transcript's
+    # own record of "chạy với tư cách ai" (DS-05), denied reads included.
+    base_args = {"source_id": config.source_id, "run_as": _asker_of(run)}
     if reader is None:
-        return _data_query_unread(node, state, "Lượt chạy này không được nối với Hệ CSDL nào", emit=emit)
+        return _data_query_unread(
+            node, state, "Lượt chạy này không được nối với Hệ CSDL nào", emit=emit, args=base_args
+        )
     columns = reader.columns_of(config)
     if not columns:
-        return _data_query_unread(node, state, _NO_READABLE_SOURCE, emit=emit)
+        return _data_query_unread(node, state, _NO_READABLE_SOURCE, emit=emit, args=base_args)
     query, refusal = await _query_from_model(columns, config, state=state, node_id=node.id, run=run, emit=emit)
     if query is None:
-        return _data_query_unread(node, state, refusal, emit=emit)
-    args = {"source_id": config.source_id, **query.model_dump(mode="json", by_alias=True, exclude_defaults=True)}
+        return _data_query_unread(node, state, refusal, emit=emit, args=base_args)
+    args = {**base_args, **query.model_dump(mode="json", by_alias=True, exclude_defaults=True)}
     emit(
         _event(
             "tool", WorkflowToolCallEvent(node_id=node.id, tool=DATA_QUERY_TOOL, args=args, simulated=NEVER_SIMULATED)
@@ -921,6 +926,11 @@ async def _run_data_query(
             "untrusted": [*_untrusted_of(state), finding["source"]],
         },
     )
+
+
+def _asker_of(run: WorkflowRunContext) -> str | None:
+    """Who this run's `data_query` reads are scoped to (DS-05) — nobody on a run with no reader."""
+    return run.databases.asker if run.databases is not None else None
 
 
 def _untrusted_of(state: WorkflowState) -> list[str]:
@@ -1057,13 +1067,16 @@ def _data_query_unread(
     emit: WorkflowEventSink,
     announced: bool = False,
     told: str = UNREAD_FOR_ASKER,
+    args: dict[str, Any] | None = None,
 ) -> NodeOutcome:
     """A read that produced no rows — `reason` on the transcript, `told` as the finding the answering node speaks from."""
     if not announced:
         emit(
             _event(
                 "tool",
-                WorkflowToolCallEvent(node_id=node.id, tool=DATA_QUERY_TOOL, args={}, simulated=NEVER_SIMULATED),
+                WorkflowToolCallEvent(
+                    node_id=node.id, tool=DATA_QUERY_TOOL, args=args or {}, simulated=NEVER_SIMULATED
+                ),
             )
         )
     emit(
@@ -1749,6 +1762,7 @@ async def _run_human_approval(
             message=_rendered_approval_message(config.message_template, state),
             input_message=run.input_message,
             sandbox=run.sandbox,
+            run_as=_asker_of(run),
         )
     )
     decision = cast(ApprovalDecision, interrupt(request))

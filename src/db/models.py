@@ -998,6 +998,10 @@ class EvalCase(Base):
         JSON, default=None, doc="ExpectedCheck đọc thẳng transcript; null = case do LLM judge chấm"
     )
     tags: Mapped[list[str]] = mapped_column(JSON, default=list, doc="Nhãn của người tạo, để lọc — ADR-0054 §1")
+    run_as: Mapped[str | None] = mapped_column(
+        default=None,
+        doc="Case chạy với tư cách ai (DS-05) — giá trị khớp identity.match_by của Hệ CSDL; null = không ai hỏi",
+    )
     extra: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, default=None, doc="Cột ngoài schema khi nạp file (UC-1: principal, retrieval_context, …)"
     )
@@ -1378,6 +1382,10 @@ class RunApproval(Base):
     decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
     decided_at: Mapped[datetime | None] = mapped_column(default=None)
     reason: Mapped[str | None] = mapped_column(default=None, doc="Bắt buộc khi từ chối — như ADR-0012 §2")
+    run_as: Mapped[str | None] = mapped_column(
+        default=None,
+        doc="Người hỏi của lần chạy thử (DS-05) — để chặng tiếp sau khi duyệt đọc dữ liệu đúng tư cách đó",
+    )
     transcript: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON, default=list, doc="Các dòng transcript trước lúc dừng, để lần chạy nối lại lưu thành một bản ghi"
     )

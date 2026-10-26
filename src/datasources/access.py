@@ -212,6 +212,11 @@ def scope_for(rules: AccessRules, principal: Principal | None, view: str) -> Sco
     return Where(pairs=tuple(pairs))
 
 
+def asker_of(value: str | None) -> str | None:
+    """`value` as an asker: trimmed, and blank is nobody (`None`) — the one rule every door applies (DS-05)."""
+    return (value or "").strip() or None
+
+
 def resolve_principal(rules: AccessRules, match_value: str, *, lookup: IdentityLookup) -> Principal | None:
     """The asker whose `identity.match_by` column equals `match_value`, or `None` — never a guess.
 

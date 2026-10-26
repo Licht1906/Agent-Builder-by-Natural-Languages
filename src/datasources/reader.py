@@ -19,18 +19,26 @@ is the security argument:
    dialect, the `Where` pairs ANDed into SQL the code builds.
 """
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from typing import Annotated, Protocol
 
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
-from src.datasources.access import All, Deny, DenyCause, Principal, Where, resolve_principal
-from src.datasources.dialects import DatabaseProbeError, QueryRequest, QueryRows, dialect_for
+from src.datasources.access import POSITION, All, Deny, DenyCause, Principal, Where, asker_of, resolve_principal
+from src.datasources.dialects import (
+    ColumnRef,
+    DatabaseProbeError,
+    IdentitySearch,
+    QueryRequest,
+    QueryRows,
+    dialect_for,
+)
 from src.datasources.graph import owned_source
 from src.datasources.query import StructuredQuery, effective_limit, query_problems
-from src.datasources.sources import access_rules_of, closed_deny, dsn_of, scope_on
+from src.datasources.sources import access_rules_of, closed_deny, current_access_problems, dsn_of, scope_on
 from src.db.base import get_db
 from src.db.models import Agent, DatabaseSource
 from src.models.node_registry import DataQueryConfig
@@ -75,8 +83,40 @@ class QueryOutcome:
         return self.denied.reason if self.denied is not None else UNREAD_FOR_ASKER
 
 
+@dataclass(frozen=True, slots=True)
+class Asker:
+    """Somebody a creator can run a trial as: the value matched against a sign-in, and their position."""
+
+    value: str
+    position: str | None
+    source: str
+
+
+#: How many people one "Chạy với tư cách…" search offers.
+ASKER_LIMIT = 20
+
+
 class DatabaseReader(Protocol):
-    """The runtime's door into the Hệ CSDL a `data_query` node names."""
+    """The runtime's door into the Hệ CSDL a `data_query` node names — for one asker.
+
+    `asker` is who every read is scoped to (`None`: nobody, so every read is
+    denied). `asked_by` is how a route or the eval runner gets the same door
+    for somebody else — the platform's "Chạy với tư cách…" (DS-05) and an eval
+    case's `run_as` — without the runtime ever choosing who is asking.
+    """
+
+    @property
+    def asker(self) -> str | None:
+        """Whose rows every read is scoped to; `None` is nobody."""
+        ...
+
+    def asked_by(self, asker: str | None) -> "DatabaseReader":
+        """This reader for `asker` instead — the same owner, store and trusted hosts."""
+        ...
+
+    def askers(self, configs: Sequence[DataQueryConfig], text: str) -> list[Asker]:
+        """People the employee views behind `configs` know, matching `text` — "Chạy với tư cách…"'s list."""
+        ...
 
     def columns_of(self, config: DataQueryConfig) -> dict[str, list[str]]:
         """`{view: columns}` the node may query — what the model's query schema offers. Empty for no usable source."""
@@ -89,13 +129,48 @@ class DatabaseReader(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PlatformDatabaseReader:
-    """`DatabaseReader` over `database_sources`, for one owner and one asker (`None` until DS-05 picks one)."""
+    """`DatabaseReader` over `database_sources`, for one owner and one asker — `asked_by` picks another."""
 
     db: Session
     owner_id: int
     asker: str | None
     secret_store: SecretStore
     trusted_hosts: frozenset[str]
+
+    def asked_by(self, asker: str | None) -> "PlatformDatabaseReader":
+        """This reader for `asker` — blank is nobody, the same as `None`."""
+        return replace(self, asker=asker_of(asker))
+
+    def askers(self, configs: Sequence[DataQueryConfig], text: str) -> list[Asker]:
+        """Each source's employee view, searched once, deduplicated by the value a sign-in would match.
+
+        Only a source whose rules are saved and still fit is searched: its
+        employee view is one the creator ticked, and nothing else is read.
+        A source that cannot be read right now contributes nobody rather than
+        failing the whole list — it is a suggestion box, and free typing
+        still works (DS-05).
+        """
+        found: dict[str, Asker] = {}
+        for source_id in dict.fromkeys(config.source_id for config in configs):
+            source = self._source(source_id)
+            rules = access_rules_of(source) if source is not None else None
+            if source is None or rules is None or current_access_problems(source):
+                continue
+            identity = rules.identity
+            search = IdentitySearch(
+                match=ColumnRef(view=identity.view, column=identity.match_by),
+                label_column=identity.attributes[POSITION],
+                text=text.strip(),
+                limit=ASKER_LIMIT,
+            )
+            try:
+                dsn = dsn_of(source, self.secret_store)
+                pairs = dialect_for(source.dialect).identity_candidates(dsn, search, trusted_hosts=self.trusted_hosts)
+            except DatabaseProbeError:
+                continue
+            for value, position in pairs:
+                found.setdefault(str(value), Asker(value=str(value), position=position, source=source.name))
+        return list(found.values())[:ASKER_LIMIT]
 
     def columns_of(self, config: DataQueryConfig) -> dict[str, list[str]]:
         """The node's views still ticked on its source, with the columns the last probe saw — `{}` for no source."""
@@ -150,11 +225,11 @@ def get_database_reader(
 ) -> DatabaseReader:
     """FastAPI dependency: the reader for one run of `agent_id` — `get_knowledge_store`'s shape and reason.
 
-    Scoped to the agent *owner's* Hệ CSDL, never the caller's. Nobody is
-    asking yet: on the platform the asker is the person a creator picks with
-    "Chạy với tư cách…" (DS-05, ADR-0059 §3), so until that arrives every
-    `data_query` read is denied before a query is sent — which is the
-    default ADR-0059 §6 wants, not a gap in it.
+    Scoped to the agent *owner's* Hệ CSDL, never the caller's, and bound to
+    nobody: on the platform the asker is the person a creator picks with
+    "Chạy với tư cách…" (DS-05, ADR-0059 §3), which a trial route applies with
+    `asked_by`. A run nobody picked an asker for is denied every read before a
+    query is sent — the default ADR-0059 §6 wants, not a gap in it.
     """
     agent = db.get(Agent, agent_id)
     return PlatformDatabaseReader(

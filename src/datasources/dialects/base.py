@@ -123,6 +123,20 @@ class QueryRows:
     rows: tuple[tuple[Any, ...], ...]
 
 
+@dataclass(frozen=True, slots=True)
+class IdentitySearch:
+    """Who a creator might run as: values of `match.column`, each with its `label_column` (the position).
+
+    `text` narrows both columns by a case-insensitive substring; blank lists
+    the first `limit`. Read only off a view the Hệ CSDL already allows.
+    """
+
+    match: ColumnRef
+    label_column: str
+    text: str
+    limit: int
+
+
 #: `(match, value, columns) -> {column: value}` for the one row of `match.view`
 #: whose `match.column` equals `value`, or `None` for no row or several — the
 #: access engine's single read (`src.datasources.access.resolve_principal`).
@@ -146,6 +160,12 @@ class Dialect(Protocol):
 
     def distinct_values(self, dsn: str, column: ColumnRef, *, trusted_hosts: frozenset[str]) -> list[Any]:
         """The distinct non-null values of `column`, sorted — the spec form's list of positions. Capped."""
+        ...
+
+    def identity_candidates(
+        self, dsn: str, search: IdentitySearch, *, trusted_hosts: frozenset[str]
+    ) -> list[tuple[Any, Any]]:
+        """`(match value, label)` pairs from the employee view — "Chạy với tư cách…"'s suggestions (DS-05)."""
         ...
 
     def run_query(self, dsn: str, request: QueryRequest, *, trusted_hosts: frozenset[str]) -> QueryRows:

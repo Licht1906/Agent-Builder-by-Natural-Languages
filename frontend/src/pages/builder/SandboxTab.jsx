@@ -18,9 +18,18 @@ import { CITING_TOOLS } from "../../lib/turns";
    with `awaiting_approval` and nothing is stored until somebody decides; that
    decision resumes the *same* run on a second stream.
    ============================================================ */
-export default function SandboxTab({ agentId, versionId, onActiveNode, onVersionChanged, notify }) {
+export default function SandboxTab({ agentId, versionId, readsDatabase = false, onActiveNode, onVersionChanged, notify }) {
   const { t } = useLang();
   const [message, setMessage] = useState("");
+  // Who the next run asks as (DS-05), and who the last one did — kept apart so
+  // editing the box mid-run never relabels a run that already happened.
+  // `ranAs` is null before any run, "" after one nobody was picked for.
+  const [runAs, setRunAs] = useState("");
+  const [ranAs, setRanAs] = useState(null);
+  // The trial thread every turn carries on until "New conversation" — so the
+  // same conversation can be asked as a rep, then as their lead (DS-05).
+  const [threadId, setThreadId] = useState(null);
+  useEffect(() => setThreadId(null), [agentId, versionId]);
   const [lines, setLines] = useState([]);
   const [running, setRunning] = useState(false);
 
@@ -99,6 +108,9 @@ export default function SandboxTab({ agentId, versionId, onActiveNode, onVersion
         append({ kind: "stored", status: data.status, versionStatus: data.version_status, error: data.error, runId: data.run_id });
         onVersionChanged(data.version_status);
         break;
+      case "thread":
+        setThreadId(data.conversation_id);
+        break;
       case "error":
         onActiveNode(null);
         append({ kind: "failed", text: data.message });
@@ -115,8 +127,10 @@ export default function SandboxTab({ agentId, versionId, onActiveNode, onVersion
     setLines([]);
     setSummary(null);
     setPending(null);
+    const asker = readsDatabase ? runAs.trim() : "";
+    setRanAs(asker);
     try {
-      await api.runs.sandbox(agentId, versionId, message.trim(), handle);
+      await api.runs.sandbox(agentId, versionId, message.trim(), handle, { runAs: asker, conversationId: threadId });
     } catch (err) {
       setError(err.message);
       notify(err.message, "error");
@@ -158,6 +172,7 @@ export default function SandboxTab({ agentId, versionId, onActiveNode, onVersion
 
         <div className="blueprint" style={{ padding: "var(--space-4)", marginBottom: 20 }}>
           <i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" />
+          {readsDatabase && <RunAsField agentId={agentId} versionId={versionId} value={runAs} disabled={running} onChange={setRunAs} />}
           <div className="field">
             <label htmlFor="sbx">{t('Test message')}</label>
             <textarea
@@ -177,6 +192,11 @@ export default function SandboxTab({ agentId, versionId, onActiveNode, onVersion
             <button className="btn btn-primary" onClick={run} disabled={running || !message.trim()} style={{ height: 38 }}>
               {running ? <Spinner size={14} /> : <Play size={14} />}{running ? t("Running…") : t("Run in sandbox")}
             </button>
+            {threadId && (
+              <button className="btn btn-ghost" onClick={() => { setThreadId(null); setLines([]); setSummary(null); setRanAs(null); }} disabled={running} style={{ height: 38 }}>
+                {t("New conversation")}
+              </button>
+            )}
             <span style={{ fontSize: "var(--text-sm)", color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
               {t("Billed separately from live traffic.")}
             </span>
@@ -184,6 +204,12 @@ export default function SandboxTab({ agentId, versionId, onActiveNode, onVersion
         </div>
 
         <ErrorNote>{error}</ErrorNote>
+
+        {readsDatabase && ranAs !== null && (
+          <p className="ab-chip" style={{ display: "inline-flex", marginBottom: 12 }}>
+            {ranAs ? t("Ran as {who}", { who: ranAs }) : t("Ran as nobody — every database read is denied")}
+          </p>
+        )}
 
         {summary && (
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
@@ -327,6 +353,44 @@ function TraceLine({ line }) {
         </div>
         {body ? <p style={{ fontSize: "var(--text-sm)", color: "var(--ab-muted)", margin: "5px 0 0", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{body}</p> : null}
       </div>
+    </div>
+  );
+}
+
+
+/** "Chạy với tư cách…" (DS-05): who a trial's `data_query` reads are scoped to.
+ *  Suggestions come from the employee views the graph reads; anyone may be
+ *  typed — somebody those views do not know is simply denied every read. */
+function RunAsField({ agentId, versionId, value, disabled, onChange }) {
+  const { t } = useLang();
+  const [options, setOptions] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api.runs.askers(agentId, versionId, value.trim())
+        .then((rows) => { if (!cancelled) setOptions(rows); })
+        .catch(() => { if (!cancelled) setOptions([]); });
+    }, value ? 250 : 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [agentId, versionId, value]);
+
+  return (
+    <div className="field" style={{ marginBottom: 12 }}>
+      <label htmlFor="sbx-run-as">{t("Run as")}</label>
+      <input
+        id="sbx-run-as"
+        className="input"
+        list="sbx-run-as-options"
+        autoComplete="off"
+        placeholder={t("An employee's email — whose data the run may read")}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <datalist id="sbx-run-as-options">
+        {options.map((option) => <option key={option.value} value={option.value} label={option.position || ""} />)}
+      </datalist>
     </div>
   );
 }

@@ -374,8 +374,20 @@ export const workflow = {
 };
 
 export const runs = {
-  sandbox: (agentId, versionId, message, onEvent, options) =>
-    stream(`/agents/${agentId}/versions/${versionId}/workflow-sandbox-runs`, { message }, onEvent, options),
+  /** `options.runAs` is who this trial asks as (DS-05) — blank is nobody, so
+   *  every `data_query` read is denied. `options.conversationId` carries on a
+   *  trial thread; null starts a new one. */
+  sandbox: (agentId, versionId, message, onEvent, { runAs, conversationId, ...options } = {}) =>
+    stream(
+      `/agents/${agentId}/versions/${versionId}/workflow-sandbox-runs`,
+      { message, run_as: runAs || null, conversation_id: conversationId || null },
+      onEvent,
+      options,
+    ),
+  /** "Chạy với tư cách…"'s suggestions, read off the employee views behind
+   *  this version's `data_query` nodes. */
+  askers: (agentId, versionId, q) =>
+    request(`/agents/${agentId}/versions/${versionId}/askers?q=${encodeURIComponent(q || "")}`),
   trialChat: (agentId, versionId, body, onEvent, options) =>
     stream(`/agents/${agentId}/versions/${versionId}/workflow-chat`, body, onEvent, options),
   deployedChat: (agentId, body, onEvent, options) =>

@@ -60,6 +60,11 @@ def ensure_database_sources_owned(db: Session, workflow: WorkflowJSON, owner_id:
         raise WorkflowGraphError("Workflow chưa hợp lệ: " + "; ".join(problem.message for problem in problems))
 
 
+def data_query_configs(workflow: WorkflowJSON) -> list[DataQueryConfig]:
+    """The config of every `data_query` node in `workflow` that parses — what "Chạy với tư cách…" searches behind."""
+    return [config for _, config in _data_query_nodes(workflow)]
+
+
 def owned_source(db: Session, source_id: str, owner_id: int) -> DatabaseSource | None:
     """The Hệ CSDL `source_id` names if it exists and is `owner_id`'s — else `None`, `_owned_knowledge_base`'s rule.
 

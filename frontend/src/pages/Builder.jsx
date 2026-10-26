@@ -432,6 +432,8 @@ export default function BuilderPage({ agent, versionId, setVersionId, notify }) 
   };
 
   const selectedNode = draft ? draft.workflow.nodes.find((node) => node.id === selectedId) || null : null;
+  // A graph that reads a Hệ CSDL is one a trial or an eval case has to ask as somebody (DS-05).
+  const readsDatabase = Boolean(draft) && draft.workflow.nodes.some((node) => node.type === "data_query");
   const selectedSchema = selectedNode && nodeTypes[selectedNode.type] ? nodeTypes[selectedNode.type].config_schema : null;
 
   /* Any click on the canvas — node or background — settles what the floating
@@ -724,6 +726,7 @@ export default function BuilderPage({ agent, versionId, setVersionId, notify }) 
         <SandboxTab
           agentId={agent.id}
           versionId={versionId}
+          readsDatabase={readsDatabase}
           notify={notify}
           onActiveNode={setActiveNodeId}
           onVersionChanged={(status) => setDraft((current) => (current ? { ...current, status } : current))}
@@ -731,7 +734,7 @@ export default function BuilderPage({ agent, versionId, setVersionId, notify }) 
       )}
 
       {!loading && draft && tab === "evaluation" && (
-        <EvaluationTab agentId={agent.id} versionId={versionId} notify={notify} />
+        <EvaluationTab agentId={agent.id} versionId={versionId} readsDatabase={readsDatabase} notify={notify} />
       )}
 
       {!loading && draft && tab === "deploy" && (

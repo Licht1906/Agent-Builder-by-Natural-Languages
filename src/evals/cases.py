@@ -23,6 +23,7 @@ from langchain_core.language_models import BaseChatModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.datasources.access import asker_of
 from src.db.models import EvalCase, EvalCaseOrigin, EvalSuite, PlatformCallPurpose
 from src.evals.model_call import ask
 from src.evals.model_json import UnreadableModelReplyError, json_array
@@ -298,7 +299,16 @@ def list_cases(db: Session, agent_id: int) -> list[EvalCase]:
     )
 
 
-def add_case(db: Session, agent_id: int, version_id: int, *, criterion: str, input_message: str, expected: str) -> EvalCase:
+def add_case(
+    db: Session,
+    agent_id: int,
+    version_id: int,
+    *,
+    criterion: str,
+    input_message: str,
+    expected: str,
+    run_as: str | None = None,
+) -> EvalCase:
     """A case the creator wrote themselves, into `agent_id`'s suite.
 
     Marked `MANUAL`, which is what stops a later generate from being read as
@@ -306,6 +316,8 @@ def add_case(db: Session, agent_id: int, version_id: int, *, criterion: str, inp
     data rather than a claim in a docstring. `version_id` is kept only as
     `introduced_in_version_id` provenance (ADR-0054 §1) — which version the
     creator was looking at when they wrote it, not what the case is scoped to.
+
+    `run_as` is who asks the question (DS-05) — blank is nobody.
     """
     suite = get_or_create_suite(db, agent_id)
     case = EvalCase(
@@ -315,6 +327,7 @@ def add_case(db: Session, agent_id: int, version_id: int, *, criterion: str, inp
         input_message=_required(input_message, "đầu vào"),
         expected=_required(expected, "kỳ vọng"),
         origin=EvalCaseOrigin.MANUAL,
+        run_as=asker_of(run_as),
     )
     db.add(case)
     db.commit()
@@ -329,6 +342,7 @@ def update_case(
     criterion: str | None = None,
     input_message: str | None = None,
     expected: str | None = None,
+    run_as: str | None = None,
 ) -> EvalCase:
     """Change whichever fields were named. `None` means "leave this one alone".
 
@@ -342,6 +356,10 @@ def update_case(
         case.input_message = _required(input_message, "đầu vào")
     if expected is not None:
         case.expected = _required(expected, "kỳ vọng")
+    if run_as is not None:
+        # Blank clears it — `None` here means "leave alone", so blank is how a
+        # creator says "nobody is asking" (DS-05).
+        case.run_as = asker_of(run_as)
     db.commit()
     db.refresh(case)
     return case

@@ -31,7 +31,7 @@ run the creator actually watched.
 """
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -41,6 +41,7 @@ from src.agents.costs import CostFigure
 from src.agents.runtime import Conversation, RunServices
 from src.agents.threads import RunIdentity, ThreadNamespace, ThreadRef
 from src.config import get_settings
+from src.datasources.reader import DatabaseReader
 from src.db.models import EvalCase, EvalRun, RunApprovalStatus
 from src.evals.applicability import Applicability, applicability_of, as_case_applicability, ungrounded_reason
 from src.evals.checks import (
@@ -137,6 +138,9 @@ class _Subject:
     version_id: int
     services: EvalServices
     knowledge: KnowledgeStore
+    #: The door every case's `data_query` reads go through — asked by each
+    #: case's own `run_as` (DS-05). `None` reads nothing, as on any unwired run.
+    databases: DatabaseReader | None = None
 
 
 async def run_workflow_eval(
@@ -149,6 +153,7 @@ async def run_workflow_eval(
     services: EvalServices,
     knowledge: KnowledgeStore,
     success_criteria: frozenset[str],
+    databases: DatabaseReader | None = None,
 ) -> EvalRun:
     """Run every case against `workflow` in sandbox mode, score the set, and store the run.
 
@@ -176,7 +181,12 @@ async def run_workflow_eval(
         )
     threshold = read_config(db).eval_pass_threshold
     subject = _Subject(
-        workflow=workflow, agent_id=agent_id, version_id=version_id, services=services, knowledge=knowledge
+        workflow=workflow,
+        agent_id=agent_id,
+        version_id=version_id,
+        services=services,
+        knowledge=knowledge,
+        databases=databases,
     )
     results: list[EvalCaseResult] = []
     skipped: list[SkippedCase] = []
@@ -202,7 +212,7 @@ async def _result_for(case: EvalCase, subject: _Subject, *, applicability: Appli
     unfinished run fail the case with the runtime's reason (ADR-0011 §3).
     """
     check = check_of(case.expected_check)
-    record = await _eval_run(case.input_message, subject, scripted=_scripted_for(check))
+    record = await _eval_run(case.input_message, _asked_by(subject, case.run_as), scripted=_scripted_for(check))
     verdict = None if check is None else grade_check(check, record.transcript)
     if verdict is not None and verdict.safety_violation:
         return _result(case, check, record, verdict, applicability)
@@ -531,6 +541,11 @@ async def run_case_once(
     return await _eval_run(message, subject, scripted=scripted)
 
 
+def _asked_by(subject: _Subject, run_as: str | None) -> _Subject:
+    """`subject` with its reader asked by one case's `run_as` (DS-05) — a case is a question somebody asks."""
+    return subject if subject.databases is None else replace(subject, databases=subject.databases.asked_by(run_as))
+
+
 async def _eval_run(message: str, subject: _Subject, *, scripted: ScriptedApprovals) -> _RunRecord:
     """One case's run, start to finish, kept as a transcript and an answer.
 
@@ -566,6 +581,7 @@ async def _eval_run(message: str, subject: _Subject, *, scripted: ScriptedApprov
             services=run_services,
             conversation=conversation,
             knowledge=subject.knowledge,
+            databases=subject.databases,
             sandbox=True,
             identity=identity,
             scripted_approvals=scripted,
