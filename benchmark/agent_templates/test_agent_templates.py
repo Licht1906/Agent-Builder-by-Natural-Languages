@@ -105,15 +105,20 @@ def test_capabilities_are_actually_in_the_graph(path: pathlib.Path) -> None:
 
 
 def test_the_fleet_covers_every_node_type_it_can() -> None:
-    """Tám trên chín loại node phải xuất hiện đâu đó trong bộ này.
+    """Tám trên mười loại node phải xuất hiện đâu đó trong bộ này.
 
-    `web_search` là loại thứ chín và cố tình vắng: nó đi tới bản cài đặt thật và
-    bản cài đặt thật đòi `SEARCH_API_KEY`, không có khoá thì node ghi một dòng
-    từ chối vào transcript. Một mục benchmark mà bước giữa luôn hỏng thì không đo
-    được gì về agent — thêm nó vào là thêm một ô luôn đỏ.
+    `web_search` cố tình vắng: nó đi tới bản cài đặt thật và bản cài đặt thật
+    đòi `SEARCH_API_KEY`, không có khoá thì node ghi một dòng từ chối vào
+    transcript. Một mục benchmark mà bước giữa luôn hỏng thì không đo được gì về
+    agent — thêm nó vào là thêm một ô luôn đỏ.
+
+    `data_query` (DS-04) vắng vì cùng lý do: nó đọc một Hệ CSDL đã đăng ký, cho
+    một người hỏi cụ thể, theo quy tắc truy cập đã lưu. Không có cả ba thì node
+    luôn ghi "không đọc được" — một ô luôn đỏ nữa — cho tới khi DB mẫu (DS-23)
+    và "Chạy với tư cách…" (DS-05) cho benchmark thứ để đọc.
     """
     seen: set[NodeType] = set()
     for path in fixtures():
         workflow = WorkflowJSON.model_validate(load(path)["workflow"])
         seen |= {node.type for node in workflow.nodes}
-    assert set(NodeType) - seen == {NodeType.WEB_SEARCH}
+    assert set(NodeType) - seen == {NodeType.WEB_SEARCH, NodeType.DATA_QUERY}

@@ -1,5 +1,5 @@
 /* ============================================================
-   How the canvas draws each of the backend's nine node types.
+   How the canvas draws each of the backend's ten node types.
 
    Only what a *picture* needs is here — an icon, a colour, a human label. The
    things that change behaviour, `outputs` and `config_schema`, come from
@@ -8,11 +8,12 @@
    in the browser is how a canvas ends up offering a handle the validator
    refuses, with nothing on screen saying why.
    ============================================================ */
-import { Bot, BookOpen, Globe, Plug, GitBranch, RefreshCw, ShieldCheck, Flag, ClipboardList } from "lucide-react";
+import { Bot, BookOpen, Database, Globe, Plug, GitBranch, RefreshCw, ShieldCheck, Flag, ClipboardList } from "lucide-react";
 
 export const NODE_LOOK = {
   agent_llm: { label: "Agent / LLM", icon: Bot, color: "#7c3aed" },
   knowledge_search: { label: "Knowledge Search", icon: BookOpen, color: "#38bdf8" },
+  data_query: { label: "Data Query", icon: Database, color: "#6366f1" },
   web_search: { label: "Web Search", icon: Globe, color: "#0ea5e9" },
   collect: { label: "Collect", icon: ClipboardList, color: "#14b8a6" },
   mcp: { label: "MCP Service", icon: Plug, color: "#f97316" },
@@ -32,6 +33,7 @@ export const lookOf = (type) => NODE_LOOK[type] || FALLBACK;
 export const PALETTE_ORDER = [
   "agent_llm",
   "knowledge_search",
+  "data_query",
   "web_search",
   "collect",
   "mcp",

@@ -16,13 +16,18 @@
      activity  những gì run *làm*: gọi tool, quyết định duyệt, dừng vì ngân
                sách, lỗi — vẽ thành chip, không bao giờ thành bong bóng
      approval  thẻ "đang chờ duyệt", với quyết định nếu đã có
-     sources   trích dẫn của knowledge_search
+     sources   trích dẫn của knowledge_search và data_query (CITING_TOOLS)
      pending   run còn đang chạy vào lượt này
      failed    lượt kết thúc bằng một lỗi
 
    Không có React ở đây, cố ý: mọi quyết định "cái này hiện ra sao" là một
    hàm thuần trên dữ liệu, và bài test gọi thẳng nó.
    ============================================================ */
+
+/** Những tool mà kết quả mang trích dẫn — hiện ở panel "Nguồn tham khảo",
+ *  không thành chip. `data_query` (DS-04) trích dẫn Hệ CSDL + view + bộ lọc
+ *  theo đúng hình dạng `Citation` của `knowledge_search`. */
+export const CITING_TOOLS = new Set(["knowledge_search", "data_query"]);
 
 /** Một lượt trống, vừa được mở để run viết vào. */
 export function newTurn() {
@@ -112,7 +117,7 @@ export function runReducer() {
         };
 
       case "tool_result": {
-        if (data.tool === "knowledge_search") {
+        if (CITING_TOOLS.has(data.tool)) {
           const entry = { ok: data.ok, result: data.result, citations: data.citations || [] };
           return { ...turn, sources: [...turn.sources, entry] };
         }

@@ -428,6 +428,16 @@ export const VI = {
   /* ── Node types ── */
   "Agent / LLM": "Agent / LLM",
   "Knowledge Search": "Tìm trong tài liệu",
+  /* ── data_query node (DS-04) ── */
+  "Data Query": "Truy vấn dữ liệu",
+  "Max rows": "Số dòng tối đa",
+  "Which database this step reads — click to pick": "Bước này đọc Hệ CSDL nào — bấm để chọn",
+  "Views": "View",
+  "Which views this step may read — click to pick": "Bước này được đọc những view nào — bấm để chọn",
+  "Pick a database first, then its ticked views appear here.": "Chọn Hệ CSDL trước, các view đã tick của nó sẽ hiện ở đây.",
+  "This database has no ticked views yet — tick some on the Data sources page.":
+    "Hệ CSDL này chưa có view nào được tick — tick ở trang Nguồn dữ liệu.",
+  "{view} (not ticked)": "{view} (chưa được tick)",
   "Web Search": "Tìm trên web",
   "MCP Service": "Dịch vụ MCP",
   "Collect": "Thu thập thông tin",

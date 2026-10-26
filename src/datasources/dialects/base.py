@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
+from src.datasources.query import StructuredQuery
+
 
 class ProbeFailure(StrEnum):
     """Why a probe of a Hệ CSDL did not get as far as listing its views."""
@@ -30,6 +32,8 @@ class ProbeFailure(StrEnum):
     DATABASE_NOT_FOUND = "database_not_found"
     PERMISSION_DENIED = "permission_denied"
     SERVER_ERROR = "server_error"
+    QUERY_FAILED = "query_failed"
+    QUERY_TIMEOUT = "query_timeout"
     DSN_MISSING = "dsn_missing"
     DSN_UNREADABLE = "dsn_unreadable"
 
@@ -50,6 +54,8 @@ FAILURE_DETAIL: dict[ProbeFailure, str] = {
     ProbeFailure.DATABASE_NOT_FOUND: "Máy chủ không có database mà DSN chỉ tới",
     ProbeFailure.PERMISSION_DENIED: "Tài khoản trong DSN không có quyền đọc các view này",
     ProbeFailure.SERVER_ERROR: "CSDL trả về lỗi khi đọc danh sách view — thử lại sau",
+    ProbeFailure.QUERY_FAILED: "CSDL không chạy được truy vấn này — kiểm tra kiểu giá trị của bộ lọc",
+    ProbeFailure.QUERY_TIMEOUT: "Truy vấn chạy quá 5 giây nên bị dừng — thu hẹp bộ lọc hoặc giảm số dòng",
     ProbeFailure.DSN_MISSING: "Chưa có DSN cho Hệ CSDL này — nhập lại DSN",
     ProbeFailure.DSN_UNREADABLE: "Không giải mã được DSN đã lưu — nhập lại DSN",
 }
@@ -92,6 +98,31 @@ class ColumnRef:
     column: str
 
 
+@dataclass(frozen=True, slots=True)
+class QueryRequest:
+    """One checked structured query, and everything about the asker the SQL has to carry.
+
+    `scope` is the `Where` pairs of `scope_on` — empty for `All`, and never
+    built for a `Deny`, which is decided before a dialect is reached at all.
+    `session_attributes` is the asker's attributes, set on the database session so a
+    customer's own row-level security can see them too (ADR-0059 §6).
+    """
+
+    query: StructuredQuery
+    view_columns: tuple[str, ...]
+    scope: tuple[tuple[str, Any], ...]
+    session_attributes: Mapping[str, Any]
+    limit: int
+
+
+@dataclass(frozen=True, slots=True)
+class QueryRows:
+    """What a query returned: the column names, then the rows in that order."""
+
+    columns: tuple[str, ...]
+    rows: tuple[tuple[Any, ...], ...]
+
+
 #: `(match, value, columns) -> {column: value}` for the one row of `match.view`
 #: whose `match.column` equals `value`, or `None` for no row or several — the
 #: access engine's single read (`src.datasources.access.resolve_principal`).
@@ -99,12 +130,7 @@ IdentityLookup = Callable[[ColumnRef, Any, tuple[str, ...]], Mapping[str, Any] |
 
 
 class Dialect(Protocol):
-    """One database engine, as far as a Hệ CSDL needs it today.
-
-    Compiling a structured query and setting the asker's session attributes
-    join this interface with `data_query` (DS-04), the first caller that
-    needs either — defining them before there is a query type to compile
-    would be guessing at its shape.
+    """One database engine, as far as a Hệ CSDL needs it.
 
     Every method takes the DSN and the trusted hosts and dials through the
     same checks; none keeps a connection past its own call.
@@ -120,6 +146,10 @@ class Dialect(Protocol):
 
     def distinct_values(self, dsn: str, column: ColumnRef, *, trusted_hosts: frozenset[str]) -> list[Any]:
         """The distinct non-null values of `column`, sorted — the spec form's list of positions. Capped."""
+        ...
+
+    def run_query(self, dsn: str, request: QueryRequest, *, trusted_hosts: frozenset[str]) -> QueryRows:
+        """`request.query` compiled for this engine — values bound, scope ANDed in, read-only. Raises `DatabaseProbeError`."""
         ...
 
 

@@ -115,6 +115,15 @@ describe("runReducer — lượt sống", () => {
     expect(turn.activity).toEqual([]);
   });
 
+  it("data_query cũng đi vào sources — trích dẫn của Hệ CSDL hiện như của tài liệu", () => {
+    const citation = { doc_name: "ERP staging · v_ar_open", section_path: "lọc: days_overdue > 30", page_number: null, text: "C1 | 45" };
+    const turn = play(runReducer(), newTurn(), [
+      ["tool", { node_id: "q", tool: "data_query", args: { view: "v_ar_open" } }],
+      ["tool_result", { node_id: "q", tool: "data_query", ok: true, result: "C1 | 45", citations: [citation] }],
+    ]);
+    expect(turn.sources).toEqual([{ ok: true, result: "C1 | 45", citations: [citation] }]);
+  });
+
   it("tool thất bại và không ai nói sau đó: lượt nói lý do, đánh dấu lỗi", () => {
     const turn = settle(play(runReducer(), newTurn(), [
       ["tool", { node_id: "m", tool: "gmail.send_email", args: {} }],

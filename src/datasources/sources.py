@@ -39,6 +39,7 @@ from src.datasources.dialects import (
     schema_problems,
 )
 from src.db.models import Agent, AgentVersion, DatabaseDialect, DatabaseSource, DatabaseSourceStatus
+from src.models.node_registry import NodeType
 from src.models.solution_spec import AgentSolutionSpecification, DataSourceKind
 from src.services.secret_store import SecretNotFoundError, SecretStore, SecretUnreadableError
 
@@ -154,7 +155,7 @@ def run_database_test(
     split between a missing credential and a broken one).
     """
     try:
-        dsn = _dsn_of(source, secret_store)
+        dsn = dsn_of(source, secret_store)
         found = dialect_for(source.dialect).introspect(dsn, trusted_hosts=trusted_hosts)
     except DatabaseProbeError as exc:
         status = DatabaseSourceStatus.NEEDS_DSN if exc.reason in _NO_DSN else DatabaseSourceStatus.FAILED
@@ -203,6 +204,20 @@ def scope_on(source: DatabaseSource, principal: Principal | None, view: str) -> 
     rather than trusting the half that still fits); a view that is not
     ticked at all. Mặc định cấm, here as in the engine.
     """
+    closed = closed_deny(source, view)
+    if closed is not None:
+        return closed
+    rules = access_rules_of(source)
+    assert rules is not None  # `closed_deny` denies a source without rules
+    return scope_for(rules, principal, view)
+
+
+def closed_deny(source: DatabaseSource, view: str) -> Deny | None:
+    """The `Deny` `scope_on` gives before it ever looks at an asker — or `None` if `view` is open to rules at all.
+
+    Asked on its own by the reader before it looks the asker up, so a source
+    whose rules no longer fit never has its employee view read either.
+    """
     rules = access_rules_of(source)
     if rules is None:
         return Deny(cause=DenyCause.NO_RULES)
@@ -210,7 +225,7 @@ def scope_on(source: DatabaseSource, principal: Principal | None, view: str) -> 
         return Deny(cause=DenyCause.RULES_OUT_OF_DATE)
     if view not in source.allowed_views:
         return Deny(cause=DenyCause.VIEW_NOT_ALLOWED)
-    return scope_for(rules, principal, view)
+    return None
 
 
 def distinct_column_values(
@@ -226,7 +241,7 @@ def distinct_column_values(
         raise ColumnNotReadableError(f"view {column.view} chưa được tick cho phép")
     if column.column not in source.view_columns.get(column.view, []):
         raise ColumnNotReadableError(f"view {column.view} không có cột {column.column}")
-    dsn = _dsn_of(source, secret_store)
+    dsn = dsn_of(source, secret_store)
     return dialect_for(source.dialect).distinct_values(dsn, column, trusted_hosts=trusted_hosts)
 
 
@@ -253,7 +268,7 @@ def _problems_with(source: DatabaseSource, rules: AccessRules) -> list[str]:
     return access_problems(rules, allowed_views=source.allowed_views, snapshot=snapshot_of(source))
 
 
-def _dsn_of(source: DatabaseSource, secret_store: SecretStore) -> str:
+def dsn_of(source: DatabaseSource, secret_store: SecretStore) -> str:
     """The plaintext DSN, for the dialect only. Raises `DatabaseProbeError` when there is none to read."""
     if not source.dsn_secret_ref:
         raise DatabaseProbeError(ProbeFailure.DSN_MISSING)
@@ -304,26 +319,40 @@ def _store_dsn(source: DatabaseSource, dsn: str, secret_store: SecretStore) -> N
 def _agents_reading_from(db: Session, source: DatabaseSource) -> list[str]:
     """The names of `source`'s owner's agents with any version whose spec has a `database` source naming it.
 
-    Read off the stored JSON rather than `AgentSolutionSpecification`: a
-    version mid-interview holds a partial spec that would not validate, and
-    it still names this source. A `data_query` node's `source_id` (DS-04)
-    joins this check when that node exists.
+    Two places name one: a spec's `database` source `ref`, and a `data_query`
+    node's `source_id` (DS-04). The spec is read off the stored JSON rather
+    than `AgentSolutionSpecification` — a version mid-interview holds a
+    partial spec that would not validate, and it still names this source.
     """
-    ref = str(source.id)
     rows = db.execute(
-        select(Agent.name, AgentVersion.solution_spec)
+        select(Agent.name, AgentVersion.solution_spec, AgentVersion.workflow)
         .join(AgentVersion, AgentVersion.agent_id == Agent.id)
-        .where(Agent.owner_id == source.owner_id, AgentVersion.solution_spec.is_not(None))
+        .where(Agent.owner_id == source.owner_id)
     ).all()
-    names = [
-        name
-        for name, spec in rows
-        if any(
-            isinstance(entry, dict) and entry.get("kind") == DataSourceKind.DATABASE and entry.get("ref") == ref
-            for entry in (spec or {}).get("data", [])
-        )
-    ]
+    names = [name for name, spec, workflow in rows if _names_source(spec, workflow, source.id)]
     return list(dict.fromkeys(names))
+
+
+def _names_source(spec: dict[str, Any] | None, workflow: dict[str, Any] | None, source_id: int) -> bool:
+    """Whether a version's spec or graph names the Hệ CSDL `source_id` — both read as stored JSON, unvalidated.
+
+    Unvalidated on purpose, for the reason the docstring above gives the
+    spec: a half-drawn graph that would not pass `WorkflowJSON` still names
+    this source, and must still keep it from being deleted under it.
+    """
+    ref = str(source_id)
+    if any(
+        isinstance(entry, dict) and entry.get("kind") == DataSourceKind.DATABASE and entry.get("ref") == ref
+        for entry in (spec or {}).get("data", [])
+    ):
+        return True
+    return any(
+        isinstance(node, dict)
+        and node.get("type") == NodeType.DATA_QUERY
+        and isinstance(node.get("config"), dict)
+        and str(node["config"].get("source_id", "")) == ref
+        for node in (workflow or {}).get("nodes", [])
+    )
 
 
 def _persist(db: Session, source: DatabaseSource) -> DatabaseSource:

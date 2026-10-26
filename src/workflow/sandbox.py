@@ -54,6 +54,7 @@ from src.agents.sandbox import (
 )
 from src.agents.spend import run_cost_row
 from src.agents.threads import RunIdentity
+from src.datasources.reader import DatabaseReader
 from src.db.base import SessionLocal
 from src.db.models import RunOutcome
 from src.models.schemas import SandboxTranscriptEntry
@@ -229,6 +230,7 @@ async def stream_workflow_sandbox_run(
     conversation: Conversation,
     knowledge: KnowledgeStore,
     resume: tuple[ParkedLeg, Resumption] | None = None,
+    databases: DatabaseReader | None = None,
 ) -> AsyncIterator[SandboxStreamEvent]:
     """Trial `workflow` against `message`, recording everything, and close with the stored run.
 
@@ -265,6 +267,7 @@ async def stream_workflow_sandbox_run(
             services=services,
             conversation=conversation,
             knowledge=knowledge,
+            databases=databases,
             sandbox=True,
             identity=leg.identity if leg is not None else identity,
             resume=resumption,

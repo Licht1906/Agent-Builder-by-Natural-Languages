@@ -13,6 +13,8 @@ from src.datasources.dialects.base import (
     IdentityLookup,
     Introspection,
     ProbeFailure,
+    QueryRequest,
+    QueryRows,
     ViewInfo,
     schema_problems,
 )
@@ -26,6 +28,8 @@ __all__ = [
     "IdentityLookup",
     "Introspection",
     "ProbeFailure",
+    "QueryRequest",
+    "QueryRows",
     "ViewInfo",
     "dialect_for",
     "schema_problems",

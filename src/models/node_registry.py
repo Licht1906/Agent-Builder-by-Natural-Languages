@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class NodeType(StrEnum):
-    """The eight ADR-0021 fixed for the MVP, plus `collect` (ADR-0052).
+    """The eight ADR-0021 fixed for the MVP, plus `collect` (ADR-0052) and `data_query` (ADR-0059 §5).
 
     Written snake_case on the wire like every other enum in the platform, rather
     than the `AgentLlm` spelling the ADRs use in prose — a stored document and a
@@ -46,6 +46,7 @@ class NodeType(StrEnum):
     AGENT_LLM = "agent_llm"
     END = "end"
     KNOWLEDGE_SEARCH = "knowledge_search"
+    DATA_QUERY = "data_query"
     MCP = "mcp"
     WEB_SEARCH = "web_search"
     IF_ELSE = "if_else"
@@ -186,6 +187,38 @@ class KnowledgeSearchConfig(NodeConfig):
         default_factory=list,
         description="Id của các Knowledge Base được tìm trong",
         json_schema_extra=RESOURCE_REF,
+    )
+
+
+#: A `data_query` node's row ceiling when nobody chose one — the spec's own number.
+DEFAULT_MAX_ROWS = 200
+
+
+class DataQueryConfig(NodeConfig):
+    """Which Hệ CSDL this node reads, which of its views, and at most how many rows — DS-04 / ADR-0059 §5.
+
+    Both `source_id` and `views` address the creator's own database, so both
+    are `RESOURCE_REF`: picked by a person on the canvas, never named by a
+    model reading a description, and cleared when a graph is saved as a
+    template. `views` must stay inside the Hệ CSDL's ticked views — checked at
+    confirm time, and again on every read.
+    """
+
+    source_id: str = Field(default="", description="Id của Hệ CSDL node này đọc", json_schema_extra=RESOURCE_REF)
+    views: list[str] = Field(
+        default_factory=list,
+        description="Các view node này được đọc — trong số view đã tick của Hệ CSDL",
+        json_schema_extra=RESOURCE_REF,
+    )
+    # `OPTIONAL`: left out, the ceiling is the spec's own 200 — a complete
+    # answer, not a field still waiting (`unfilled_fields` would otherwise
+    # strand every node drawn without one at the confirm gate).
+    max_rows: int = Field(
+        default=DEFAULT_MAX_ROWS,
+        ge=1,
+        le=1000,
+        description="Trần số dòng của mỗi lần đọc",
+        json_schema_extra=OPTIONAL,
     )
 
 
@@ -431,6 +464,7 @@ NODE_REGISTRY: dict[NodeType, NodeTypeSpec] = {
     NodeType.AGENT_LLM: NodeTypeSpec(NodeType.AGENT_LLM, AgentLlmConfig, ("done",)),
     NodeType.END: NodeTypeSpec(NodeType.END, EndConfig, ()),
     NodeType.KNOWLEDGE_SEARCH: NodeTypeSpec(NodeType.KNOWLEDGE_SEARCH, KnowledgeSearchConfig, ("found",)),
+    NodeType.DATA_QUERY: NodeTypeSpec(NodeType.DATA_QUERY, DataQueryConfig, ("done",)),
     NodeType.COLLECT: NodeTypeSpec(NodeType.COLLECT, CollectConfig, ("complete", "incomplete")),
     NodeType.MCP: NodeTypeSpec(NodeType.MCP, McpConfig, ("done",)),
     NodeType.WEB_SEARCH: NodeTypeSpec(NodeType.WEB_SEARCH, WebSearchConfig, ("done",)),

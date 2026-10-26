@@ -7,6 +7,7 @@ import { AgentBusy } from "../../components/mascot";
 import { useAgentActivity } from "../../components/agent-presence";
 import { useLang } from "../../i18n";
 import SourcesPanel from "../../components/SourcesPanel";
+import { CITING_TOOLS } from "../../lib/turns";
 
 /* ============================================================
    A real sandbox run (#46): one SSE stream, rendered as it arrives.
@@ -279,11 +280,11 @@ function TraceLine({ line }) {
 
   if (line.kind === "tool" || line.kind === "tool_result") {
     const failed = line.kind === "tool_result" && line.ok === false;
-    // RAG-14 / #100: a `knowledge_search` result renders its structured
+    // RAG-14 / #100: a `knowledge_search` (or `data_query`, DS-04) result renders its structured
     // citations, not the raw text blob every other tool still gets — the
     // sandbox transcript is the same evidence a deployed chat's "Nguồn tham
     // khảo" panel is built from, so it reads the same way here.
-    const isKnowledgeSearch = line.kind === "tool_result" && line.tool === "knowledge_search";
+    const isCiting = line.kind === "tool_result" && CITING_TOOLS.has(line.tool);
     return (
       <div className="ab-trace-item" style={failed ? { borderColor: "rgba(239,68,68,.3)" } : undefined}>
         <div style={{ width: 26, flexShrink: 0, textAlign: "center", color: "var(--ab-muted)", fontSize: "var(--text-xs)" }} className="ab-mono">
@@ -295,7 +296,7 @@ function TraceLine({ line }) {
             {line.simulated && <span className="ab-chip" style={{ color: "var(--ab-warn)", borderColor: "rgba(245,158,11,.3)" }}>{t('simulated')}</span>}
             {failed && <span className="ab-chip" style={{ color: "#f87171", borderColor: "rgba(239,68,68,.3)" }}>{t('failed')}</span>}
           </div>
-          {isKnowledgeSearch ? (
+          {isCiting ? (
             <SourcesPanel entries={[{ ok: line.ok, result: line.result, citations: line.citations }]} />
           ) : (
             <pre className="ab-mono" style={{ fontSize: "var(--text-xs)", color: "color-mix(in srgb, var(--color-text) 65%, transparent)", background: "var(--color-surface)", border: "1px solid var(--color-divider)", borderRadius: 0, padding: "var(--space-1) var(--space-2)", margin: "6px 0 0", whiteSpace: "pre-wrap", overflowX: "auto" }}>

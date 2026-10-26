@@ -44,6 +44,7 @@ from src.api.agent_routes import (
 )
 from src.api.deployment_access import Caller, MeteredAgent
 from src.auth.dependencies import CurrentUser
+from src.datasources.reader import DatabaseReader, get_database_reader
 from src.db.base import get_db
 from src.db.models import Agent, AgentVersion
 from src.models.schemas import ApprovalDecisionRequest, SandboxRunRequest, WorkflowChatRequest
@@ -69,6 +70,8 @@ router = APIRouter(prefix="/agents", tags=["workflow"])
 #: A dependency rather than something the runtime reaches for, so a test grounds a
 #: run in documents it wrote itself — see `src.workflow.knowledge`.
 Knowledge = Annotated[KnowledgeStore, Depends(get_knowledge_store)]
+#: What a `data_query` node reads through — `Knowledge`'s twin for a Hệ CSDL (DS-04).
+Databases = Annotated[DatabaseReader, Depends(get_database_reader)]
 
 #: The request's own session, for the two endpoints here that read and write rows
 #: rather than only streaming. The streaming ones deliberately do not take it:
@@ -85,6 +88,7 @@ async def chat_with_my_versions_workflow(
     start_run: StartRun,
     checkpointer: Checkpointer,
     knowledge: Knowledge,
+    databases: Databases,
 ) -> StreamingResponse:
     """Run this version's confirmed workflow against one message — user story #17.
 
@@ -108,7 +112,7 @@ async def chat_with_my_versions_workflow(
     conversation = conversation_for(agent, checkpointer, ThreadAddress(payload.conversation_id, ThreadNamespace.TRIAL))
     run = start_run(version.id, conversation)
     return StreamingResponse(
-        _workflow_event_stream(workflow, payload.message, run, knowledge),
+        _workflow_event_stream(workflow, payload.message, run, knowledge, databases),
         media_type="text/event-stream",
     )
 
@@ -121,6 +125,7 @@ async def chat_with_deployed_workflow(
     start_run: StartRun,
     checkpointer: Checkpointer,
     knowledge: Knowledge,
+    databases: Databases,
     db: Db,
 ) -> StreamingResponse:
     """Talk to a **published** agent whose version runs a workflow — V2's end-user door.
@@ -166,7 +171,7 @@ async def chat_with_deployed_workflow(
     db.commit()
     run = start_run(deployed_version(agent).id, conversation)
     return StreamingResponse(
-        _workflow_event_stream(workflow, payload.message, run, knowledge),
+        _workflow_event_stream(workflow, payload.message, run, knowledge, databases),
         media_type="text/event-stream",
     )
 
@@ -265,6 +270,7 @@ async def _workflow_event_stream(
     message: str,
     run: Run,
     knowledge: KnowledgeStore,
+    databases: DatabaseReader,
     *,
     resume: Resumption | None = None,
 ) -> AsyncIterator[str]:
@@ -298,6 +304,7 @@ async def _workflow_event_stream(
             services=run.services,
             conversation=run.conversation,
             knowledge=knowledge,
+            databases=databases,
             sandbox=False,
             identity=run.identity,
             resume=resume,
@@ -316,6 +323,7 @@ async def _workflow_sandbox_stream(
     message: str,
     run: Run,
     knowledge: KnowledgeStore,
+    databases: DatabaseReader,
     *,
     resume: tuple[ParkedLeg, Resumption] | None = None,
 ) -> AsyncIterator[str]:
@@ -344,6 +352,7 @@ async def _workflow_sandbox_stream(
         services=run.services,
         conversation=run.conversation,
         knowledge=knowledge,
+        databases=databases,
         resume=resume,
     ):
         yield sse_line(event["event"], event["data"])
@@ -381,6 +390,7 @@ async def decide_and_resume_my_versions_run(
     start_run: StartRun,
     checkpointer: Checkpointer,
     knowledge: Knowledge,
+    databases: Databases,
 ) -> StreamingResponse:
     """Decide one pending approval, and stream the rest of the run it was holding up.
 
@@ -426,9 +436,9 @@ async def decide_and_resume_my_versions_run(
     # something before this request existed, and a record naming the approver's
     # click as the user's question would describe a run that never happened.
     stream = (
-        _workflow_sandbox_stream(workflow, leg.input_message, run, knowledge, resume=(leg, resumption))
+        _workflow_sandbox_stream(workflow, leg.input_message, run, knowledge, databases, resume=(leg, resumption))
         if leg.sandbox
-        else _workflow_event_stream(workflow, leg.input_message, run, knowledge, resume=resumption)
+        else _workflow_event_stream(workflow, leg.input_message, run, knowledge, databases, resume=resumption)
     )
     return StreamingResponse(stream, media_type="text/event-stream")
 
@@ -441,6 +451,7 @@ async def trial_run_my_versions_workflow(
     start_run: StartRun,
     checkpointer: Checkpointer,
     knowledge: Knowledge,
+    databases: Databases,
 ) -> StreamingResponse:
     """Trial one of the caller's own confirmed workflows — see #46 / ADR-0026 / ADR-0032.
 
@@ -462,6 +473,6 @@ async def trial_run_my_versions_workflow(
     conversation = conversation_for(agent, checkpointer, ThreadAddress(payload.conversation_id, ThreadNamespace.TRIAL))
     run = start_run(version.id, conversation)
     return StreamingResponse(
-        _workflow_sandbox_stream(workflow, payload.message, run, knowledge),
+        _workflow_sandbox_stream(workflow, payload.message, run, knowledge, databases),
         media_type="text/event-stream",
     )

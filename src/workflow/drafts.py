@@ -38,6 +38,7 @@ document written to `AgentVersion`, and no other write path in.
 from sqlalchemy.orm import Session
 
 from src.agents.versions import WORKFLOW_FORKABLE, wrong_stage
+from src.datasources.graph import ensure_database_sources_owned
 from src.db.models import AgentVersion, VersionStatus
 from src.models.workflow import WorkflowJSON
 from src.workflow.generator import WorkflowStageError, workflow_of
@@ -107,6 +108,7 @@ def confirm_workflow(db: Session, version: AgentVersion) -> AgentVersion:
     workflow = workflow_of(version)
     ensure_confirmable(workflow)
     ensure_knowledge_bases_owned(db, workflow, version.agent.owner_id)
+    ensure_database_sources_owned(db, workflow, version.agent.owner_id)
     version.status = VersionStatus.WORKFLOW_CONFIRMED
     return _persist(db, version)
 

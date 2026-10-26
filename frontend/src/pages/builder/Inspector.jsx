@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Trash2, Flag, AlertCircle, Plus, Server, ChevronRight, X } from "lucide-react";
+import * as api from "../../lib/api";
 import { lookOf } from "../../lib/nodes";
 import KnowledgeBasePicker from "../../components/KnowledgeBasePicker";
 import AddMcpServer, { BUILT_IN_LOOK } from "../../components/AddMcpServer";
@@ -79,6 +80,7 @@ export default function Inspector({ node, schema, problems, tools, readOnly, isS
             mcpNodeIds={mcpNodeIds}
             readOnly={readOnly}
             onChange={(value) => onConfig(node.id, { [name]: value })}
+            onPatch={(patch) => onConfig(node.id, patch)}
           />
         ))
       )}
@@ -257,7 +259,7 @@ function LongTextField({ label, description, value, readOnly, onChange, array = 
   );
 }
 
-function ConfigField({ name, field: declared, schema, value, node, mcpNodeIds = [], readOnly, onChange }) {
+function ConfigField({ name, field: declared, schema, value, node, mcpNodeIds = [], readOnly, onChange, onPatch }) {
   const { t } = useLang();
   const field = resolved(declared, schema);
   const description = field.description || "";
@@ -285,6 +287,23 @@ function ConfigField({ name, field: declared, schema, value, node, mcpNodeIds = 
   // a shelf" form, which is exactly the depth that opens centred.
   if (node.type === "knowledge_search" && name === "source_ids") {
     return <KnowledgeSourcesField value={value} readOnly={readOnly} onChange={onChange} />;
+  }
+
+  // A `data_query` node's two RESOURCE_REF fields (DS-04): the Hệ CSDL from the
+  // creator's own list, and views only from those ticked on it — never typed.
+  if (node.type === "data_query" && name === "source_id") {
+    // A new Hệ CSDL empties `views` in the same patch: views picked on the old
+    // one mean nothing on this one, and a same-named view would be kept silently.
+    return (
+      <DatabaseSourceField
+        value={value}
+        readOnly={readOnly}
+        onChange={(sourceId) => onPatch({ source_id: sourceId, views: [] })}
+      />
+    );
+  }
+  if (node.type === "data_query" && name === "views") {
+    return <DatabaseViewsField sourceId={node.config.source_id} value={value} readOnly={readOnly} onChange={onChange} />;
   }
 
   // A closed set of values, so a closed set of choices. Placed above the
@@ -356,6 +375,87 @@ function KnowledgeSourcesField({ value, readOnly, onChange }) {
       />
       <ConfigDialog title={t("Knowledge Bases")} open={open} onClose={() => setOpen(false)}>
         <KnowledgeBasePicker selected={value} onChange={onChange} disabled={readOnly} />
+      </ConfigDialog>
+    </>
+  );
+}
+
+/** The creator's Hệ CSDL, fetched once per field that needs them. `null` while loading. */
+function useDatabaseSources() {
+  const [sources, setSources] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.databaseSources.list().then((rows) => !cancelled && setSources(rows)).catch(() => !cancelled && setSources([]));
+    return () => { cancelled = true; };
+  }, []);
+  return sources;
+}
+
+function DatabaseSourceField({ value, readOnly, onChange }) {
+  const { t } = useLang();
+  const [open, setOpen] = useState(false);
+  const sources = useDatabaseSources();
+  const chosen = (sources || []).find((source) => String(source.id) === String(value));
+  const summary = !value ? t("Not filled in yet") : chosen ? chosen.name : t("Database #{id} (missing)", { id: value });
+  return (
+    <>
+      <FieldRow label={t("Database")} summary={summary} warn={!chosen} title={t("Which database this step reads — click to pick")} onOpen={() => setOpen(true)} />
+      <ConfigDialog title={t("Database")} open={open} onClose={() => setOpen(false)}>
+        {sources && sources.length === 0 && (
+          <p className="text-muted" style={{ margin: 0 }}>{t("No database registered yet — add one on the Data sources page.")}</p>
+        )}
+        <div role="radiogroup" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {(sources || []).map((source) => (
+            <label key={source.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="radio"
+                name="data-query-source"
+                aria-label={source.name}
+                disabled={readOnly}
+                checked={String(source.id) === String(value)}
+                onChange={() => onChange(String(source.id))}
+              />
+              {source.name}
+            </label>
+          ))}
+        </div>
+      </ConfigDialog>
+    </>
+  );
+}
+
+function DatabaseViewsField({ sourceId, value, readOnly, onChange }) {
+  const { t } = useLang();
+  const [open, setOpen] = useState(false);
+  const sources = useDatabaseSources();
+  const chosen = new Set(value || []);
+  const source = (sources || []).find((entry) => String(entry.id) === String(sourceId));
+  const allowed = source ? source.allowed_views : [];
+  const stale = [...chosen].filter((view) => source && !allowed.includes(view));
+  const toggle = (view) => onChange(allowed.filter((name) => (name === view ? !chosen.has(name) : chosen.has(name))));
+  return (
+    <>
+      <FieldRow
+        label={t("Views")}
+        summary={chosen.size === 0 ? t("Not filled in yet") : t("{n} selected", { n: chosen.size })}
+        warn={chosen.size === 0 || stale.length > 0}
+        title={t("Which views this step may read — click to pick")}
+        onOpen={() => setOpen(true)}
+      />
+      <ConfigDialog title={t("Views")} open={open} onClose={() => setOpen(false)}>
+        {!sourceId && <p className="text-muted" style={{ margin: 0 }}>{t("Pick a database first, then its ticked views appear here.")}</p>}
+        {sourceId && source && allowed.length === 0 && (
+          <p className="text-muted" style={{ margin: 0 }}>{t("This database has no ticked views yet — tick some on the Data sources page.")}</p>
+        )}
+        {allowed.map((view) => (
+          <label key={view} className="ab-mono" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" aria-label={view} disabled={readOnly} checked={chosen.has(view)} onChange={() => toggle(view)} />
+            {view}
+          </label>
+        ))}
+        {stale.map((view) => (
+          <p key={view} className="ab-mono" style={{ margin: 0, color: "#f8a5a5" }}>{t("{view} (not ticked)", { view })}</p>
+        ))}
       </ConfigDialog>
     </>
   );

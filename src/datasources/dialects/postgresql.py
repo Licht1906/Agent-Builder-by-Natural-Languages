@@ -25,6 +25,7 @@ from typing import Any
 import psycopg
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from sqlalchemy.dialects import postgresql
 
 from src.datasources.dialects.base import (
     ColumnRef,
@@ -32,8 +33,12 @@ from src.datasources.dialects.base import (
     IdentityLookup,
     Introspection,
     ProbeFailure,
+    QueryRequest,
+    QueryRows,
     ViewInfo,
 )
+from src.datasources.dialects.sql import select_for
+from src.datasources.query import PLAIN_NAME
 from src.services.ssrf_guard import SSRFBlockedError, pin_safe_host
 
 #: A person is watching a spinner — UC-1's own "timeout ngắn", and DS-02's
@@ -51,6 +56,16 @@ _COUNT_BUDGET_SECONDS = 10
 #: How many distinct values the spec form is offered — positions in a
 #: company, not a column scan.
 _DISTINCT_LIMIT = 200
+
+#: What a structured query is compiled with. The `psycopg2` flavour on
+#: purpose, though psycopg 3 executes it: both write `%(name)s` placeholders,
+#: but SQLAlchemy's `psycopg` flavour also renders a cast on every bind
+#: (`%(a_1)s::VARCHAR`), which turns `"45"` against an integer column into a
+#: type error. Uncast, psycopg 3 sends a `str` as `unknown`, and the value
+#: takes the column's type the way a literal does — a model writes `"45"` for
+#: a number as often as `45`.
+_SQL_DIALECT = postgresql.psycopg2.dialect()
+
 
 #: The connection-string keywords a creator may set. Everything else libpq
 #: knows reaches past the DSN into this server — `service`/`passfile` read
@@ -120,14 +135,50 @@ class PostgresDialect:
         with self._reading(dsn, trusted_hosts) as connection:
             return [row[0] for row in connection.execute(statement)]
 
+    def run_query(self, dsn: str, request: QueryRequest, *, trusted_hosts: frozenset[str]) -> QueryRows:
+        """`request` as one read-only transaction: the asker's attributes set locally, then the statement.
+
+        Read-only and time-boxed *in the transaction itself*, not only by the
+        session options `_dial_conninfo` sends — a connection pooler in front of
+        a customer's database may drop startup options, and the guarantee must
+        not ride on that.
+
+        `set_config(name, value, true)` is `SET LOCAL` with both halves bound
+        as parameters. Attribute names are lower-cased — Postgres setting names
+        are case-insensitive — and one that is still not a plain name is left
+        off the session rather than quoted into it. Local, so nothing outlives
+        the transaction even on a pooled server.
+        """
+        compiled = select_for(request).compile(dialect=_SQL_DIALECT, compile_kwargs={"render_postcompile": True})
+        with (
+            self._reading(dsn, trusted_hosts, failure=ProbeFailure.QUERY_FAILED) as connection,
+            connection.transaction(),
+        ):
+            connection.execute("SET TRANSACTION READ ONLY")
+            connection.execute(sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(_STATEMENT_TIMEOUT_MS)))
+            for name, value in request.session_attributes.items():
+                if PLAIN_NAME.match(name.lower()) and value is not None:
+                    connection.execute("SELECT set_config(%s, %s, true)", (f"app.{name.lower()}", str(value)))
+            cursor = connection.execute(str(compiled), compiled.params)
+            columns = tuple(description.name for description in cursor.description or ())
+            return QueryRows(columns=columns, rows=tuple(tuple(row) for row in cursor.fetchall()))
+
     @contextmanager
-    def _reading(self, dsn: str, trusted_hosts: frozenset[str]) -> Iterator[psycopg.Connection[Any]]:
-        """`connect`, with every driver error inside the block reported as a `DatabaseProbeError` — never its text."""
+    def _reading(
+        self, dsn: str, trusted_hosts: frozenset[str], *, failure: ProbeFailure = ProbeFailure.SERVER_ERROR
+    ) -> Iterator[psycopg.Connection[Any]]:
+        """`connect`, with every driver error inside the block reported as a `DatabaseProbeError` — never its text.
+
+        `failure` is what an error that is not about connecting is called —
+        "reading the view list failed" for a probe, "this query failed" for a
+        query — so the sentence a creator reads is about what they just did.
+        """
         try:
             with self.connect(dsn, trusted_hosts=trusted_hosts) as connection:
                 yield connection
         except psycopg.Error as exc:
-            raise DatabaseProbeError(_failure_of(exc)) from None
+            reason = _failure_of(exc)
+            raise DatabaseProbeError(failure if reason is ProbeFailure.SERVER_ERROR else reason) from None
 
     @contextmanager
     def connect(self, dsn: str, *, trusted_hosts: frozenset[str]) -> Iterator[psycopg.Connection[Any]]:
@@ -264,6 +315,8 @@ def _failure_of(exc: psycopg.Error) -> ProbeFailure:
         return ProbeFailure.DATABASE_NOT_FOUND
     if isinstance(exc, psycopg.errors.InsufficientPrivilege) or "permission denied" in message:
         return ProbeFailure.PERMISSION_DENIED
+    if isinstance(exc, psycopg.errors.QueryCanceled):
+        return ProbeFailure.QUERY_TIMEOUT
     if isinstance(exc, psycopg.OperationalError):
         return ProbeFailure.UNREACHABLE
     return ProbeFailure.SERVER_ERROR
