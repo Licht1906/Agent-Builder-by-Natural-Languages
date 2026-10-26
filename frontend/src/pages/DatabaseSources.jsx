@@ -17,9 +17,12 @@ import AccessRulesEditor from "./AccessRulesEditor";
    the API refuses one ticked anyway.
    ============================================================ */
 
-//: What the dialect select offers. SQL Server (DS-06) and MySQL (DS-07) join
-//: as their dialects land, not before.
-const DIALECTS = [{ id: "postgresql", label: "PostgreSQL" }];
+//: What the dialect select offers, each with the DSN shape it takes. MySQL
+//: (DS-07) joins when its dialect lands, not before.
+const DIALECTS = [
+  { id: "postgresql", label: "PostgreSQL", placeholder: "postgresql://user:password@host:5432/erp" },
+  { id: "sqlserver", label: "SQL Server", placeholder: "Server=host,1433;Database=erp;User Id=user;Password=password" },
+];
 
 const EMPTY_FORM = { name: "", dialect: "postgresql", dsn: "" };
 
@@ -142,7 +145,7 @@ function CreateDatabaseSource({ onCancel, onCreated }) {
           type="password"
           autoComplete="off"
           value={form.dsn}
-          placeholder="postgresql://user:password@host:5432/erp"
+          placeholder={DIALECTS.find((dialect) => dialect.id === form.dialect)?.placeholder}
           onChange={(e) => edit({ dsn: e.target.value })}
         />
         <p className="text-muted" style={{ fontSize: "var(--text-xs)", margin: "5px 0 0", lineHeight: 1.5 }}>

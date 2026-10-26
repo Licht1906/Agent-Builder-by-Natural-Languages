@@ -1663,9 +1663,10 @@ class ExternalConnection(Base):
 
 
 class DatabaseDialect(StrEnum):
-    """Which engine a Hệ CSDL runs — ADR-0059 §8. SQL Server (DS-06) and MySQL (DS-07) join later."""
+    """Which engine a Hệ CSDL runs — ADR-0059 §8. MySQL (DS-07) joins later."""
 
     POSTGRESQL = "postgresql"
+    SQLSERVER = "sqlserver"
 
 
 class DatabaseSourceStatus(StrEnum):

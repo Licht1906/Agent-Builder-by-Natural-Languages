@@ -11,14 +11,20 @@ by prose" rule `ExternalConnectionResponse.status_reason` follows for BYODB.
 it compares one `Introspection` with what a caller expects to find, so the
 spec screen, the `data_query` validator (DS-04) and the exported package's
 start-up check (DS-15) ask one question one way.
+
+**Every dialect dials one checked address.** `pin_address` is the address
+check each engine runs on its host before connecting, kept here so the
+second dialect cannot drift from the first.
 """
 
+import socket
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
 from src.datasources.query import StructuredQuery
+from src.services.ssrf_guard import SSRFBlockedError, pin_safe_host
 
 
 class ProbeFailure(StrEnum):
@@ -43,7 +49,8 @@ class ProbeFailure(StrEnum):
 FAILURE_DETAIL: dict[ProbeFailure, str] = {
     ProbeFailure.INVALID_DSN: "DSN không đúng định dạng — kiểm tra lại chuỗi kết nối",
     ProbeFailure.DSN_OPTION_REFUSED: (
-        "DSN có tham số không được hỗ trợ — chỉ dùng host, port, dbname, user, password, sslmode, application_name"
+        "DSN có tham số không được hỗ trợ — chỉ dùng máy chủ, cổng, database, tài khoản, mật khẩu, "
+        "tuỳ chọn mã hoá và tên ứng dụng"
     ),
     ProbeFailure.BLOCKED_ADDRESS: (
         "Địa chỉ này là địa chỉ nội bộ và chưa được quản trị viên cho phép — "
@@ -171,6 +178,31 @@ class Dialect(Protocol):
     def run_query(self, dsn: str, request: QueryRequest, *, trusted_hosts: frozenset[str]) -> QueryRows:
         """`request.query` compiled for this engine — values bound, scope ANDed in, read-only. Raises `DatabaseProbeError`."""
         ...
+
+
+def pin_address(host: str, trusted_hosts: frozenset[str]) -> str:
+    """The one IP address a connection to `host` dials. Raises `DatabaseProbeError`.
+
+    An empty host is refused: every driver reads it as "this machine". A
+    trusted host skips the private-address check but is still resolved once,
+    here, so the driver is never the one asking DNS.
+    """
+    if not host:
+        raise DatabaseProbeError(ProbeFailure.BLOCKED_ADDRESS)
+    if host not in trusted_hosts:
+        try:
+            return pin_safe_host(host)
+        except SSRFBlockedError:
+            raise DatabaseProbeError(ProbeFailure.BLOCKED_ADDRESS) from None
+    try:
+        resolved = socket.getaddrinfo(host, None)
+    except OSError:
+        raise DatabaseProbeError(ProbeFailure.UNREACHABLE) from None
+    # IPv4 first when there is one: `localhost` resolves to `::1` first on many
+    # hosts, and a database that only listens on IPv4 would then look down to a
+    # probe that, unlike a driver, tries exactly one address.
+    ipv4 = [info for info in resolved if info[0] == socket.AF_INET]
+    return str((ipv4 or resolved)[0][4][0])
 
 
 def schema_problems(found: Introspection, expected: Mapping[str, Sequence[str]]) -> list[str]:

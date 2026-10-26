@@ -16,7 +16,6 @@ only ever reported as a `ProbeFailure`, never as that text.
 """
 
 import os
-import socket
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -37,10 +36,10 @@ from src.datasources.dialects.base import (
     QueryRequest,
     QueryRows,
     ViewInfo,
+    pin_address,
 )
 from src.datasources.dialects.sql import select_for
 from src.datasources.query import PLAIN_NAME
-from src.services.ssrf_guard import SSRFBlockedError, pin_safe_host
 
 #: A person is watching a spinner — UC-1's own "timeout ngắn", and DS-02's
 #: "lỗi dễ hiểu trong ≤ 5 s". One attempt only: the address is always pinned,
@@ -168,7 +167,9 @@ class PostgresDialect:
         off the session rather than quoted into it. Local, so nothing outlives
         the transaction even on a pooled server.
         """
-        compiled = select_for(request).compile(dialect=_SQL_DIALECT, compile_kwargs={"render_postcompile": True})
+        compiled = select_for(request, default_schema="public").compile(
+            dialect=_SQL_DIALECT, compile_kwargs={"render_postcompile": True}
+        )
         with (
             self._reading(dsn, trusted_hosts, failure=ProbeFailure.QUERY_FAILED) as connection,
             connection.transaction(),
@@ -247,28 +248,14 @@ def _dial_conninfo(dsn: str, trusted_hosts: frozenset[str]) -> str:
 
 
 def _pinned_address(target: str, trusted_hosts: frozenset[str]) -> str:
-    """The one IP address a connection to `target` dials. Raises `DatabaseProbeError`.
+    """`pin_address` for libpq's host syntax. Raises `DatabaseProbeError`.
 
-    An empty target is the local socket, as is a path, and several hosts are
-    several dial-outs to reason about one by one — all refused. A trusted host
-    skips the private-address check but is still resolved once, here.
+    A path is the local socket, and several hosts are several dial-outs to
+    reason about one by one — both refused before `pin_address` is asked.
     """
-    if not target or "," in target or target.startswith("/"):
+    if "," in target or target.startswith("/"):
         raise DatabaseProbeError(ProbeFailure.BLOCKED_ADDRESS)
-    if target not in trusted_hosts:
-        try:
-            return pin_safe_host(target)
-        except SSRFBlockedError:
-            raise DatabaseProbeError(ProbeFailure.BLOCKED_ADDRESS) from None
-    try:
-        resolved = socket.getaddrinfo(target, None)
-    except OSError:
-        raise DatabaseProbeError(ProbeFailure.UNREACHABLE) from None
-    # IPv4 first when there is one: `localhost` resolves to `::1` first on many
-    # hosts, and a database that only listens on IPv4 would then look down to a
-    # probe that, unlike libpq, tries exactly one address.
-    ipv4 = [info for info in resolved if info[0] == socket.AF_INET]
-    return str((ipv4 or resolved)[0][4][0])
+    return pin_address(target, trusted_hosts)
 
 
 def _view_columns(connection: psycopg.Connection[Any]) -> dict[tuple[str, str], list[str]]:

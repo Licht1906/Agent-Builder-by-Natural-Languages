@@ -99,6 +99,31 @@ describe("the Databases tab", () => {
     });
   });
 
+  it("adds a SQL Server database, the DSN box showing the shape that engine takes", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.list.mockResolvedValue([]);
+    api.databaseSources.create.mockResolvedValue(source({ id: 9, dialect: "sqlserver", status: "untested", views: [] }));
+    api.databaseSources.test.mockResolvedValue(source({ id: 9, dialect: "sqlserver" }));
+    draw();
+    await screen.findByText(/No database yet/);
+
+    await actor.click(screen.getByRole("button", { name: /Add a database/ }));
+    await actor.type(screen.getByLabelText(/Name/), "ERP MSSQL");
+    await actor.selectOptions(screen.getByLabelText(/Database type/), "sqlserver");
+    const dsn = screen.getByLabelText(/DSN/);
+    expect(dsn).toHaveAttribute("placeholder", expect.stringContaining("Server=host,1433"));
+    await actor.type(dsn, "Server=erp,1433;Database=erp;User Id=ro;Password=secret");
+    await actor.click(screen.getByRole("button", { name: /Save and test/ }));
+
+    await waitFor(() => expect(api.databaseSources.test).toHaveBeenCalledWith(9));
+    expect(api.databaseSources.create).toHaveBeenCalledWith({
+      name: "ERP MSSQL",
+      dialect: "sqlserver",
+      dsn: "Server=erp,1433;Database=erp;User Id=ro;Password=secret",
+    });
+    expect(await screen.findByText("SQL Server")).toBeInTheDocument();
+  });
+
   it("saves the views that are ticked", async () => {
     const actor = userEvent.setup();
     api.databaseSources.update.mockResolvedValue(source({ allowed_views: ["v_ar_open", "v_customer_safe"] }));

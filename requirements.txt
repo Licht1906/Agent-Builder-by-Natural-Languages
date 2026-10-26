@@ -32,6 +32,11 @@ sqlalchemy>=2.0.0
 alembic>=1.14.0
 psycopg2-binary>=2.9.0
 
+# The SQL Server dialect of a Hệ CSDL (DS-06). pymssql's wheels carry FreeTDS
+# inside them, so the image needs no ODBC driver; 2.3 is the first with
+# `encryption=` on `connect`.
+pymssql>=2.3.0
+
 # Conversation memory (#6) — the checkpointer is Postgres-only, and it talks
 # psycopg3 rather than the psycopg2 SQLAlchemy uses. Both drivers, one database.
 langgraph-checkpoint-postgres>=2.0.0

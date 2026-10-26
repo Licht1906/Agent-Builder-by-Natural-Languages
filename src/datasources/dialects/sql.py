@@ -1,7 +1,7 @@
 """A checked structured query as a SQLAlchemy Core statement — the engine-free half of compiling one.
 
 Every dialect compiles the same `Select` with its own SQLAlchemy dialect
-(`postgresql`, later `mssql` and `mysql`), so the rules live here once:
+(`postgresql`, `mssql`, later `mysql`), so the rules live here once:
 
 - **Values are bind parameters, always.** Nothing a model wrote becomes SQL
   text; a column or view name only ever arrives as an identifier SQLAlchemy
@@ -9,13 +9,15 @@ Every dialect compiles the same `Select` with its own SQLAlchemy dialect
 - **The asker's scope is ANDed into `WHERE`**, beside the query's own filters
   and so before any `GROUP BY` — an aggregate over rows the asker may not see
   is a leak with a sum on it.
+- **A bare view name is the engine's default schema** (`public`, `dbo`), as
+  the probe listed it — never whatever the session's search path says.
 """
 
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import String, and_, cast, column, func, select, table
-from sqlalchemy.sql import ColumnElement, Select
+from sqlalchemy import Unicode, and_, cast, column, func, select, table
+from sqlalchemy.sql import ColumnElement, Select, TableClause
 
 from src.datasources.dialects.base import QueryRequest
 from src.datasources.query import AggregateFn, FilterOp, QueryFilter, SortDir, returned_columns
@@ -29,12 +31,16 @@ _AGGREGATES: dict[AggregateFn, Callable[..., ColumnElement[Any]]] = {
 }
 
 
-def select_for(request: QueryRequest) -> Select[Any]:
+def source_table(view: str, columns: tuple[str, ...], *, default_schema: str) -> TableClause:
+    """`view` as a creator names it (`v_x`, `sales.v_x`) with `columns`, a bare name placed in `default_schema`."""
+    schema, _, name = view.rpartition(".")
+    return table(name, *(column(column_name) for column_name in columns), schema=schema or default_schema)
+
+
+def select_for(request: QueryRequest, *, default_schema: str) -> Select[Any]:
     """The statement `request` describes — filters and scope in `WHERE`, then grouping, order and the ceiling."""
     query = request.query
-    schema, _, name = query.view.rpartition(".")
-    # A bare name is `public`, as the probe listed it — never whatever `search_path` happens to say.
-    source = table(name, *(column(column_name) for column_name in request.view_columns), schema=schema or "public")
+    source = source_table(query.view, request.view_columns, default_schema=default_schema)
     columns = source.c
     selected: list[ColumnElement[Any]] = []
     if query.aggregating:
@@ -83,7 +89,9 @@ def _condition(target: ColumnElement[Any], item: QueryFilter) -> ColumnElement[b
         case FilterOp.LIKE:
             # Compared as text, so `like` on a number or a date column means
             # what a person typing `%30%` meant rather than a type error.
-            return cast(target, String).like(str(value))
+            # `Unicode`, not `String`: SQL Server's bare `VARCHAR` is 30
+            # characters of a code page, which drops both the tail and "ư".
+            return cast(target, Unicode).like(str(value))
         case FilterOp.IS_NULL:
             return target.is_(None)
         case FilterOp.IS_NOT_NULL:
