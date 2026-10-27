@@ -932,6 +932,13 @@ class SandboxRunRequest(BaseModel):
             "đổi được giữa các lượt trong cùng thread; bỏ trống = không ai hỏi, mọi lần đọc dữ liệu bị cấm"
         ),
     )
+    send_for_real: bool = Field(
+        default=False,
+        description=(
+            "Gửi thật (DS-09): hành động đứng sau một bước duyệt đã duyệt đúng payload chạy thật bằng kết nối "
+            "của chính người tạo thay vì mô phỏng. Chỉ cho lượt này — lượt sau mặc định tắt lại"
+        ),
+    )
 
 
 class AskerResponse(BaseModel):
@@ -974,6 +981,10 @@ class SandboxTranscriptEntry(BaseModel):
     simulated: bool | None = Field(
         default=None,
         description="True = tool có tác dụng phụ, đã chạy bản mô phỏng — dòng này nói nó *sẽ* làm gì",
+    )
+    live_in_sandbox: bool | None = Field(
+        default=None,
+        description="True = lượt chạy thử bật 'Gửi thật' và lời gọi đã duyệt này chạy thật (DS-09)",
     )
     ok: bool | None = Field(default=None, description="False = tool gọi hỏng; lần chạy vẫn tiếp tục")
     content: str | None = Field(default=None, description="Câu trả lời của bước, hoặc kết quả tool trả về")

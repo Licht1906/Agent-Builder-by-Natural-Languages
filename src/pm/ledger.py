@@ -124,6 +124,7 @@ def record_agent_run(db: Session, record: AgentRunRecord) -> AgentRun:
         first_failure=summary.first_failure,
         failure_node_type=summary.failure_node_type,
         simulated=record.simulated,
+        live_sends=any(entry.live_in_sandbox for entry in record.transcript),
     )
     db.add(run)
     db.flush()  # the scores below need `run.id`

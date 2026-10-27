@@ -327,6 +327,7 @@ async def _workflow_sandbox_stream(
     databases: DatabaseReader,
     *,
     resume: tuple[ParkedLeg, Resumption] | None = None,
+    live_sends: bool = False,
 ) -> AsyncIterator[str]:
     """SSE lines for a trial run: the thread, the run's own events, then its record.
 
@@ -355,6 +356,7 @@ async def _workflow_sandbox_stream(
         knowledge=knowledge,
         databases=databases,
         resume=resume,
+        live_sends=live_sends,
     ):
         yield sse_line(event["event"], event["data"])
 
@@ -477,12 +479,24 @@ async def trial_run_my_versions_workflow(
     legitimate only here, in a sandbox run by the person who registered the
     sample database. Per turn, so the same thread can ask as a rep and then as
     their lead.
+
+    `send_for_real` is DS-09's switch, per turn for the same reason and off
+    unless this request says otherwise: the approved actions of *this* run go
+    out for real, through the creator's own connection, and the next turn is a
+    rehearsal again.
     """
     workflow = runnable_workflow(version)
     conversation = conversation_for(agent, checkpointer, ThreadAddress(payload.conversation_id, ThreadNamespace.TRIAL))
     run = start_run(version.id, conversation)
     return StreamingResponse(
-        _workflow_sandbox_stream(workflow, payload.message, run, knowledge, databases.asked_by(payload.run_as)),
+        _workflow_sandbox_stream(
+            workflow,
+            payload.message,
+            run,
+            knowledge,
+            databases.asked_by(payload.run_as),
+            live_sends=payload.send_for_real,
+        ),
         media_type="text/event-stream",
     )
 

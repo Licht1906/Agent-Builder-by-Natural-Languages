@@ -78,7 +78,7 @@ from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import partial
-from typing import Annotated, Any, Literal, Protocol, TypedDict, cast
+from typing import Annotated, Any, Literal, NotRequired, Protocol, TypedDict, cast
 from zoneinfo import ZoneInfo
 
 from langchain_core.language_models import BaseChatModel
@@ -441,6 +441,10 @@ class WorkflowToolCallEvent(TypedDict):
     tool: str
     args: dict[str, Any]
     simulated: bool
+    #: DS-09: true on a trial that was switched to send for real, for the one
+    #: call that did — an approved, hash-matched action that ran live instead
+    #: of its mock. Absent everywhere else.
+    live_in_sandbox: NotRequired[bool]
 
 
 class Citation(TypedDict):
@@ -487,6 +491,8 @@ class WorkflowToolResultEvent(TypedDict):
     ok: bool
     result: str
     simulated: bool
+    #: DS-09: as on `WorkflowToolCallEvent` — this result came back from a real call made inside a trial.
+    live_in_sandbox: NotRequired[bool]
     citations: list[Citation]
     #: Which `PlatformFault` this failure was, or `None` for every other line —
     #: ADR-0061. Written where the fault is *known* (the exception carried it,
@@ -663,6 +669,12 @@ class WorkflowRunContext:
     #: a `HumanApproval` node really stops (ADR-0024 §7): it always does — unless
     #: this run is an eval run, which is the one exception and is the next field.
     sandbox: bool = False
+    #: DS-09's "Gửi thật": on a trial, the actions a person approved — payload
+    #: and all (DS-08) — run for real, through the creator's own connection,
+    #: instead of their mock. Per run, never remembered: the trial door takes it
+    #: per request and a paused run carries it on its `run_approvals` row.
+    #: Meaningless outside a sandbox, where nothing is mocked to begin with.
+    live_sends: bool = False
     #: Present only on an eval run (#48 / ADR-0028 §1). Its presence is what
     #: selects the scripted-approval handler at compile time, so "is this an eval
     #: run" is answered once, by the compiler, rather than re-derived inside a
@@ -1313,18 +1325,22 @@ async def _run_resolved_mcp(
     # anywhere may be minted under a name this function did not write
     # (`certain_action_of`).
     called = wire_name(tool.id, action.name)
+    approved_call = False
     if _needs_approval(config, action):
         # Before the mock too: a rehearsal refuses exactly what production would.
         refusal = await _unapproved(node.id, called, payload, approval)
         if refusal is not None:
             return _mcp_refusal(node, config, payload, reason=refusal, emit=emit)
-    simulated = run.sandbox and action.sandbox_behavior is SandboxBehavior.MOCK
-    emit(
-        _event(
-            "tool",
-            WorkflowToolCallEvent(node_id=node.id, tool=called, args=payload, simulated=simulated),
-        )
-    )
+        approved_call = True
+    # DS-09: a trial switched to send for real lets through exactly the calls a
+    # person approved, payload and all — and nothing that merely happens to be
+    # mocked. An action no person had to approve stays a mock even then.
+    live = run.sandbox and run.live_sends and approved_call
+    simulated = run.sandbox and action.sandbox_behavior is SandboxBehavior.MOCK and not live
+    call = WorkflowToolCallEvent(node_id=node.id, tool=called, args=payload, simulated=simulated)
+    if live:
+        call["live_in_sandbox"] = True
+    emit(_event("tool", call))
     if simulated:
         answer = mock_answer(action)
         emit(_event("tool_result", _tool_result(node.id, called, ok=True, result=answer, simulated=True)))
@@ -1354,12 +1370,14 @@ async def _run_resolved_mcp(
         emit(
             _event(
                 "tool_result",
-                _tool_result(node.id, called, ok=False, result=reason, simulated=False, fault=fault_of_exception(exc)),
+                _tool_result(
+                    node.id, called, ok=False, result=reason, simulated=False, fault=fault_of_exception(exc), live=live
+                ),
             )
         )
         return NodeOutcome(content=reason, state_update={"messages": [_note(node, reason, tool=called, ok=False)]})
 
-    emit(_event("tool_result", _tool_result(node.id, called, ok=True, result=answer, simulated=False)))
+    emit(_event("tool_result", _tool_result(node.id, called, ok=True, result=answer, simulated=False, live=live)))
     return NodeOutcome(content=answer, state_update={"messages": [_note(node, answer, tool=called, ok=True)]})
 
 
@@ -1835,6 +1853,7 @@ async def _run_human_approval(
             sandbox=run.sandbox,
             run_as=_asker_of(run),
             actions=actions,
+            live_sends=run.live_sends,
         )
     )
     decision = cast(ApprovalDecision, interrupt(request))
@@ -2418,6 +2437,7 @@ async def stream_workflow_reply(
     resume: Resumption | None = None,
     scripted_approvals: ScriptedApprovals | None = None,
     databases: DatabaseReader | None = None,
+    live_sends: bool = False,
 ) -> AsyncIterator[WorkflowEvent]:
     """Run `workflow` against `message` on `conversation`, yielding events as they happen.
 
@@ -2488,6 +2508,8 @@ async def stream_workflow_reply(
         run_id=resume.run_id if resume else uuid.uuid4().hex,
         input_message=message,
         sandbox=sandbox,
+        # Only a trial has mocks to switch off (DS-09); eval's scripted runs never send.
+        live_sends=live_sends and sandbox and scripted_approvals is None,
         scripted_approvals=scripted_approvals,
         workflow=workflow,
         databases=databases,
@@ -2710,6 +2732,7 @@ def _tool_result(
     citations: list[Citation] | None = None,
     fault: PlatformFault | None = None,
     untrusted: bool = False,
+    live: bool = False,
 ) -> WorkflowToolResultEvent:
     """One `tool_result` payload, so the call sites cannot spell it differently.
 
@@ -2721,7 +2744,7 @@ def _tool_result(
     the agent's business until a call site can say otherwise from something it
     knows (ADR-0061). Only `_run_mcp` and `_mcp_refusal` can.
     """
-    return WorkflowToolResultEvent(
+    event = WorkflowToolResultEvent(
         node_id=node_id,
         tool=tool,
         ok=ok,
@@ -2731,6 +2754,9 @@ def _tool_result(
         fault=fault.value if fault is not None else None,
         untrusted=untrusted,
     )
+    if live:
+        event["live_in_sandbox"] = True
+    return event
 
 
 def _citation_of(finding: Finding) -> Citation:

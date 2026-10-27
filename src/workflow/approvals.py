@@ -124,6 +124,8 @@ class ApprovalRequest(TypedDict):
     message: str
     #: The calls this pause guards (DS-08) — empty for a gate with nothing but prose behind it.
     actions: list[ApprovalAction]
+    #: DS-09: approving this trial's pause sends `actions` for real, not their mock.
+    live_sends: bool
 
 
 class ApprovalDecision(TypedDict):
@@ -167,6 +169,9 @@ class ParkedLeg:
     transcript: list[SandboxTranscriptEntry]
     #: Who the first leg read data as (DS-05) — the resumed leg asks as them too.
     run_as: str | None = None
+    #: Whether the trial was switched to send for real (DS-09) — the switch is
+    #: the run's, so the leg that does the sending reads it here.
+    live_sends: bool = False
 
 
 def _identity_of(row: RunApproval) -> RunIdentity:
@@ -206,6 +211,7 @@ def _request_of(row: RunApproval) -> ApprovalRequest:
         approver_role=row.approver_role,
         message=row.message,
         actions=[ApprovalAction(**action) for action in row.actions or []],
+        live_sends=row.live_sends,
     )
 
 
@@ -261,6 +267,7 @@ def open_approval(
     sandbox: bool,
     run_as: str | None = None,
     actions: Sequence[ApprovalAction] = (),
+    live_sends: bool = False,
 ) -> ApprovalRequest:
     """The pending row for this pause — found if it is already there, written if not.
 
@@ -310,6 +317,7 @@ def open_approval(
             input_message=input_message,
             run_as=run_as,
             actions=[dict(action) for action in actions],
+            live_sends=live_sends,
             status=RunApprovalStatus.PENDING,
             transcript=[],
             elapsed_seconds=0.0,
@@ -444,6 +452,7 @@ def parked_leg(db: Session, row: RunApproval) -> ParkedLeg:
         carried_usage=usage_of_payload(row.usage_by_model),
         transcript=[SandboxTranscriptEntry.model_validate(entry) for entry in row.transcript],
         run_as=row.run_as,
+        live_sends=row.live_sends,
     )
 
 

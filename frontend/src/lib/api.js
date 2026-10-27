@@ -377,10 +377,10 @@ export const runs = {
   /** `options.runAs` is who this trial asks as (DS-05) — blank is nobody, so
    *  every `data_query` read is denied. `options.conversationId` carries on a
    *  trial thread; null starts a new one. */
-  sandbox: (agentId, versionId, message, onEvent, { runAs, conversationId, ...options } = {}) =>
+  sandbox: (agentId, versionId, message, onEvent, { runAs, conversationId, sendForReal = false, ...options } = {}) =>
     stream(
       `/agents/${agentId}/versions/${versionId}/workflow-sandbox-runs`,
-      { message, run_as: runAs || null, conversation_id: conversationId || null },
+      { message, run_as: runAs || null, conversation_id: conversationId || null, send_for_real: Boolean(sendForReal) },
       onEvent,
       options,
     ),

@@ -756,6 +756,12 @@ class AgentRun(Base):
         default=None, index=True, doc="Loại node nơi lỗi bắt đầu — slice 'loại bước nào hay hỏng'"
     )
     simulated: Mapped[bool] = mapped_column(default=False, index=True, doc="Hàng do scripts/simulate_pm_runs.py sinh")
+    #: DS-09: a trial in which an approved action was sent for real. Still a
+    #: rehearsal — `trigger` stays `chat_test`, so no production widget counts
+    #: it — and flagged so a PM reading the ledger can tell it from a mock.
+    live_sends: Mapped[bool] = mapped_column(
+        default=False, index=True, doc="Lượt chạy thử đã gửi thật ít nhất một hành động đã duyệt (DS-09)"
+    )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), index=True)
 
 
@@ -1394,6 +1400,9 @@ class RunApproval(Base):
     #: recomputes `hash` against before calling. Written once, with the row.
     actions: Mapped[list[dict[str, Any]]] = mapped_column(
         JSON, default=list, doc="Các lời gọi node duyệt này đứng trước — payload nguyên văn và hash của nó"
+    )
+    live_sends: Mapped[bool] = mapped_column(
+        default=False, doc="Lượt chạy thử bật 'Gửi thật' (DS-09) — chặng sau khi duyệt gửi thật thay vì mô phỏng"
     )
     elapsed_seconds: Mapped[float] = mapped_column(default=0.0, doc="Thời gian *chạy* trước lúc dừng, không tính chờ")
     usage_by_model: Mapped[dict[str, Any]] = mapped_column(

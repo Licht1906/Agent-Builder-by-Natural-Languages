@@ -60,6 +60,13 @@ export const VI = {
   "Name": "Tên",
   "Database type": "Loại CSDL",
   /* ── Approval card: the call itself (DS-08) ── */
+  /* ── Sandbox "Gửi thật" (DS-09) ── */
+  "Send for real — this run only": "Gửi thật — chỉ lượt này",
+  "Actions you approve, exactly as shown on the approval card, are sent through your own connected account instead of their mock. Everything else stays a mock, and the next run is a rehearsal again.":
+    "Hành động bạn duyệt, đúng như trên thẻ duyệt, được gửi thật bằng tài khoản đã kết nối của chính bạn thay vì mô phỏng. Mọi thứ khác vẫn mô phỏng, và lượt sau lại là chạy thử như thường.",
+  "Send for real is on: approving sends this for real, from your own account.":
+    "Đang bật Gửi thật: duyệt là gửi thật, từ tài khoản của chính bạn.",
+  "sent for real": "đã gửi thật",
   "Will call": "Sẽ gọi",
   "Recipient": "Người nhận",
   "Subject": "Tiêu đề",
@@ -635,8 +642,8 @@ export const VI = {
 
   /* ── Sandbox ── */
   "Sandbox run": "Lượt chạy thử",
-  "Every tool with side effects runs its mock — a trial never touches the real world. A run that finishes is the evidence an approval request is built on.":
-    "Mọi tool có tác dụng phụ đều chạy bản giả lập — chạy thử không bao giờ chạm vào thế giới thật. Một lượt chạy hoàn tất chính là bằng chứng để dựng nên hồ sơ xin duyệt.",
+  "Every tool with side effects runs its mock — a trial never touches the real world, unless you switch on Send for real for one run. A run that finishes is the evidence an approval request is built on.":
+    "Mọi tool có tác dụng phụ đều chạy bản giả lập — chạy thử không chạm vào thế giới thật, trừ khi bạn bật Gửi thật cho một lượt. Một lượt chạy hoàn tất chính là bằng chứng để dựng nên hồ sơ xin duyệt.",
   "Test message": "Tin nhắn thử",
   "What would a user ask this agent?": "Người dùng sẽ hỏi agent này điều gì?",
   "Run in sandbox": "Chạy thử",

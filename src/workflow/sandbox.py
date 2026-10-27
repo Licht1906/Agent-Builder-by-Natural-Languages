@@ -114,6 +114,7 @@ def transcript_entry(event: WorkflowEvent) -> SandboxTranscriptEntry | None:
             tool=data["tool"],
             args=data["args"],
             simulated=data["simulated"],
+            live_in_sandbox=data.get("live_in_sandbox"),
         )
     if event["event"] == "tool_result":
         return SandboxTranscriptEntry(
@@ -122,6 +123,7 @@ def transcript_entry(event: WorkflowEvent) -> SandboxTranscriptEntry | None:
             tool=data["tool"],
             ok=data["ok"],
             simulated=data["simulated"],
+            live_in_sandbox=data.get("live_in_sandbox"),
             content=data["result"],
             # `.get` rather than `[...]`: an event replayed from a stored run
             # predates ADR-0061's field, and the whole point of the field is
@@ -231,6 +233,7 @@ async def stream_workflow_sandbox_run(
     knowledge: KnowledgeStore,
     resume: tuple[ParkedLeg, Resumption] | None = None,
     databases: DatabaseReader | None = None,
+    live_sends: bool = False,
 ) -> AsyncIterator[SandboxStreamEvent]:
     """Trial `workflow` against `message`, recording everything, and close with the stored run.
 
@@ -258,6 +261,10 @@ async def stream_workflow_sandbox_run(
     happened. A run that stops *again* — a `While` body carrying the approval
     node round twice — parks again, on its own row (ADR-0024 §3), and the
     transcript keeps growing across legs until a leg reaches `End`.
+
+    `live_sends` is DS-09's "Gửi thật" for this trial; a resumed leg reads the
+    switch off its parked row instead, because the switch belongs to the run
+    and the leg that sends is not the request that set it.
     """
     leg, resumption = resume if resume is not None else (None, None)
     async for event in _trial(
@@ -271,6 +278,7 @@ async def stream_workflow_sandbox_run(
             sandbox=True,
             identity=leg.identity if leg is not None else identity,
             resume=resumption,
+            live_sends=leg.live_sends if leg is not None else live_sends,
         ),
         message,
         identity=leg.identity if leg is not None else identity,

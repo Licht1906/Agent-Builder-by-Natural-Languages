@@ -31,6 +31,9 @@ export default function SandboxTab({ agentId, versionId, readsDatabase = false, 
   // same conversation can be asked as a rep, then as their lead (DS-05).
   const [threadId, setThreadId] = useState(null);
   useEffect(() => setThreadId(null), [agentId, versionId]);
+  // DS-09's "Gửi thật": for the next run only. Switched back off the moment a
+  // run starts, so it is never remembered into the turn after.
+  const [sendForReal, setSendForReal] = useState(false);
   const [lines, setLines] = useState([]);
   const [running, setRunning] = useState(false);
 
@@ -69,10 +72,10 @@ export default function SandboxTab({ agentId, versionId, readsDatabase = false, 
         });
         break;
       case "tool":
-        append({ kind: "tool", nodeId: data.node_id, tool: data.tool, args: data.args, simulated: data.simulated });
+        append({ kind: "tool", nodeId: data.node_id, tool: data.tool, args: data.args, simulated: data.simulated, live: Boolean(data.live_in_sandbox) });
         break;
       case "tool_result":
-        append({ kind: "tool_result", nodeId: data.node_id, tool: data.tool, ok: data.ok, result: data.result, simulated: data.simulated, citations: data.citations || [] });
+        append({ kind: "tool_result", nodeId: data.node_id, tool: data.tool, ok: data.ok, result: data.result, simulated: data.simulated, live: Boolean(data.live_in_sandbox), citations: data.citations || [] });
         break;
       case "node":
         // The node's settled outcome lands *on* the line its `node_started`
@@ -130,8 +133,10 @@ export default function SandboxTab({ agentId, versionId, readsDatabase = false, 
     setPending(null);
     const asker = readsDatabase ? runAs.trim() : "";
     setRanAs(asker);
+    const live = sendForReal;
+    setSendForReal(false);
     try {
-      await api.runs.sandbox(agentId, versionId, message.trim(), handle, { runAs: asker, conversationId: threadId });
+      await api.runs.sandbox(agentId, versionId, message.trim(), handle, { runAs: asker, conversationId: threadId, sendForReal: live });
     } catch (err) {
       setError(err.message);
       notify(err.message, "error");
@@ -168,7 +173,7 @@ export default function SandboxTab({ agentId, versionId, readsDatabase = false, 
     <PageShell width="narrow">
       <Section
         title={t('Sandbox run')}
-        hint={t("Every tool with side effects runs its mock — a trial never touches the real world. A run that finishes is the evidence an approval request is built on.")}
+        hint={t("Every tool with side effects runs its mock — a trial never touches the real world, unless you switch on Send for real for one run. A run that finishes is the evidence an approval request is built on.")}
       >
 
         <div className="blueprint" style={{ padding: "var(--space-4)", marginBottom: 20 }}>
@@ -189,6 +194,15 @@ export default function SandboxTab({ agentId, versionId, readsDatabase = false, 
               }}
             />
           </div>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10, fontSize: "var(--text-sm)", cursor: "pointer" }}>
+            <input type="checkbox" checked={sendForReal} disabled={running} onChange={(event) => setSendForReal(event.target.checked)} style={{ marginTop: 3 }} />
+            <span>
+              <b>{t("Send for real — this run only")}</b>
+              <span className="text-muted" style={{ display: "block", fontSize: "var(--text-xs)", lineHeight: 1.5 }}>
+                {t("Actions you approve, exactly as shown on the approval card, are sent through your own connected account instead of their mock. Everything else stays a mock, and the next run is a rehearsal again.")}
+              </span>
+            </span>
+          </label>
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12, flexWrap: "wrap" }}>
             <button className="btn btn-primary" onClick={run} disabled={running || !message.trim()} style={{ height: 38 }}>
               {running ? <Spinner size={14} /> : <Play size={14} />}{running ? t("Running…") : t("Run in sandbox")}
@@ -232,6 +246,11 @@ export default function SandboxTab({ agentId, versionId, readsDatabase = false, 
             </p>
             <p style={{ margin: "0 0 12px", fontSize: "var(--text-sm)", lineHeight: 1.6 }}>{pending.message}</p>
             <div style={{ marginBottom: 12 }}><ApprovalPayload actions={pending.actions} /></div>
+            {pending.live_sends && (
+              <p role="alert" style={{ margin: "0 0 12px", fontSize: "var(--text-sm)", fontWeight: 600 }}>
+                {t("Send for real is on: approving sends this for real, from your own account.")}
+              </p>
+            )}
             <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
               <input
                 className="input"
@@ -322,6 +341,7 @@ function TraceLine({ line }) {
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <span className="ab-mono" style={{ fontSize: "var(--text-sm)" }}>{line.tool}</span>
             {line.simulated && <span className="ab-chip" style={{ color: "var(--ab-warn)", borderColor: "rgba(245,158,11,.3)" }}>{t('simulated')}</span>}
+            {line.live && <span className="ab-chip" style={{ color: "#f87171", borderColor: "rgba(239,68,68,.4)" }}>{t("sent for real")}</span>}
             {failed && <span className="ab-chip" style={{ color: "#f87171", borderColor: "rgba(239,68,68,.3)" }}>{t('failed')}</span>}
           </div>
           {isCiting ? (
