@@ -15,6 +15,7 @@ from src.api.admin_routes import router as admin_router
 from src.api.agent_routes import router as agent_router
 from src.api.approval_routes import creator_router as approval_creator_router
 from src.api.approval_routes import router as approval_router
+from src.api.audit_routes import router as audit_router
 from src.api.auth_routes import router as auth_router
 from src.api.connection_routes import router as connection_router
 from src.api.control_plane_routes import router as control_plane_router
@@ -167,6 +168,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(agent_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
+app.include_router(audit_router, prefix="/api/v1")
 app.include_router(eval_router, prefix="/api/v1")
 app.include_router(approval_router, prefix="/api/v1")
 app.include_router(approval_creator_router, prefix="/api/v1")

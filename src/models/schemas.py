@@ -824,6 +824,32 @@ class ApprovalActionResponse(BaseModel):
     hash: str = Field(..., description="Hash chuẩn hoá của payload đã hiển thị")
 
 
+
+class AuditEventResponse(BaseModel):
+    """One link of the audit chain, as an admin reads it — DS-10. Never row content."""
+
+    seq: int
+    occurred_at: UtcTimestamp
+    kind: str = Field(..., description="data_query | action")
+    mode: str = Field(..., description="trial | prod | eval")
+    agent_id: int | None
+    version_id: int | None
+    trace_id: str
+    run_id: str
+    node_id: str
+    details: dict[str, Any] = Field(..., description="Người hỏi, Hệ CSDL, view, phạm vi, số dòng — hoặc hash payload, người duyệt, kết quả")
+    prev_hash: str
+    entry_hash: str
+
+
+class AuditChainVerdictResponse(BaseModel):
+    """What a walk of the audit chain found — intact, or where it first breaks (DS-10)."""
+
+    ok: bool
+    checked: int = Field(..., description="Số bản ghi còn nguyên trước chỗ đứt (hoặc cả chuỗi)")
+    broken_at: int | None = Field(default=None, description="seq đầu tiên chuỗi không còn đúng")
+    reason: str | None = None
+
 class ThreadHistoryResponse(BaseModel):
     """A thread read back for tracing — empty `turns` for a thread never used."""
 

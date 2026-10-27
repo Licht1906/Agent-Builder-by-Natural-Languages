@@ -765,6 +765,57 @@ class AgentRun(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), index=True)
 
 
+
+class AuditEvent(Base):
+    """One link of the V2 runtime's audit chain — DS-10, carried over from UC-1's `audit_log`.
+
+    Written by `src.audit.chain.append_event` for every `data_query` read and
+    every action that needed a person (ADR-0059 §11). `seq` is contiguous and
+    assigned by the chain itself, not by the database, so a missing link is a
+    gap anyone can see; `entry_hash` is the SHA-256 of `prev_hash` and the
+    canonical JSON of every other column, so changing any of them breaks the
+    link at that row (`verify_chain`).
+
+    **No row content, ever.** A read records who asked, which Hệ CSDL and
+    view, the query and the scope applied, and how many rows came back — never
+    the rows. An action records its payload's `action_hash` (DS-08), never the
+    email it sent.
+
+    Not UC-1's trigger: the chain is computed here, in Python, so the exported
+    package (DS-13) can keep the same chain on whatever database it is given.
+    """
+
+    __tablename__ = "audit_events"
+
+    seq: Mapped[int] = mapped_column(primary_key=True, autoincrement=False, doc="Vị trí trong chuỗi, liên tục từ 1")
+    occurred_at: Mapped[datetime] = mapped_column(doc="UTC, do chuỗi đặt — nằm trong phần được hash")
+    kind: Mapped[str] = mapped_column(index=True, doc="data_query | action — xem AuditKind")
+    mode: Mapped[str] = mapped_column(doc="trial | prod | eval — lượt chạy ở thế giới nào")
+    agent_id: Mapped[int | None] = mapped_column(default=None, index=True)
+    version_id: Mapped[int | None] = mapped_column(default=None)
+    trace_id: Mapped[str] = mapped_column(index=True, doc="Trace của lượt chạy, giữ nguyên qua chỗ dừng")
+    run_id: Mapped[str] = mapped_column(doc="Một lần thực thi graph")
+    node_id: Mapped[str] = mapped_column(doc="Node ghi bản này")
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, doc="Nội dung theo loại — không bao giờ là dòng dữ liệu")
+    prev_hash: Mapped[str] = mapped_column(doc="entry_hash của bản trước; 64 số 0 với bản đầu")
+    entry_hash: Mapped[str] = mapped_column(doc="sha256(prev_hash ‖ JSON chuẩn hoá của bản này)")
+
+
+class AuditChainHead(Base):
+    """Where the audit chain ends — one row, locked for every append (DS-10).
+
+    Two appends at once would otherwise both read the same last link and fork
+    the chain. Locking this row `FOR UPDATE` serialises them on every engine
+    the package might run on, and keeping the last hash here is also what lets
+    `verify_chain` notice the end of the chain cut off.
+    """
+
+    __tablename__ = "audit_chain_head"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    last_seq: Mapped[int] = mapped_column(default=0)
+    last_hash: Mapped[str] = mapped_column(doc="entry_hash của bản cuối")
+
 class RunLabel(Base):
     """One expert verdict on one run — ADR-0053 §3, layer three.
 

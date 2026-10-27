@@ -21,7 +21,7 @@ is the security argument:
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Annotated, Protocol
+from typing import Annotated, Any, Protocol
 
 from fastapi import Depends
 from sqlalchemy.orm import Session
@@ -69,6 +69,10 @@ class QueryOutcome:
     description: str
     refusal: str | None = None
     denied: Deny | None = None
+    #: The asker's scope ANDed into the read — `(column, value)` pairs, `()`
+    #: for a rule of `all`, `None` when nothing was read. What the audit chain
+    #: records as "bộ lọc phạm vi đã áp" (DS-10).
+    scope: tuple[tuple[str, Any], ...] | None = None
 
     @property
     def transcript_reason(self) -> str:
@@ -211,7 +215,11 @@ class PlatformDatabaseReader:
         request = _request(source, query, scope=scope, principal=principal, max_rows=config.max_rows)
         rows = dialect.run_query(dsn, request, trusted_hosts=self.trusted_hosts)
         return QueryOutcome(
-            rows=rows, source_name=source.name, view=query.view, description=describe(query, scoped=bool(request.scope))
+            rows=rows,
+            source_name=source.name,
+            view=query.view,
+            description=describe(query, scoped=bool(request.scope)),
+            scope=tuple(request.scope),
         )
 
     def _source(self, source_id: str) -> DatabaseSource | None:

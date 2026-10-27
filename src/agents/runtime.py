@@ -65,6 +65,7 @@ from src.agents.costs import measured_cost
 from src.agents.threads import ThreadRef
 from src.agents.tools import TOOL_REGISTRY
 from src.agents.tools.registry import ToolSpec
+from src.audit.chain import AuditSink, record_audit_event
 from src.models.agent_spec import AgentSpec, Step
 from src.services.llm import ChatModelFactory
 from src.services.tool_call_repair import repair_tool_call_arguments
@@ -292,6 +293,10 @@ class RunServices:
     model_factory: ChatModelFactory
     trace: RunTrace
     clock: Callable[[], float] = time.monotonic
+    #: Where a V2 run's audit entries go (DS-10) — the platform's own chain
+    #: unless a caller (the exported package) brings its own. `None` writes
+    #: nothing, and only a test that is not about audit should pass it.
+    audit: AuditSink | None = record_audit_event
 
 
 def get_clock() -> Callable[[], float]:

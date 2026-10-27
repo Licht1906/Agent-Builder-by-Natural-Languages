@@ -103,6 +103,7 @@ from src.agents.runtime import (
 )
 from src.agents.threads import RunIdentity
 from src.agents.tools.registry import TOOL_REGISTRY
+from src.audit.chain import AuditEntry, AuditKind, AuditMode
 from src.config import get_settings
 from src.datasources.query import AggregateFn, FilterOp, SortDir, StructuredQuery
 from src.datasources.reader import UNREAD_FOR_ASKER, DatabaseReader, QueryOutcome
@@ -907,14 +908,16 @@ async def _run_data_query(
     # own record of "chạy với tư cách ai" (DS-05), denied reads included.
     base_args = {"source_id": config.source_id, "run_as": _asker_of(run)}
     if reader is None:
-        return _data_query_unread(
-            node, state, "Lượt chạy này không được nối với Hệ CSDL nào", emit=emit, args=base_args
-        )
+        reason = "Lượt chạy này không được nối với Hệ CSDL nào"
+        await _audit_read(run, node.id, config, outcome="unread", reason=reason)
+        return _data_query_unread(node, state, reason, emit=emit, args=base_args)
     columns = reader.columns_of(config)
     if not columns:
+        await _audit_read(run, node.id, config, outcome="unread", reason=_NO_READABLE_SOURCE)
         return _data_query_unread(node, state, _NO_READABLE_SOURCE, emit=emit, args=base_args)
     query, refusal = await _query_from_model(columns, config, state=state, node_id=node.id, run=run, emit=emit)
     if query is None:
+        await _audit_read(run, node.id, config, outcome="unread", reason=refusal)
         return _data_query_unread(node, state, refusal, emit=emit, args=base_args)
     args = {**base_args, **query.model_dump(mode="json", by_alias=True, exclude_defaults=True)}
     emit(
@@ -925,6 +928,8 @@ async def _run_data_query(
     # Inline, not off the loop: the reader works through this request's own
     # database session, which `knowledge_search` uses inline for the same reason.
     outcome = reader.read(config, query)
+    # Before the rows reach the model: a read that cannot be audited is not used.
+    await _audit_read(run, node.id, config, query=args, read=outcome)
     if outcome.rows is None:
         return _data_query_unread(
             node, state, outcome.transcript_reason, emit=emit, announced=True, told=outcome.asker_reason
@@ -952,6 +957,94 @@ async def _run_data_query(
             "untrusted": [*_untrusted_of(state), finding["source"]],
         },
     )
+
+
+async def _audit_read(
+    run: WorkflowRunContext,
+    node_id: str,
+    config: DataQueryConfig,
+    *,
+    query: dict[str, Any] | None = None,
+    read: QueryOutcome | None = None,
+    outcome: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """One audit entry for one `data_query` read (DS-10) — who asked what of which view, and how many rows.
+
+    Never the rows themselves: the count, the scope that bounded them, and the
+    query that asked for them are the whole of what is kept.
+    """
+    details: dict[str, Any] = {
+        "asker": _asker_of(run),
+        "source_id": config.source_id,
+        "query": query,
+    }
+    if read is not None:
+        details["source_name"] = read.source_name
+        details["view"] = read.view
+        if read.rows is not None:
+            details |= {
+                "outcome": "rows",
+                "row_count": len(read.rows.rows),
+                "scope": [[column, value] for column, value in read.scope or ()],
+            }
+        elif read.denied is not None:
+            details |= {"outcome": "denied", "deny_cause": read.denied.cause.value}
+        else:
+            details |= {"outcome": "refused", "reason": read.refusal}
+    else:
+        details |= {"outcome": outcome, "reason": reason}
+    await _audit(run, AuditKind.DATA_QUERY, node_id, details)
+
+
+async def _audit_action(
+    run: WorkflowRunContext,
+    node_id: str,
+    tool: str,
+    payload: dict[str, Any],
+    approval: dict[str, Any] | None,
+    *,
+    outcome: str,
+    live: bool = False,
+    reason: str | None = None,
+) -> None:
+    """One audit entry for one call a person had to approve (DS-10) — its hash, its approver, what became of it.
+
+    The payload's DS-08 `action_hash`, never the payload: the email is the
+    recipient's business, and the hash is enough to prove which one was meant.
+    """
+    details = {
+        "tool": tool,
+        "action_hash": action_hash(tool, payload),
+        "approval_id": approval.get("approval_id") if approval else None,
+        "approved_by": approval.get("decided_by") if approval else None,
+        "outcome": outcome,
+        "live_in_sandbox": live,
+        "reason": reason,
+    }
+    await _audit(run, AuditKind.ACTION, node_id, details)
+
+
+async def _audit(run: WorkflowRunContext, kind: AuditKind, node_id: str, details: dict[str, Any]) -> None:
+    """Hand one entry to the run's audit sink, off the event loop. A failed write fails the node, by design."""
+    sink = run.services.audit
+    if sink is None:
+        return
+    if run.scripted_approvals is not None:
+        mode = AuditMode.EVAL
+    else:
+        mode = AuditMode.TRIAL if run.sandbox else AuditMode.PROD
+    entry = AuditEntry(
+        kind=kind,
+        mode=mode,
+        agent_id=run.identity.thread.agent_id,
+        version_id=run.identity.version_id,
+        trace_id=run.identity.trace_id,
+        run_id=run.run_id,
+        node_id=node_id,
+        details=details,
+    )
+    await asyncio.to_thread(sink, entry)
 
 
 def _asker_of(run: WorkflowRunContext) -> str | None:
@@ -1330,6 +1423,7 @@ async def _run_resolved_mcp(
         # Before the mock too: a rehearsal refuses exactly what production would.
         refusal = await _unapproved(node.id, called, payload, approval)
         if refusal is not None:
+            await _audit_action(run, node.id, called, payload, approval, outcome="refused", reason=refusal)
             return _mcp_refusal(node, config, payload, reason=refusal, emit=emit)
         approved_call = True
     # DS-09: a trial switched to send for real lets through exactly the calls a
@@ -1343,6 +1437,8 @@ async def _run_resolved_mcp(
     emit(_event("tool", call))
     if simulated:
         answer = mock_answer(action)
+        if approved_call:
+            await _audit_action(run, node.id, called, payload, approval, outcome="simulated")
         emit(_event("tool_result", _tool_result(node.id, called, ok=True, result=answer, simulated=True)))
         return NodeOutcome(content=answer, state_update={"messages": [_note(node, answer, tool=called, ok=True)]})
 
@@ -1363,6 +1459,8 @@ async def _run_resolved_mcp(
             answer = await asyncio.to_thread(tool.invoke, action.name, payload)
     except Exception as exc:  # noqa: BLE001 — a refused action is reportable, not fatal
         reason = f"Không thực hiện được hành động {action.name!r}: {exc}"
+        if approved_call:
+            await _audit_action(run, node.id, called, payload, approval, outcome="failed", live=live, reason=reason)
         # ADR-0061: the *type* decides whether this refusal is the platform's,
         # never the sentence. `GoogleToolError` carries both kinds — "your token
         # died" and "Google says that message id does not exist" — and only the
@@ -1377,6 +1475,8 @@ async def _run_resolved_mcp(
         )
         return NodeOutcome(content=reason, state_update={"messages": [_note(node, reason, tool=called, ok=False)]})
 
+    if approved_call:
+        await _audit_action(run, node.id, called, payload, approval, outcome="sent", live=live)
     emit(_event("tool_result", _tool_result(node.id, called, ok=True, result=answer, simulated=False, live=live)))
     return NodeOutcome(content=answer, state_update={"messages": [_note(node, answer, tool=called, ok=True)]})
 
@@ -1935,7 +2035,13 @@ def _decided(
     if approved:
         after = len(state["messages"]) + 1
         for action in actions:
-            licensed[action["node_id"]] = {**action, "gate": node.id, "approval_id": approval_id, "messages_at": after}
+            licensed[action["node_id"]] = {
+                **action,
+                "gate": node.id,
+                "approval_id": approval_id,
+                "decided_by": decision.get("decided_by"),
+                "messages_at": after,
+            }
     return NodeOutcome(
         content=said,
         state_update={
