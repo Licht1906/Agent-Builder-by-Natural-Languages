@@ -1,0 +1,45 @@
+# Image `runtime` — the exported package's runtime, DS-13 / ADR-0059 §10.
+#
+# One agent, run inside the company: `python -m src.standalone` serves chat,
+# approvals and health and nothing else (no Designer/Builder/admin/PM route is
+# mounted — see src/standalone/app.py). The three files a company edits are
+# mounted at /etc/agent: bundle.json, access.yaml, runtime.yaml.
+#
+#   docker build -f Dockerfile.runtime -t agent-runtime .
+#   docker run -p 8080:8080 -v ./goi:/etc/agent:ro \
+#     -e AGENT_SECRET_RUNTIME_DB=... -e AGENT_SECRET_ERP_DSN=... -e AGENT_SECRET_LLM_KEY=... agent-runtime
+#
+# A missing secret stops the container at start-up, naming the secret.
+
+# ---- Stage 1: Build ----
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ---- Stage 2: Runtime ----
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+
+# `src` is imported from /app, not installed (see Dockerfile).
+ENV PYTHONPATH=/app \
+    AGENT_RUNTIME_CONFIG=/etc/agent/runtime.yaml \
+    PORT=8080
+
+RUN useradd -m appuser
+
+COPY src ./src
+
+USER appuser
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+
+CMD ["python", "-m", "src.standalone"]

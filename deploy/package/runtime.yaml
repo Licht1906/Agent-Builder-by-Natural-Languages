@@ -1,0 +1,38 @@
+# runtime.yaml — the exported package's configuration (DS-13). IT edits this and access.yaml; nothing else.
+#
+# Every secret named below is REQUIRED. A missing one stops the package at start-up and says which,
+# and where it was looked for.
+#
+# Data stays inside the company only when llm.base_url (and embedding.base_url) point at an LLM that runs inside it.
+
+bundle: bundle.json            # the agent: confirmed spec + workflow, exported from the platform
+
+database:
+  url_secret: runtime_db        # the package's OWN Postgres — checkpoints, approvals, audit chain
+
+data_sources:                   # one entry per Hệ CSDL the workflow's data_query nodes read
+  - id: "1"                     # the source_id the bundle's data_query nodes name
+    name: ERP
+    dialect: postgresql         # postgresql | sqlserver | mysql
+    dsn_secret: erp_dsn         # a read-only account on the company's database
+    access: access.yaml         # who may see which rows — identity + rules
+
+llm:                            # any OpenAI-compatible endpoint
+  base_url: http://llm.internal/v1
+  api_key_secret: llm_key
+  default_model: qwen2.5-72b-instruct
+  models:                       # the model a node was evaluated with on the platform -> the model served here
+    gpt-4.1-mini: qwen2.5-72b-instruct
+
+auth:
+  mode: trusted_header          # a gateway in front of the package signs people in and passes who they are
+  header: X-Asker               # requests without it are refused (401) — never a default asker
+
+secrets:
+  backend: env                  # env | file | vault
+  env_prefix: AGENT_SECRET_     # env:  AGENT_SECRET_RUNTIME_DB, AGENT_SECRET_ERP_DSN, AGENT_SECRET_LLM_KEY
+  # directory: /run/secrets     # file: one file per secret, named as above
+  # vault: {url: https://vault.internal, mount: secret, token_env: VAULT_TOKEN}
+
+trusted_hosts:                  # database hosts on a private network the package may dial
+  - erp-db.internal
