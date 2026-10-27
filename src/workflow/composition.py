@@ -181,10 +181,14 @@ read-only để đọc (search, recent, fetch, get_profile), action WRITE để 
 "knowledge_search" cho một tài khoản, node đó không có tài liệu để tìm. Action "(read-only)" không \
 cần "human_approval"; action "(WRITE, risk high)" BẮT BUỘC có "human_approval" ngay trước và chỉ đi \
 tiếp từ cổng "approved"; risk medium KHÔNG cần "human_approval" trừ khi bài toán nói rõ phải có người \
-duyệt. {approval_rule} "human_approval" chỉ đứng ngay trước \
+duyệt. Hệ CSDL nghiệp vụ ("kind" database: công nợ, đơn hàng, tồn kho…) → MỘT node "data_query" cho mỗi \
+nguồn — hệ thống tự gắn Hệ CSDL và view, và node tự lọc dữ liệu theo đúng người đang hỏi, nên prompt và \
+condition KHÔNG nói gì về phạm vi, quyền xem hay "chỉ khách của mình"; không bao giờ "knowledge_search" hay \
+"mcp" cho một Hệ CSDL. Bài toán vừa đọc Hệ CSDL vừa gửi ra ngoài thì khung là: "collect" → "data_query" → \
+"agent_llm" soạn → "human_approval" → "mcp" → "agent_llm" báo lại → "end". {approval_rule} "human_approval" chỉ đứng ngay trước \
 một node "mcp" WRITE; graph không có "mcp" thì không có "human_approval". Cổng "rejected" phải dẫn tới \
 một node "agent_llm" nói rõ việc chưa được làm và vì sao, rồi mới tới "end" — không bao giờ nối \
-"rejected" thẳng vào "end". Các node đọc ("knowledge_search", "web_search") chỉ nạp bằng chứng, nối \
+"rejected" thẳng vào "end". Các node đọc ("knowledge_search", "web_search", "data_query") chỉ nạp bằng chứng, nối \
 tiếp nhau trên một đường; MỘT node "agent_llm" đứng sau tất cả node đọc để trả lời — không vẽ một \
 "agent_llm" riêng cho mỗi nguồn, không vẽ "if_else" "có tìm thấy không" (node trả lời tự nói khi không \
 có), không vẽ node đọc nào không có cạnh vào. NGOẠI LỆ, và BẮT BUỘC khi graph có "web_search": đặt NGAY \
@@ -204,7 +208,8 @@ bài toán nêu là MỘT node "if_else" — KHÔNG gộp các bậc vào một 
 soát lại / sửa tới khi đủ" thì vẽ "while": cổng "loop" → "agent_llm" soạn hoặc sửa → quay về chính node \
 "while"; cổng "exit" → bước tiếp; "condition" gọi tên tiêu chí còn thiếu, ví dụ "bản thảo còn thiếu một \
 trong ba mục: A, B, C — hoặc chưa có bản thảo nào"; "max_iterations" 2–3. Không thay "while" bằng hai \
-node soạn–soát nối thẳng: đó không phải vòng lặp.
+node soạn–soát nối thẳng: đó không phải vòng lặp. Ngoại lệ: graph đọc Hệ CSDL bằng "data_query" thì ngưỡng \
+dùng để chọn dòng (ví dụ "khách quá hạn trên 30 ngày") là bộ lọc của truy vấn, không cần "if_else".
 
 Hợp đồng của từng trường:
 - "message_template" của "human_approval" và mọi "prompt" là văn bản thuần, KHÔNG có cú pháp thay \
@@ -594,6 +599,7 @@ def _deduplicated_reads(graph: WorkflowJSON, spec: AgentSolutionSpecification) -
     limits = {
         NodeType.KNOWLEDGE_SEARCH: sum(1 for source in spec.data if source.kind is DataSourceKind.UPLOADED_FILE),
         NodeType.WEB_SEARCH: sum(1 for source in spec.data if source.kind is DataSourceKind.WEB),
+        NodeType.DATA_QUERY: sum(1 for source in spec.data if source.kind is DataSourceKind.DATABASE),
     }
     changed = True
     while changed:
@@ -889,7 +895,10 @@ def _shape_complaints(
             # before this runs, for the reason its docstring gives.
     spec_text = _spec_text(spec)
     threshold = _THRESHOLD.search(spec_text)
-    if threshold and not any(node.type is NodeType.IF_ELSE for node in graph.nodes):
+    # Not on a graph that reads a Hệ CSDL (DS-11): there "quá hạn trên 30 ngày"
+    # is which rows to read — a filter the query applies — not a fork to draw.
+    reads_database = any(node.type is NodeType.DATA_QUERY for node in graph.nodes)
+    if threshold and not reads_database and not any(node.type is NodeType.IF_ELSE for node in graph.nodes):
         complaints.append(
             f"Bài toán nêu ngưỡng {threshold.group(0)!r} nhưng graph không có node if_else nào; mỗi ngưỡng là một "
             "if_else với condition nêu đúng ngưỡng đó, hai cổng dẫn tới hai bước khác nhau"
@@ -1035,6 +1044,17 @@ def _shape_complaints(
         complaints.append("Bài toán không có nguồn web nào; bỏ node web_search")
     if DataSourceKind.UPLOADED_FILE not in kinds and NodeType.KNOWLEDGE_SEARCH in types:
         complaints.append("Bài toán không có tài liệu tải lên nào; bỏ node knowledge_search")
+    # DS-11: a Hệ CSDL is read by `data_query`, one node per source, and by nothing else.
+    database_sources = sum(1 for source in spec.data if source.kind is DataSourceKind.DATABASE)
+    query_nodes = sum(1 for node in graph.nodes if node.type is NodeType.DATA_QUERY)
+    if database_sources and not query_nodes:
+        complaints.append("Bài toán đọc dữ liệu nghiệp vụ từ Hệ CSDL nhưng graph không có node data_query nào để đọc nó")
+    if not database_sources and query_nodes:
+        complaints.append("Bài toán không có Hệ CSDL nào; bỏ node data_query")
+    if database_sources and query_nodes > database_sources:
+        complaints.append(
+            f"Graph có {query_nodes} node data_query cho {database_sources} Hệ CSDL; mỗi Hệ CSDL đúng một node"
+        )
     if DataSourceKind.CONNECTED_ACCOUNT in kinds and offered_actions and NodeType.MCP not in types:
         complaints.append(
             "Bài toán có tài khoản kết nối và một action phải gọi "

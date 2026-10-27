@@ -124,7 +124,10 @@ nhận quyết định duyệt — nền tảng lo những việc đó.
 - Một câu trả lời chưa đầy đủ vẫn là câu trả lời: điền nó vào trường rồi hỏi sang trường khác còn trống; \
 không hỏi lại cùng một trường vì muốn chi tiết hơn.
 - "data": liệt kê ĐỦ mọi nguồn được nhắc tới, mỗi nguồn đúng loại — file đã tải lên = uploaded_file; tài \
-khoản Gmail/Drive/… đã kết nối = connected_account; tìm trên web = web; thứ người dùng gõ lúc chạy = user_input. \
+khoản Gmail/Drive/… đã kết nối = connected_account; tìm trên web = web; thứ người dùng gõ lúc chạy = user_input; \
+dữ liệu nghiệp vụ có cấu trúc nằm trong hệ thống của công ty (công nợ, hoá đơn, đơn hàng, tồn kho, khách hàng, \
+nhân viên… trong ERP, CRM hay cơ sở dữ liệu) = database — đó là bảng số liệu agent truy vấn, không phải tài liệu \
+để đọc, kể cả khi người này không nói chữ "cơ sở dữ liệu". \
 Nguồn được nhắc tới mà người này KHÔNG nói rõ nó ở đâu (ví dụ "chính sách của công ty mình" — file đã tải \
 lên hay ở đâu khác?) thì KHÔNG đoán loại và KHÔNG đưa vào "data"; đặt "question" về trường "data" hỏi đúng \
 nguồn đó ở đâu, kể cả khi "data" đã có nguồn khác.

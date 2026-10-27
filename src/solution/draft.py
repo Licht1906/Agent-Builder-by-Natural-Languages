@@ -94,11 +94,13 @@ FIELD_SCHEDULE: tuple[FieldSpec, ...] = (
         # a third time.
         question=(
             "Agent cần đọc dữ liệu từ đâu? Với mỗi nguồn, cho biết nó là file bạn tải lên, "
-            "tài khoản bạn kết nối (Gmail/Drive/...), thông tin tìm trên web, hay dữ liệu người dùng nhập lúc chạy."
+            "tài khoản bạn kết nối (Gmail/Drive/...), cơ sở dữ liệu của công ty (ERP, CRM...), "
+            "thông tin tìm trên web, hay dữ liệu người dùng nhập lúc chạy."
         ),
         hint=(
             "từng nguồn một, mỗi nguồn kèm loại: 'uploaded_file' (file người tạo tải lên), "
-            "'connected_account' (tài khoản Gmail/Drive/... đã kết nối), 'web' (tìm trên web), "
+            "'connected_account' (tài khoản Gmail/Drive/... đã kết nối), 'database' (dữ liệu nghiệp vụ có "
+            "cấu trúc trong ERP/CRM/CSDL của công ty — công nợ, đơn hàng, tồn kho...), 'web' (tìm trên web), "
             "'user_input' (dữ liệu người dùng nhập lúc chạy)"
         ),
     ),
@@ -484,6 +486,16 @@ _KIND_SYNONYMS: dict[str, str] = {
     "user": "user_input",
     "chat": "user_input",
     "runtime": "user_input",
+    # DS-11: a Hệ CSDL, however a model spells it.
+    "db": "database",
+    "sql": "database",
+    "erp": "database",
+    "crm": "database",
+    "csdl": "database",
+    "he_csdl": "database",
+    "co_so_du_lieu": "database",
+    "table": "database",
+    "database_table": "database",
 }
 
 

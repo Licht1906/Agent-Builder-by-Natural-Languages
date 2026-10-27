@@ -418,6 +418,69 @@ _DATA_ENRICHMENT = TemplateSpec(
 )
 
 
+_DATABASE_QA = TemplateSpec(
+    id="database_qa",
+    name="Hỏi đáp trên dữ liệu nghiệp vụ",
+    description=(
+        "Người dùng hỏi về số liệu nghiệp vụ — công nợ, đơn hàng, tồn kho — agent truy vấn Hệ CSDL của công ty "
+        "theo đúng phạm vi người đang hỏi được xem, rồi trả lời kèm trích dẫn nguồn. Không thực hiện hành động "
+        "nào ra bên ngoài."
+    ),
+    start_node_id="query",
+    nodes=[
+        _node("query", NodeType.DATA_QUERY, {"source_id": "", "views": []}, column=0),
+        _node("answer", NodeType.AGENT_LLM, {"prompt": "", "model": ""}, column=1),
+        _node("finish", NodeType.END, {}, column=2),
+    ],
+    edges=[
+        _edge("query", "done", "answer"),
+        _edge("answer", "done", "finish"),
+    ],
+    # A Hệ CSDL is what `query` is bound to (DS-11) — none registered, nothing to read.
+    required_data_kinds=[DataSourceKind.DATABASE],
+)
+
+_DATABASE_OUTREACH = TemplateSpec(
+    id="database_outreach",
+    name="Đọc dữ liệu nghiệp vụ rồi gửi thư có duyệt",
+    description=(
+        "Agent truy vấn Hệ CSDL của công ty theo đúng phạm vi người đang hỏi — ví dụ khách quá hạn công nợ — "
+        "soạn một thư dựa trên đúng các dòng đọc được, xin người duyệt xem nguyên văn rồi mới gửi qua tài khoản "
+        "đã kết nối, và báo lại kết quả. Hợp với nhắc nợ, nhắc giao hàng, thông báo cho khách."
+    ),
+    start_node_id="collect",
+    nodes=[
+        _node("collect", NodeType.COLLECT, {"action_node": "send", "agent_writes": ["subject", "body"]}, column=0),
+        _node("query", NodeType.DATA_QUERY, {"source_id": "", "views": []}, column=1),
+        _node("draft", NodeType.AGENT_LLM, {"prompt": "", "model": ""}, column=2),
+        _node(
+            "approval",
+            NodeType.HUMAN_APPROVAL,
+            {"approver_role": _DEFAULT_APPROVER_ROLE, "message_template": ""},
+            column=3,
+        ),
+        _node("send", NodeType.MCP, {"tool_id": "", "action": ""}, column=4),
+        _node("report", NodeType.AGENT_LLM, {"prompt": "", "model": ""}, column=5, row=1),
+        _node("finish", NodeType.END, {}, column=6, row=1),
+    ],
+    edges=[
+        _edge("collect", "complete", "query"),
+        # The question the collector asked is the turn's answer (ADR-0052).
+        _edge("collect", "incomplete", "finish"),
+        _edge("query", "done", "draft"),
+        _edge("draft", "done", "approval"),
+        _edge("approval", "approved", "send"),
+        _edge("approval", "rejected", "report"),
+        _edge("send", "done", "report"),
+        _edge("report", "done", "finish"),
+    ],
+    # DS-11's demo shape: `collect → data_query → agent_llm → human_approval →
+    # <action>`. Both a Hệ CSDL and an account are needed, but the selector's
+    # rule is "any one of", so the one it cannot do without is named.
+    required_data_kinds=[DataSourceKind.DATABASE],
+)
+
+
 #: The built-in seed catalog. Adding an entry is a code change reviewed like any
 #: other — which is exactly the property ADR-0025 §7 protects by refusing to let
 #: a freehand or LLM-drawn graph enter here.
@@ -430,6 +493,8 @@ TEMPLATE_REGISTRY: dict[str, TemplateSpec] = {
     _DOCUMENT_COMPARISON.id: _DOCUMENT_COMPARISON,
     _INTERNAL_KNOWLEDGE_ASSISTANT.id: _INTERNAL_KNOWLEDGE_ASSISTANT,
     _DATA_ENRICHMENT.id: _DATA_ENRICHMENT,
+    _DATABASE_QA.id: _DATABASE_QA,
+    _DATABASE_OUTREACH.id: _DATABASE_OUTREACH,
 }
 
 

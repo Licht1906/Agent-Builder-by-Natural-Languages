@@ -202,7 +202,16 @@ on the draft in front of you.
    account (kind `connected_account`: a Gmail inbox, a Drive) → `mcp`, a
    read-only action to read (search, recent, fetch, get_profile), a WRITE
    action to write — never `knowledge_search` for an account, it has nothing
-   to search. A `(read-only)` action needs no `human_approval`; a `(WRITE,
+   to search. A company's business data — receivables, invoices, orders,
+   stock, customers in an ERP, CRM or database (kind `database`) — is read by
+   one `data_query` node per source: the platform binds the database and its
+   views and scopes every read to whoever is asking, so no prompt or
+   condition talks about scope or "only my customers"; never
+   `knowledge_search` or `mcp` for a database, and a threshold that picks rows
+   ("overdue more than 30 days") is the query's filter, not an `if_else`.
+   Reading a database and then sending something out is
+   `collect → data_query → agent_llm → human_approval → mcp → agent_llm → end`.
+   A `(read-only)` action needs no `human_approval`; a `(WRITE,
    risk high)` action MUST have a `human_approval` right before it, continuing
    only from `approved`; medium risk should.
 

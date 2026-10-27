@@ -43,10 +43,13 @@ from sqlalchemy.orm import Session
 
 from src.admin.config import read_config
 from src.agents.versions import wrong_stage
+from src.datasources.graph import owned_source
+from src.datasources.sources import access_rules_of
 from src.db.models import AgentVersion, VersionStatus
 from src.metaagent.catalog import creator_catalog
 from src.metaagent.loop import CatalogTool
-from src.models.solution_spec import AgentSolutionSpecification
+from src.models.node_registry import NodeType
+from src.models.solution_spec import AgentSolutionSpecification, DataSourceKind
 from src.models.workflow import WorkflowJSON
 from src.services.llm import ChatModelFactory
 from src.solution.specs import solution_spec_of
@@ -107,6 +110,7 @@ async def draft_workflow(
             _chosen(db, template_id), spec, model_factory=model_factory, model_allowlist=allowlist
         )
 
+    workflow = bound_databases(db, workflow, spec, owner_id=version.agent.owner_id)
     version.workflow = workflow.model_dump(mode="json")
     version.status = VersionStatus.WORKFLOW_PENDING_CONFIRMATION
     db.commit()
@@ -159,6 +163,37 @@ async def _from_template(
 ) -> WorkflowJSON:
     """`template`'s fixed shape with this spec's resources and wording in it."""
     return await fill_config(template=template, spec=spec, model_factory=model_factory, model_allowlist=model_allowlist)
+
+
+def bound_databases(
+    db: Session, workflow: WorkflowJSON, spec: AgentSolutionSpecification, *, owner_id: int
+) -> WorkflowJSON:
+    """Each `data_query` node pointed at the Hệ CSDL the spec names, with its views — by rule, never by a model (DS-11).
+
+    The n-th `data_query` node reads the n-th `database` source, the way the
+    spec lists them. `source_id` is that source's `ref`; `views` are the
+    views the creator ticked on it, less the employee view its access rules
+    resolve askers against — that one is for deciding scope, not for reading.
+    A source with no `ref` yet, or one that is not the owner's, leaves its
+    node blank for the canvas to ring, as an unbound `tool_id` is.
+    """
+    refs = [source.ref for source in spec.data if source.kind is DataSourceKind.DATABASE]
+    nodes, index = [], 0
+    for node in workflow.nodes:
+        if node.type is not NodeType.DATA_QUERY:
+            nodes.append(node)
+            continue
+        ref = refs[index] if index < len(refs) else None
+        index += 1
+        source = owned_source(db, ref, owner_id) if ref else None
+        if source is None:
+            nodes.append(node)
+            continue
+        rules = access_rules_of(source)
+        identity_view = rules.identity.view if rules is not None else None
+        views = [view for view in source.allowed_views if view != identity_view]
+        nodes.append(node.model_copy(update={"config": {**node.config, "source_id": str(ref), "views": views}}))
+    return workflow.model_copy(update={"nodes": nodes})
 
 
 def _chosen(db: Session, template_id: str) -> TemplateSpec:
