@@ -281,6 +281,9 @@ export const databaseSources = {
   /* Quy tắc truy cập (DS-03): `rules: null` means none saved — deny everyone. */
   accessRules: (id) => request(`/database-sources/${id}/access-rules`),
   saveAccessRules: (id, rules) => request(`/database-sources/${id}/access-rules`, { method: "PUT", body: rules }),
+  /** DS-12: rules drafted from the creator's words — `{rules, dropped, problems}`, never saved. */
+  draftAccessRules: (id, description, identity) =>
+    request(`/database-sources/${id}/access-rules/draft`, { method: "POST", body: { description, identity } }),
   accessRulesYaml: (id) => requestText(`/database-sources/${id}/access-rules/yaml`),
   distinctValues: (id, view, column) =>
     request(`/database-sources/${id}/distinct-values?view=${encodeURIComponent(view)}&column=${encodeURIComponent(column)}`),

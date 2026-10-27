@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, FileCode, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, FileCode, Plus, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import * as api from "../lib/api";
 import { Spinner } from "../components/ui";
 import { useLang } from "../i18n";
@@ -104,6 +104,12 @@ export default function AccessRulesEditor({ source, notify }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [yamlText, setYamlText] = useState(null);
+  // DS-12: the creator's words, and what the last draft from them cut out. `drafted`
+  // stays true until the rules are saved — a draft on the form is not a rule yet.
+  const [description, setDescription] = useState("");
+  const [drafting, setDrafting] = useState(false);
+  const [drafted, setDrafted] = useState(false);
+  const [dropped, setDropped] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +150,28 @@ export default function AccessRulesEditor({ source, notify }) {
     }
   }
 
+  async function suggest() {
+    setDrafting(true);
+    try {
+      const result = await api.databaseSources.draftAccessRules(source.id, description.trim(), toRules(draft, grantViews).identity);
+      const proposed = draftOf(result.rules);
+      // Positions already on the form stay — a position the draft has no rule for is simply denied.
+      setDraft((current) => ({
+        ...proposed,
+        positions: [...proposed.positions, ...current.positions.filter((position) => !proposed.positions.includes(position))],
+      }));
+      setDropped(result.dropped || []);
+      setProblems(result.problems || []);
+      setDrafted(true);
+    } catch (err) {
+      const refused = problemsOf(err);
+      if (refused) setProblems(refused);
+      else notify(err.message, "error");
+    } finally {
+      setDrafting(false);
+    }
+  }
+
   async function save() {
     const incomplete = incompleteFilters(draft, grantViews).map(([position, view]) =>
       t("{position} — {view}: the filter has no complete condition. Pick a view column and an asker attribute, or choose Deny.", { position, view }),
@@ -157,6 +185,8 @@ export default function AccessRulesEditor({ source, notify }) {
       const saved = await api.databaseSources.saveAccessRules(source.id, toRules(draft, grantViews));
       setProblems(saved.problems || []);
       setYamlText(null);
+      setDrafted(false);
+      setDropped([]);
       notify(t("Access rules saved"));
     } catch (err) {
       const refused = problemsOf(err);
@@ -182,6 +212,42 @@ export default function AccessRulesEditor({ source, notify }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <IdentityFields draft={draft} source={source} columnsOf={columnsOf} edit={edit} />
+
+      <div className="field">
+        <label htmlFor={`ar-describe-${source.id}`}>{t("Describe who sees what")}</label>
+        <textarea
+          id={`ar-describe-${source.id}`}
+          className="input"
+          rows={2}
+          value={description}
+          placeholder={t("Sales reps see only the customers they handle; team leads see their whole department.")}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={suggest}
+            disabled={drafting || !description.trim() || !draft.view || !draft.matchBy || !positionColumn}
+          >
+            {drafting ? <Spinner size={12} /> : <Sparkles size={12} />}{t("Suggest rules")}
+          </button>
+        </div>
+      </div>
+
+      {drafted && (
+        <div role="status" style={{ border: "1px solid var(--color-accent)", background: "var(--color-accent-100)", color: "var(--color-accent-800)", padding: "var(--space-2) var(--space-3)", fontSize: "var(--text-sm)" }}>
+          <strong>{t("Draft — not saved.")}</strong> {t("Review every cell below, change what is wrong, then save. Nothing applies until you do.")}
+          {dropped.length > 0 && (
+            <>
+              <div style={{ marginTop: 6 }}>{t("Left out because the database does not have it:")}</div>
+              <ul data-testid="draft-dropped" style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                {dropped.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
 
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>

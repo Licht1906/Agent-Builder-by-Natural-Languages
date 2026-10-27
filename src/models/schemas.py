@@ -15,7 +15,7 @@ from src.agents.threads import CONVERSATION_ID_PATTERN, ThreadNamespace
 from src.agents.tools.registry import ToolRisk
 from src.agentspec.spec import ConnectionType
 from src.approvals.states import QueueState
-from src.datasources.access import AccessRules
+from src.datasources.access import AccessRules, Identity
 from src.datasources.dialects.base import ProbeFailure
 from src.db.models import (
     MAX_RATE_LIMIT_PER_USER,
@@ -381,6 +381,23 @@ class AccessRulesResponse(BaseModel):
 
     rules: AccessRules | None
     problems: list[str]
+
+
+class AccessRulesDraftRequest(BaseModel):
+    """What the meta-agent drafts rules from (DS-12): the creator's words, and the identity on the form now."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(..., min_length=1, max_length=4000, description="Người tạo mô tả ai được xem gì")
+    identity: Identity = Field(..., description="Phần identity đang có trên form — view nhân viên, cột khớp, thuộc tính")
+
+
+class AccessRulesDraftResponse(BaseModel):
+    """A draft for the DS-03 form to show — **not saved**. `dropped` names everything cut out to make it fit."""
+
+    rules: AccessRules
+    dropped: list[str] = Field(..., description="Chức vụ, view, cột hay thuộc tính model nhắc tới mà không có — đã loại")
+    problems: list[str] = Field(..., description="Chỗ nháp còn không khớp Hệ CSDL; rỗng khi lưu được ngay")
 
 
 class DistinctValuesResponse(BaseModel):

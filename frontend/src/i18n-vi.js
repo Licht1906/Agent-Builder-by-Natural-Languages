@@ -60,6 +60,15 @@ export const VI = {
   "Name": "Tên",
   "Database type": "Loại CSDL",
   /* ── Approval card: the call itself (DS-08) ── */
+  /* ── Access rules drafted from words (DS-12) ── */
+  "Describe who sees what": "Mô tả ai được xem gì",
+  "Sales reps see only the customers they handle; team leads see their whole department.":
+    "Nhân viên chỉ xem khách mình phụ trách, trưởng nhóm xem cả phòng.",
+  "Suggest rules": "Đề xuất quy tắc",
+  "Draft — not saved.": "Nháp — chưa lưu.",
+  "Review every cell below, change what is wrong, then save. Nothing applies until you do.":
+    "Rà từng ô bên dưới, sửa chỗ sai rồi bấm lưu. Chưa lưu thì chưa có gì được áp dụng.",
+  "Left out because the database does not have it:": "Đã loại vì Hệ CSDL không có:",
   /* ── Sandbox "Gửi thật" (DS-09) ── */
   "Send for real — this run only": "Gửi thật — chỉ lượt này",
   "Actions you approve, exactly as shown on the approval card, are sent through your own connected account instead of their mock. Everything else stays a mock, and the next run is a rehearsal again.":

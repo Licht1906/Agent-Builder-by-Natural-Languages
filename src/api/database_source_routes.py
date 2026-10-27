@@ -19,8 +19,9 @@ from sqlalchemy.orm import Session
 
 from src.auth.dependencies import CurrentUser
 from src.config import get_settings
-from src.datasources.access import AccessRules, from_yaml, to_yaml
+from src.datasources.access import POSITION, AccessRules, access_problems, from_yaml, to_yaml
 from src.datasources.dialects import ColumnRef, DatabaseProbeError, ProbeFailure
+from src.datasources.rule_draft import draft_access_rules
 from src.datasources.sources import (
     AccessRulesError,
     AllowedViewsError,
@@ -42,7 +43,10 @@ from src.datasources.sources import (
 from src.db.base import get_db
 from src.db.models import DatabaseSource
 from src.deployments.rate_limit import RateLimitExceededError, SlidingWindowLimiter
+from src.evals.model_json import UnreadableModelReplyError
 from src.models.schemas import (
+    AccessRulesDraftRequest,
+    AccessRulesDraftResponse,
     AccessRulesResponse,
     DatabaseSourceCreateRequest,
     DatabaseSourceResponse,
@@ -51,6 +55,7 @@ from src.models.schemas import (
     DistinctValuesResponse,
 )
 from src.services.connection_test_rate_limit import charge_one_connection_test, get_connection_test_rate_limiter
+from src.services.llm import ChatModelFactory, get_chat_model_factory
 from src.services.secret_store import SecretStore, get_secret_store
 
 router = APIRouter(prefix="/database-sources", tags=["database-sources"])
@@ -254,6 +259,60 @@ def list_my_distinct_values(
     except DatabaseProbeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
     return DistinctValuesResponse(values=values)
+
+
+@router.post("/{source_id}/access-rules/draft", response_model=AccessRulesDraftResponse)
+async def draft_my_access_rules(
+    body: AccessRulesDraftRequest,
+    source: OwnedDatabaseSource,
+    secret_store: SecretStoreDep,
+    rate_limiter: ConnectionTestRateLimiterDep,
+    model_factory: Annotated[ChatModelFactory, Depends(get_chat_model_factory)],
+) -> AccessRulesDraftResponse:
+    """Rules drafted from the creator's words, for the form to show — **nothing is saved** (DS-12).
+
+    The model is shown the identity on the form, the positions the employee
+    view really holds (one read of it, rate-limited like `/distinct-values`)
+    and the columns of the ticked views; whatever it names that is not there
+    comes back in `dropped`. Saving is the PUT route's, with all its checks.
+
+    422 for an identity that does not fit the Hệ CSDL — the positions cannot
+    be read off a view or column that is not there; 502 when the database or
+    the model could not be read.
+    """
+    snapshot = snapshot_of(source)
+    identity_problems = access_problems(
+        AccessRules(identity=body.identity), allowed_views=source.allowed_views, snapshot=snapshot
+    )
+    if identity_problems:
+        raise _refused("Phần identity chưa khớp với Hệ CSDL — sửa trước khi đề xuất quy tắc", identity_problems)
+    _charge_one_dial_out(rate_limiter, source)
+    position_column = ColumnRef(view=body.identity.view, column=body.identity.attributes[POSITION])
+    try:
+        positions = distinct_column_values(
+            source, position_column, secret_store=secret_store, trusted_hosts=get_settings().database_source_trusted_host_set
+        )
+    except ColumnNotReadableError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+    except DatabaseProbeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
+    view_columns = {
+        view: list(source.view_columns.get(view, []))
+        for view in source.allowed_views
+        if view != body.identity.view and view in source.view_columns
+    }
+    try:
+        draft = await draft_access_rules(
+            description=body.description,
+            identity=body.identity,
+            positions=[str(position) for position in positions],
+            view_columns=view_columns,
+            model_factory=model_factory,
+        )
+    except UnreadableModelReplyError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
+    problems = access_problems(draft.rules, allowed_views=source.allowed_views, snapshot=snapshot)
+    return AccessRulesDraftResponse(rules=draft.rules, dropped=draft.dropped, problems=problems)
 
 
 def _saved(db: Session, source: DatabaseSource, rules: AccessRules) -> AccessRulesResponse:

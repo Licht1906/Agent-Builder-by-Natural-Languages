@@ -10,7 +10,7 @@ vi.mock("../lib/api", async () => {
   const actual = await vi.importActual("../lib/api");
   return {
     ...actual,
-    databaseSources: { accessRules: vi.fn(), saveAccessRules: vi.fn(), accessRulesYaml: vi.fn(), distinctValues: vi.fn() },
+    databaseSources: { accessRules: vi.fn(), saveAccessRules: vi.fn(), accessRulesYaml: vi.fn(), distinctValues: vi.fn(), draftAccessRules: vi.fn() },
   };
 });
 
@@ -152,5 +152,51 @@ describe("the access rules editor", () => {
     await actor.click(screen.getByRole("button", { name: /View YAML/ }));
 
     expect(await screen.findByText(/view: v_employees/)).toBeInTheDocument();
+  });
+
+  describe("drafting rules from the creator's words (DS-12)", () => {
+    const DRAFT = {
+      identity: SAVED.identity,
+      rules: [
+        { position: "Nhân viên KD", views: { v_ar_open: { where: { sales_rep_id: "employee_code" } } } },
+        { position: "Trưởng nhóm KD", views: { v_ar_open: { where: { department: "department" } } } },
+      ],
+    };
+
+    it("fills the form with the draft, says it is not saved, and lists what was left out", async () => {
+      const actor = userEvent.setup();
+      api.databaseSources.draftAccessRules.mockResolvedValue({ rules: DRAFT, dropped: ["chức vụ 'Giám đốc' không có trong view nhân viên v_employees — bỏ rule này"], problems: [] });
+      draw();
+      await waitFor(() => expect(cell("Kế toán trưởng", "v_ar_open")).toBeInTheDocument());
+
+      await actor.type(screen.getByLabelText(/Describe who sees what|Mô tả ai được xem gì/), "Nhân viên chỉ xem khách mình, trưởng nhóm xem cả phòng");
+      await actor.click(screen.getByRole("button", { name: /Suggest rules|Đề xuất quy tắc/ }));
+
+      await waitFor(() => expect(cell("Trưởng nhóm KD", "v_ar_open")).toHaveValue("where"));
+      expect(api.databaseSources.draftAccessRules).toHaveBeenCalledWith(4, "Nhân viên chỉ xem khách mình, trưởng nhóm xem cả phòng", SAVED.identity);
+      expect(screen.getByRole("status")).toHaveTextContent(/not saved|chưa lưu/);
+      expect(screen.getByTestId("draft-dropped")).toHaveTextContent("Giám đốc");
+      // A position already on the form with no rule in the draft stays — and is denied.
+      expect(cell("Kế toán trưởng", "v_ar_open")).toHaveValue("deny");
+      expect(api.databaseSources.saveAccessRules).not.toHaveBeenCalled();
+    });
+
+    it("saves the edited draft only when the creator says so, and the banner goes", async () => {
+      const actor = userEvent.setup();
+      api.databaseSources.draftAccessRules.mockResolvedValue({ rules: DRAFT, dropped: [], problems: [] });
+      draw();
+      await waitFor(() => expect(cell("Kế toán trưởng", "v_ar_open")).toBeInTheDocument());
+      await actor.type(screen.getByLabelText(/Describe who sees what|Mô tả ai được xem gì/), "mô tả");
+      await actor.click(screen.getByRole("button", { name: /Suggest rules|Đề xuất quy tắc/ }));
+      await waitFor(() => expect(cell("Trưởng nhóm KD", "v_ar_open")).toHaveValue("where"));
+
+      await actor.selectOptions(cell("Kế toán trưởng", "v_ar_open"), "all");
+      await actor.click(screen.getByRole("button", { name: /Save access rules|Lưu quy tắc/ }));
+
+      await waitFor(() => expect(api.databaseSources.saveAccessRules).toHaveBeenCalledTimes(1));
+      const [, saved] = api.databaseSources.saveAccessRules.mock.calls[0];
+      expect(saved.rules).toEqual([...DRAFT.rules, { position: "Kế toán trưởng", views: { v_ar_open: "all" } }]);
+      await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    });
   });
 });

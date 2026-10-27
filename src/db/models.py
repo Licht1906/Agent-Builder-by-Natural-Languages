@@ -582,6 +582,9 @@ class PlatformCallPurpose(StrEnum):
     COMPOSE_GRAPH = "compose_graph"
     """Drawing a workflow freehand — the largest prompt this platform sends."""
 
+    ACCESS_RULES_DRAFT = "access_rules_draft"
+    """Drafting a Hệ CSDL's quy tắc truy cập from the creator's words (DS-12) — a proposal, never saved."""
+
     REFINE_GRAPH = "refine_graph"
     """Editing a graph from one sentence, one-shot."""
 
