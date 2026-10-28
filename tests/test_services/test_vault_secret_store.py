@@ -1,4 +1,4 @@
-"""UC1-08 (#122) — `VaultKvStore` against Vault's own KV v2 REST shape.
+"""`VaultKvStore` — the exported package's `secrets.backend: vault` (DS-13) — against Vault's own KV v2 REST shape.
 
 Seam: `httpx.put`/`httpx.get`, monkeypatched on the module object — the same
 shape `tests/test_policy/test_pep.py` uses for `pep.httpx.post`. No live

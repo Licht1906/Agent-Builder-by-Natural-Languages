@@ -3,7 +3,7 @@
 
 `get_pep_client` is overridden with a fake that always `allow`s (same shape
 `tests/test_policy/test_pep.py` scripts `httpx.post` with) — no live OPA
-sidecar in this suite. `get_vault_store` is overridden with the in-memory fake
+sidecar in this suite. `get_secret_store` is overridden with the in-memory fake
 from `tests.test_api.test_connection_routes`.
 """
 
@@ -18,10 +18,10 @@ from src.db.models import UC1AgentSpecVersion, UC1PendingAction
 from src.main import app
 from src.policy.pep import AuthzRequest, Decision, Effect, get_pep_client
 from src.services.llm import get_chat_model_factory
-from src.services.vault_secret_store import get_vault_store
+from src.services.secret_store import get_secret_store
 from tests.conftest import ScriptedToolModel, auth_header
 from tests.test_agentspec.conftest import spec_payload
-from tests.test_api.test_connection_routes import _FakeVault
+from tests.test_api.test_connection_routes import _FakeSecretStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -38,11 +38,11 @@ def _always_deny(reason: str):
 
 
 @pytest.fixture(autouse=True)
-def _fake_vault_and_pep():
-    app.dependency_overrides[get_vault_store] = lambda: _FakeVault()
+def _fake_secrets_and_pep():
+    app.dependency_overrides[get_secret_store] = lambda: _FakeSecretStore()
     app.dependency_overrides[get_pep_client] = lambda: _always_allow
     yield
-    app.dependency_overrides.pop(get_vault_store, None)
+    app.dependency_overrides.pop(get_secret_store, None)
     app.dependency_overrides.pop(get_pep_client, None)
 
 

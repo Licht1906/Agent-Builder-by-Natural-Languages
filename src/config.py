@@ -333,16 +333,9 @@ class Settings(BaseSettings):
         """`database_source_trusted_hosts` as the set it is — `embedding_models`'s reason for parsing once."""
         return frozenset(host.strip() for host in self.database_source_trusted_hosts.split(",") if host.strip())
 
-    # Vault (UC1-08 / #122, §6.2). Dev-mode server for the demo — the spec's own
-    # scope line (§16.1: "production-mode+auto-unseal ngoài MVP"). `vault_token`
-    # is the dev root token `vault server -dev` prints and `docker-compose.yml`'s
-    # `vault` service pins via `VAULT_DEV_ROOT_TOKEN_ID`, not a production
-    # authentication story. `vault_kv_mount` is the KV v2 mount every
-    # `credential_ref` (`vault://<path>`) resolves against — see
-    # `src.services.vault_secret_store`.
-    vault_url: str = "http://localhost:8200"
-    vault_token: str = "dev-only-vault-token"
-    vault_kv_mount: str = "secret"
+    # No Vault settings (DS-20 / ADR-0059 §9): every platform credential is read
+    # through `src.services.secret_store.SecretStore`. An old `.env` still
+    # naming VAULT_URL/VAULT_TOKEN is ignored (`extra="ignore"` above).
 
     # Policy sidecar (UC1-12 / #113, §6.2). OPA reached over its own REST API
     # (`POST /v1/data/agentbuilder/authz/decision`), evaluating

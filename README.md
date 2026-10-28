@@ -63,7 +63,7 @@ lập của chính tài liệu mình thì không chứng minh được gì.
 | Thứ | Phiên bản | Ghi chú |
 |---|---|---|
 | Python | ≥ 3.11 | `pyproject.toml` yêu cầu 3.11+ |
-| Docker Desktop | bất kỳ | Chạy sáu dịch vụ nền: Postgres, Qdrant, reranker, OPA, Vault, MailHog |
+| Docker Desktop | bất kỳ | Chạy năm dịch vụ nền: Postgres, Qdrant, reranker, OPA, MailHog |
 | Node.js | ≥ 18 | Cho frontend |
 | OpenAI API key | — | Bắt buộc: nếu không có thì Solution Designer, Workflow Generator và mọi node `agent_llm` đều không chạy được |
 
@@ -109,13 +109,13 @@ Mọi biến còn lại đã có mặc định chạy được ở máy cá nhâ
 ### 3. Dịch vụ nền + database
 
 ```bash
-make up                     # db, qdrant, reranker, policy, vault, mailhog — đợi tới khi tất cả healthy
+make up                     # db, qdrant, reranker, policy, mailhog — đợi tới khi tất cả healthy
 alembic upgrade head        # hoặc: make migrate
 make init-qdrant            # tạo collection, idempotent
 ```
 
 Không có `make` (Windows):
-`docker compose up -d --wait db qdrant reranker policy vault mailhog`
+`docker compose up -d --wait db qdrant reranker policy mailhog`
 
 Kiểm tra:
 

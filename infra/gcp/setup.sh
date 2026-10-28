@@ -123,7 +123,7 @@ fi
 # VM `internal-services` cố ý không có external IP, và điều đó có một hệ quả
 # dễ bỏ sót: nó cũng không có đường ra Internet. vm-startup.sh cần
 # `apt-get update` cùng GPG key từ download.docker.com để cài Docker, còn
-# `docker compose up` cần kéo image qdrant/opa/vault từ Docker Hub — cả hai
+# `docker compose up` cần kéo image qdrant/opa từ Docker Hub — cả hai
 # đều chết câm nếu thiếu NAT, và triệu chứng lộ ra tận sau, ở SSH kế tiếp,
 # dưới dạng `sudo: docker: command not found`.
 #
@@ -144,7 +144,7 @@ echo "== firewall =="
 gcloud compute firewall-rules describe allow-connector-to-internal >/dev/null 2>&1 || \
   gcloud compute firewall-rules create allow-connector-to-internal \
     --network="$VPC_NAME" --direction=INGRESS --action=ALLOW \
-    --rules=tcp:6333,tcp:6334,tcp:8181,tcp:8200 \
+    --rules=tcp:6333,tcp:6334,tcp:8181 \
     --source-ranges="$SUBNET_RANGE" --target-tags=internal-services
 
 gcloud compute firewall-rules describe allow-iap-ssh >/dev/null 2>&1 || \
@@ -152,7 +152,7 @@ gcloud compute firewall-rules describe allow-iap-ssh >/dev/null 2>&1 || \
     --network="$VPC_NAME" --direction=INGRESS --action=ALLOW \
     --rules=tcp:22 --source-ranges=35.235.240.0/20
 
-echo "== data disk + internal-services VM (Qdrant + OPA + Vault-dev, no external IP) =="
+echo "== data disk + internal-services VM (Qdrant + OPA, no external IP) =="
 # Disk tính tiền cả khi VM đã tắt, nên nó là phần duy nhất của VM mà lịch
 # bật/tắt không giảm được — vì vậy pd-balanced 30GB thay cho pd-ssd 50GB.
 gcloud compute disks describe internal-services-data --zone="$ZONE" >/dev/null 2>&1 || \
@@ -214,16 +214,13 @@ vm_has_docker || {
   exit 1
 }
 
-echo "== pushing the compose file + OPA policy, starting qdrant/policy/vault =="
-VAULT_TOKEN=$(openssl rand -hex 24)
+echo "== pushing the compose file + OPA policy, starting qdrant/policy =="
 gcloud compute ssh "$VM_NAME" --zone="$ZONE" --tunnel-through-iap \
   --command="sudo mkdir -p /opt/app/policy && sudo chown -R \$(whoami) /opt/app"
 gcloud compute scp infra/gcp/docker-compose.internal.yml "$VM_NAME":/opt/app/docker-compose.yml \
   --zone="$ZONE" --tunnel-through-iap
 gcloud compute scp docs/usecase_spec/platform/authz.rego "$VM_NAME":/opt/app/policy/authz.rego \
   --zone="$ZONE" --tunnel-through-iap
-gcloud compute ssh "$VM_NAME" --zone="$ZONE" --tunnel-through-iap \
-  --command="printf 'VAULT_TOKEN=%s\n' '$VAULT_TOKEN' > /opt/app/.env"
 gcloud compute ssh "$VM_NAME" --zone="$ZONE" --tunnel-through-iap \
   --command="cd /opt/app && sudo docker compose up -d"
 
@@ -277,8 +274,8 @@ gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA@$PROJECT_ID.iam.g
   --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$WIF_POOL/attribute.repository/$GITHUB_REPO" \
   >/dev/null
 
-echo "== storing DATABASE_URL and VAULT_TOKEN in Secret Manager (sync-secrets.sh handles the rest) =="
-for pair in "app-database-url=$DATABASE_URL" "app-vault-token=$VAULT_TOKEN"; do
+echo "== storing DATABASE_URL in Secret Manager (sync-secrets.sh handles the rest) =="
+for pair in "app-database-url=$DATABASE_URL"; do
   name="${pair%%=*}"; value="${pair#*=}"
   gcloud secrets describe "$name" >/dev/null 2>&1 || gcloud secrets create "$name" --replication-policy=automatic
   printf '%s' "$value" | gcloud secrets versions add "$name" --data-file=-
@@ -300,14 +297,14 @@ Done. Next steps:
 2. Run the one-time pgvector step printed above against $SQL_INSTANCE.
 
 3. Copy .env.example to infra/gcp/.env.production, fill in real API keys/passwords
-   (leave DATABASE_URL/QDRANT_URL/OPA_URL/VAULT_URL/SMTP_HOST blank — deploy.yml
+   (leave DATABASE_URL/QDRANT_URL/OPA_URL/SMTP_HOST blank — deploy.yml
    sets those from infra directly), then:
      bash infra/gcp/sync-secrets.sh
 
 4. Push to main — .github/workflows/deploy.yml takes it from there.
 
-5. AFTER the first successful deploy (it creates the backend-vault-seed job that
-   the schedule depends on), set up the 12/24 on-off schedule:
+5. AFTER the first successful deploy (it creates the Cloud Run services the
+   schedule turns on and off), set up the 12/24 on-off schedule:
      PROJECT_ID=$PROJECT_ID bash infra/gcp/schedule.sh
    then add the GCP_SCHEDULER_URL it prints as a GitHub Actions repo variable.
    Until that runs, everything stays on 24/24 — see DEPLOYMENT.md, "Chi phí".

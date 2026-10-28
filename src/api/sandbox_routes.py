@@ -33,8 +33,8 @@ from src.db.models import User
 from src.policy.audit import audit_sink
 from src.policy.pep import PEPClient, Principal, get_pep_client
 from src.services.llm import ChatModelFactory, get_chat_model_factory
+from src.services.secret_store import SecretStore, get_secret_store, resolve_credential_via
 from src.services.uc1_tracing import export_uc1_trace
-from src.services.vault_secret_store import VaultKvStore, get_vault_store, resolve_credential_via
 from src.workflow.uc1_connections import verified_objects_for_spec
 from src.workflow.uc1_pending_actions import PendingActionBatch, record_pending_actions
 from src.workflow.uc1_sandbox_runs import list_sandbox_runs, record_sandbox_run
@@ -92,7 +92,7 @@ class SandboxRuntimeDeps:
     db: Session
     model_factory: ChatModelFactory
     pep_client: PEPClient
-    vault: VaultKvStore
+    secrets: SecretStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +141,7 @@ def _compile_for_sandbox(spec: AgentSpec, deps: SandboxRuntimeDeps) -> CompiledA
             spec,
             CompileDependencies(
                 model=deps.model_factory(AGENT_MODEL),
-                tool_implementations=default_tool_implementations(resolve_credential=resolve_credential_via(deps.vault)),
+                tool_implementations=default_tool_implementations(resolve_credential=resolve_credential_via(deps.secrets)),
                 pep_client=deps.pep_client,
                 audit_sink=audit_sink(),
                 checkpointer=_SANDBOX_CHECKPOINTER,
@@ -206,11 +206,11 @@ async def sandbox_chat(
     db: Annotated[Session, Depends(get_db)],
     model_factory: Annotated[ChatModelFactory, Depends(get_chat_model_factory)],
     pep_client: Annotated[PEPClient, Depends(get_pep_client)],
-    vault: Annotated[VaultKvStore, Depends(get_vault_store)],
+    secrets: Annotated[SecretStore, Depends(get_secret_store)],
 ) -> StreamingResponse:
     """FR-36: chat with a compiled-but-unapproved version, by the caller's own identity, on its own thread."""
     spec = _spec_for(agent_id, version, db)
-    deps = SandboxRuntimeDeps(db=db, model_factory=model_factory, pep_client=pep_client, vault=vault)
+    deps = SandboxRuntimeDeps(db=db, model_factory=model_factory, pep_client=pep_client, secrets=secrets)
     compiled = _compile_for_sandbox(spec, deps)
     request = SandboxTurnRequest(
         agent_id=agent_id,

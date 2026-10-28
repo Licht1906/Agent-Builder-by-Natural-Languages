@@ -30,8 +30,8 @@ from src.compiler.state import EMPTY_PROVENANCE, ProvenanceState, SessionState
 from src.config import get_settings
 from src.policy.pep import Action, Approval, AuditSink, AuthzRequest, Effect, PEPClient, Principal, Provenance
 from src.policy.pep import Session as PEPSession
+from src.services.secret_store import SecretUnreadableError
 from src.services.uc1_tracing import log_decision
-from src.services.vault_secret_store import VaultUnavailableError
 
 
 @dataclass(frozen=True, slots=True)
@@ -488,8 +488,8 @@ def default_tool_implementations(
     def _query_receivables(args: Mapping[str, Any], scope: RowScope) -> dict[str, Any]:
         try:
             dsn = resolve_credential("conn/erp_readonly")
-        except VaultUnavailableError as exc:
-            return _unreadable("v_ar_open", f"không đọc được credential ERP từ Vault: {exc}")
+        except SecretUnreadableError as exc:
+            return _unreadable("v_ar_open", f"không đọc được credential ERP từ kho secret: {exc}")
         if not dsn:
             return _unreadable("v_ar_open", "chưa có kết nối ERP nào được cấu hình")
         min_days_overdue = _positive_int(args.get("days_overdue_gt"))
@@ -508,8 +508,8 @@ def default_tool_implementations(
     def _query_customer(args: Mapping[str, Any], scope: RowScope) -> dict[str, Any]:
         try:
             dsn = resolve_credential("conn/erp_readonly")
-        except VaultUnavailableError as exc:
-            return _unreadable("v_customer_safe", f"không đọc được credential ERP từ Vault: {exc}")
+        except SecretUnreadableError as exc:
+            return _unreadable("v_customer_safe", f"không đọc được credential ERP từ kho secret: {exc}")
         if not dsn:
             return _unreadable("v_customer_safe", "chưa có kết nối ERP nào được cấu hình")
         customer_id = _non_empty_str(args.get("customer_id"))

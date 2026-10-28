@@ -58,8 +58,8 @@ from src.pm.ledger import record_agent_run, uc1_record
 from src.policy.audit import audit_sink
 from src.policy.pep import PEPClient, Principal, get_pep_client
 from src.services.llm import ChatModelFactory, get_chat_model_factory
+from src.services.secret_store import SecretStore, get_secret_store, resolve_credential_via
 from src.services.uc1_tracing import export_uc1_trace
-from src.services.vault_secret_store import VaultKvStore, get_vault_store, resolve_credential_via
 from src.workflow.uc1_connections import verified_objects_for_spec
 from src.workflow.uc1_pending_actions import PendingActionBatch, record_pending_actions
 
@@ -138,7 +138,7 @@ class ProductionRuntimeDeps:
     db: Session
     model_factory: ChatModelFactory
     pep_client: PEPClient
-    vault: VaultKvStore
+    secrets: SecretStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +162,7 @@ def _compile_for_production(spec: AgentSpec, deps: ProductionRuntimeDeps) -> Com
             CompileDependencies(
                 model=deps.model_factory(AGENT_MODEL),
                 tool_implementations=default_tool_implementations(
-                    resolve_credential=resolve_credential_via(deps.vault), erp_readonly_role=spec.metadata.id
+                    resolve_credential=resolve_credential_via(deps.secrets), erp_readonly_role=spec.metadata.id
                 ),
                 pep_client=deps.pep_client,
                 audit_sink=audit_sink(),
@@ -329,7 +329,7 @@ async def chat_with_deployed_agent(
     db: Annotated[Session, Depends(get_db)],
     model_factory: Annotated[ChatModelFactory, Depends(get_chat_model_factory)],
     pep_client: Annotated[PEPClient, Depends(get_pep_client)],
-    vault: Annotated[VaultKvStore, Depends(get_vault_store)],
+    secrets: Annotated[SecretStore, Depends(get_secret_store)],
 ) -> StreamingResponse:
     """FR-40/FR-41: chat with the deployed version, by the caller's own identity.
 
@@ -340,7 +340,7 @@ async def chat_with_deployed_agent(
     as a 404 rather than a 409 for the identical reason (nothing to point at).
     """
     spec = _deployed_spec_or_404(agent_id, db)
-    deps = ProductionRuntimeDeps(db=db, model_factory=model_factory, pep_client=pep_client, vault=vault)
+    deps = ProductionRuntimeDeps(db=db, model_factory=model_factory, pep_client=pep_client, secrets=secrets)
     compiled = _compile_for_production(spec, deps)
     request = ProductionTurnRequest(
         agent_id=agent_id,

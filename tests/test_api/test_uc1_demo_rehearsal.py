@@ -65,10 +65,10 @@ from src.config import get_settings
 from src.main import app
 from src.policy.pep import AuthzRequest, Decision, Effect, get_pep_client
 from src.services.llm import get_chat_model_factory, meta_agent_model
-from src.services.vault_secret_store import get_vault_store
+from src.services.secret_store import get_secret_store
 from tests.conftest import ScriptedToolModel, auth_header
 from tests.test_agentspec.conftest import spec_payload
-from tests.test_api.test_connection_routes import _FakeVault
+from tests.test_api.test_connection_routes import _FakeSecretStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -127,12 +127,12 @@ def _demo_pep():
 
 
 @pytest.fixture(autouse=True)
-def _fake_vault_and_pep() -> Iterator[_FakeVault]:
-    vault = _FakeVault()
-    app.dependency_overrides[get_vault_store] = lambda: vault
+def _fake_secrets_and_pep() -> Iterator[_FakeSecretStore]:
+    store = _FakeSecretStore()
+    app.dependency_overrides[get_secret_store] = lambda: store
     app.dependency_overrides[get_pep_client] = lambda: _demo_pep()
-    yield vault
-    app.dependency_overrides.pop(get_vault_store, None)
+    yield store
+    app.dependency_overrides.pop(get_secret_store, None)
     app.dependency_overrides.pop(get_pep_client, None)
 
 

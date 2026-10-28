@@ -23,10 +23,10 @@ from src.db.models import UC1AgentSpecVersion
 from src.main import app
 from src.policy.pep import AuthzRequest, Decision, Effect, get_pep_client
 from src.services.llm import get_chat_model_factory
-from src.services.vault_secret_store import get_vault_store
+from src.services.secret_store import get_secret_store
 from tests.conftest import ScriptedToolModel, auth_header, user_id_of
 from tests.test_agentspec.conftest import spec_payload
-from tests.test_api.test_connection_routes import _FakeVault
+from tests.test_api.test_connection_routes import _FakeSecretStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -73,7 +73,7 @@ async def test_a_sandbox_chat_turn_makes_zero_control_plane_calls(
     def _always_allow(request: AuthzRequest) -> Decision:
         return Decision(effect=Effect.ALLOW, reasons=[], row_filter={}, approver_roles=[], redact_fields=[], max_rows=100)
 
-    app.dependency_overrides[get_vault_store] = lambda: _FakeVault()
+    app.dependency_overrides[get_secret_store] = lambda: _FakeSecretStore()
     app.dependency_overrides[get_pep_client] = lambda: _always_allow
     model = ScriptedToolModel(
         responses=[
@@ -96,7 +96,7 @@ async def test_a_sandbox_chat_turn_makes_zero_control_plane_calls(
             headers=auth_header(agent_admin_token),
         )
     finally:
-        for dep in (get_vault_store, get_pep_client, get_chat_model_factory):
+        for dep in (get_secret_store, get_pep_client, get_chat_model_factory):
             app.dependency_overrides.pop(dep, None)
 
     assert response.status_code == 200, response.text

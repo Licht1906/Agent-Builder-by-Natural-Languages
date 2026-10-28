@@ -13,7 +13,7 @@ import psycopg
 import pytest
 
 from src.compiler.tools import RowScope, default_tool_implementations
-from src.services.vault_secret_store import VaultUnavailableError
+from src.services.secret_store import SecretUnreadableError
 from tests.test_db.conftest import upgrade_to_head
 
 
@@ -126,18 +126,18 @@ def test_an_unresolvable_credential_reports_an_error_and_no_row_count() -> None:
     assert result == {"source": "v_ar_open", "error": "chưa có kết nối ERP nào được cấu hình"}
 
 
-def test_an_unreachable_vault_is_reported_as_an_incident_not_as_no_connection() -> None:
-    """`resolve_credential_via` no longer flattens the two — see its docstring."""
+def test_an_unreadable_credential_is_reported_as_an_incident_not_as_no_connection() -> None:
+    """`resolve_credential_via` does not flatten the two — see its docstring in `src.services.secret_store`."""
 
-    def _unavailable(_ref: str) -> str:
-        raise VaultUnavailableError("vault sealed")
+    def _unavailable(ref: str) -> str:
+        raise SecretUnreadableError(ref)
 
     impl = default_tool_implementations(resolve_credential=_unavailable)["erp.query_receivables"]
 
     result = impl({}, _ALL)
 
     assert "rows" not in result
-    assert "Vault" in result["error"]
+    assert "kho secret" in result["error"]
 
 
 def test_an_unreachable_database_returns_a_structured_error_instead_of_raising() -> None:

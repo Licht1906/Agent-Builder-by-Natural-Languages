@@ -1,5 +1,5 @@
 # Deploys `backend` + `reranker` to Cloud Run after CI (.github/workflows/ci.yml)
-# passes on main. Does NOT touch `qdrant`/`policy`/`vault` (the internal-services
+# passes on main. Does NOT touch `qdrant`/`policy` (the internal-services
 # VM) or Cloud SQL — those are provisioned once by infra/gcp/setup.sh and change
 # rarely; see DEPLOYMENT.md for how to update them (e.g. authz.rego edits).
 # `frontend/` deploy lên Firebase Hosting ở job `deploy-frontend` cuối file.
@@ -19,8 +19,8 @@
 #      hạ tầng lên 24/24 và cái lịch kia thành vô nghĩa.
 #
 # Khi GCP_SCHEDULER_URL chưa được set (chưa chạy schedule.sh — setup.sh cố ý
-# xếp nó sau lần deploy đầu tiên, vì job backend-vault-seed do chính file này
-# tạo ra), mọi bước lịch đều bị bỏ qua và deploy chạy 24/24 như cũ.
+# xếp nó sau lần deploy đầu tiên, vì các service Cloud Run mà lịch bật/tắt do
+# chính file này tạo ra), mọi bước lịch đều bị bỏ qua và deploy chạy 24/24 như cũ.
 
 name: Deploy to Cloud Run
 
@@ -163,7 +163,7 @@ jobs:
           echo "set_secrets=${list%,}" >> "$GITHUB_OUTPUT"
 
       # backend needs Cloud SQL (unix socket) + the internal-services VM
-      # (qdrant/policy/vault). Direct VPC egress thay cho Serverless VPC Access
+      # (qdrant/policy). Direct VPC egress thay cho Serverless VPC Access
       # connector: connector chạy tối thiểu hai e2-micro tính tiền 24/24 và
       # không scale-to-zero, tức đúng thứ chi phí mà lịch bật/tắt sinh ra để
       # loại bỏ. private-ranges-only vẫn giữ nguyên ý nghĩa cũ — gọi
@@ -187,7 +187,7 @@ jobs:
             --port=8000 \
             --min-instances=${{ vars.GCP_SCHEDULER_URL != '' && '0' || '1' }} --memory=1Gi --cpu=1 \
             --set-secrets="${{ steps.secrets.outputs.set_secrets }}" \
-            --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:6333@OPA_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8181@VAULT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8200@CORS_ORIGINS=${{ vars.CORS_ORIGINS || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}@SMTP_HOST=${{ vars.SMTP_HOST }}@FRONTEND_URL=${{ vars.FRONTEND_URL || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}" \
+            --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:6333@OPA_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8181@CORS_ORIGINS=${{ vars.CORS_ORIGINS || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}@SMTP_HOST=${{ vars.SMTP_HOST }}@FRONTEND_URL=${{ vars.FRONTEND_URL || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}" \
             --allow-unauthenticated
 
       # No VPC connector: the reranker is a standalone model server, same
@@ -238,25 +238,22 @@ jobs:
           gcloud run services update backend --region="$REGION" \
             --update-env-vars="RERANKER_URL=$RERANKER_URL"
 
-      # Job này không chạy ở đây, chỉ được *tạo/cập nhật* — app-scheduler gọi
-      # nó mỗi sáng sau khi VM lên. Lý do nó phải tồn tại: Vault chạy dev mode
-      # (spec §16.1) giữ secret trong memory, nên VM tắt mỗi đêm là mất sạch,
-      # và scripts/seed_vault_credentials.py ghi rõ hậu quả — secret thiếu bị
-      # `resolve_credential_via` hạ thành "", UC-1 trả `{"rows": []}` và agent
-      # nói nó không có dữ liệu. Không lỗi, không log nào nhắc tới Vault.
-      # Cần --network/--subnet vì Vault nằm trên VM trong VPC, không có IP public.
-      - name: Cập nhật job re-seed Vault (app-scheduler gọi nó mỗi sáng)
+      # Credential của các tool UC-1 vào SecretStore của nền tảng (DS-20) — một
+      # bảng trong Cloud SQL, nên sống qua mọi lần tắt/bật, khác Vault dev-mode
+      # trước đây (mất sạch mỗi đêm, phải re-seed mỗi sáng). Chạy lại mỗi lần
+      # deploy cho chắc: script idempotent, và không cần VPC — chỉ Cloud SQL.
+      - name: Seed credential UC-1 vào SecretStore
         run: |
-          gcloud run jobs deploy backend-vault-seed \
+          gcloud run jobs deploy backend-seed-credentials \
             --image="$AR_HOST/$PROJECT_ID/app/backend:${{ needs.build-and-push.outputs.tag }}" \
             --region="$REGION" \
             --service-account="${{ vars.GCP_RUN_SA }}" \
             --set-cloudsql-instances="${{ vars.GCP_SQL_CONNECTION_NAME }}" \
-            --network=app-vpc --subnet=app-subnet --vpc-egress=private-ranges-only \
             --set-secrets="${{ steps.secrets.outputs.set_secrets }}" \
-            --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:6333@OPA_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8181@VAULT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8200" \
-            --command=python --args="scripts/seed_vault_credentials.py" \
-            --max-retries=1
+            --set-env-vars="APP_ENV=production" \
+            --command=python --args="scripts/seed_uc1_credentials.py" \
+            --max-retries=1 \
+            --execute-now --wait
 
       - name: Smoke test
         run: |

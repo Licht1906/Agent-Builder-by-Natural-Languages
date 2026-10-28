@@ -6,8 +6,8 @@ set -euo pipefail
 #
 # Vì sao là function chứ không phải Scheduler gọi thẳng REST API của Google:
 # bật lên không phải một lời gọi mà là một chuỗi có thứ tự và có chờ — SQL
-# phải RUNNABLE trước khi Cloud Run lên, Vault phải được seed lại giữa hai
-# bước đó. Chuỗi đó cần một chỗ để sống, và cần log đọc được khi nó hỏng.
+# phải RUNNABLE trước khi Cloud Run lên. Chuỗi đó cần một chỗ để sống, và
+# cần log đọc được khi nó hỏng.
 #
 # Usage: PROJECT_ID=xxx bash infra/gcp/schedule.sh
 
@@ -30,7 +30,6 @@ FN_SA=app-scheduler-sa
 SCHED_SA=app-scheduler-invoker
 SQL_INSTANCE=app-db
 VM_NAME=internal-services
-VAULT_RESEED_JOB=backend-vault-seed
 
 gcloud config set project "$PROJECT_ID" >/dev/null
 
@@ -44,8 +43,8 @@ gcloud iam service-accounts describe "$FN_SA@$PROJECT_ID.iam.gserviceaccount.com
   gcloud iam service-accounts create "$FN_SA" --display-name="Bật/tắt hạ tầng theo lịch"
 
 # cloudsql.admin: đổi activationPolicy là sửa settings của instance, .client không đủ.
-# run.admin: vừa để đổi min-instances vừa để chạy job re-seed Vault.
-# serviceAccountUser: chạy job dưới danh nghĩa app-run-sa.
+# run.admin: để đổi min-instances.
+# serviceAccountUser: revision mới mà PATCH tạo ra chạy dưới danh nghĩa app-run-sa.
 # artifactregistry.reader: đổi min-instances là PATCH service, mà PATCH tạo một
 #   revision mới — nên Cloud Run bắt CHÍNH NGƯỜI GỌI phải đọc được image đang
 #   dùng. Thiếu nó thì lỗi là 403 'artifactregistry.repositories.downloadArtifacts
@@ -76,7 +75,7 @@ gcloud functions deploy "$FN_NAME" \
   --trigger-http --no-allow-unauthenticated \
   --timeout=540s --memory=512Mi \
   --service-account="$FN_SA@$PROJECT_ID.iam.gserviceaccount.com" \
-  --set-env-vars="^@^PROJECT_ID=$PROJECT_ID@REGION=$REGION@ZONE=$ZONE@SQL_INSTANCE=$SQL_INSTANCE@VM_NAME=$VM_NAME@RUN_SERVICES=backend,reranker@VAULT_RESEED_JOB=$VAULT_RESEED_JOB@WINDOW_TZ=$WINDOW_TZ@WINDOW_START_HOUR=$WINDOW_START_HOUR@WINDOW_END_HOUR=$WINDOW_END_HOUR@WINDOW_DAYS=$WINDOW_DAYS"
+  --set-env-vars="^@^PROJECT_ID=$PROJECT_ID@REGION=$REGION@ZONE=$ZONE@SQL_INSTANCE=$SQL_INSTANCE@VM_NAME=$VM_NAME@RUN_SERVICES=backend,reranker@WINDOW_TZ=$WINDOW_TZ@WINDOW_START_HOUR=$WINDOW_START_HOUR@WINDOW_END_HOUR=$WINDOW_END_HOUR@WINDOW_DAYS=$WINDOW_DAYS"
 
 FN_URL=$(gcloud functions describe "$FN_NAME" --region="$REGION" --gen2 --format='value(serviceConfig.uri)')
 
@@ -128,8 +127,4 @@ Kiểm tra ngay, đừng đợi 20:00 mới biết nó hỏng:
   gcloud functions logs read $FN_NAME --region=$REGION --gen2 --limit=50
   gcloud scheduler jobs run app-start --location=$REGION
 
-Sau lần chạy app-start đầu tiên, kiểm tra dòng re-seed Vault trong log. Nếu
-nó ghi CẢNH BÁO thì $VAULT_RESEED_JOB chưa tồn tại — deploy.yml tạo job đó,
-nên hãy deploy một lần rồi chạy lại app-start. Bỏ qua cảnh báo này nghĩa là
-UC-1 trả về rỗng mỗi sáng mà không báo lỗi (xem DEPLOYMENT.md, "Known gaps").
 MSG

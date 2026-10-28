@@ -14,20 +14,16 @@ nằm ở một chỗ duy nhất — sửa env var của function là cả deplo
 
 Thứ tự bật/tắt không đối xứng, và đó là chủ ý:
 
-  bật:  Cloud SQL + VM trước (chờ SQL RUNNABLE) → re-seed Vault → Cloud Run
+  bật:  Cloud SQL + VM trước (chờ SQL RUNNABLE) → Cloud Run
   tắt:  Cloud Run trước → rồi Cloud SQL + VM
 
 Bật Cloud Run trước khi DB sẵn sàng thì instance min-instance đầu tiên khởi
 động vào một Cloud SQL đang STOPPED và cache connection lỗi; tắt Cloud Run sau
 DB thì nó phục vụ request bằng một DB đã biến mất.
 
-Bước re-seed Vault không phải phòng xa. `scripts/seed_vault_credentials.py`
-ghi rõ: Vault ở dev mode (spec §16.1 để production-mode ngoài MVP) giữ secret
-trong memory, nên VM tắt là mất sạch — và `resolve_credential_via` hạ secret
-thiếu thành `""` có chủ đích, nên UC-1 trả về `{"rows": []}` và agent nói nó
-không có dữ liệu. Hỏng im lặng, không log nào nhắc tới Vault. Trước khi có
-lịch tắt máy thì đó là rủi ro lý thuyết mỗi lần restart VM; có lịch rồi thì
-nó là chuyện xảy ra *mỗi sáng*. Xem "Known gaps" trong DEPLOYMENT.md.
+Từng có một bước re-seed Vault giữa hai bước bật, vì Vault dev-mode mất sạch
+secret mỗi khi VM tắt. Từ DS-20 mọi credential nằm trong SecretStore của nền
+tảng — một bảng trong Cloud SQL — nên không còn gì để seed lại mỗi sáng.
 """
 
 from __future__ import annotations
@@ -56,10 +52,6 @@ RUN_SERVICES = [s for s in os.environ.get("RUN_SERVICES", "backend,reranker").sp
 # dùng; reranker giữ 1 vì model 2.2 GB tải lúc start (lý do docker-compose.yml
 # và DEPLOYMENT.md đều pin nó warm).
 MIN_INSTANCES_ON = int(os.environ.get("MIN_INSTANCES_ON", "1"))
-
-# Cloud Run Job chạy scripts/seed_vault_credentials.py, do deploy.yml tạo.
-# Để trống thì bỏ qua — nhưng xem docstring: bỏ qua nghĩa là UC-1 hỏng im lặng.
-VAULT_RESEED_JOB = os.environ.get("VAULT_RESEED_JOB", "")
 
 WINDOW_TZ = ZoneInfo(os.environ.get("WINDOW_TZ", "Asia/Ho_Chi_Minh"))
 WINDOW_START_HOUR = int(os.environ.get("WINDOW_START_HOUR", "8"))
@@ -122,7 +114,7 @@ def sql_wait_runnable(timeout_s: int = 420) -> None:
 
 # --- Compute Engine VM ----------------------------------------------------
 # vm-startup.sh chạy lại mỗi lần boot và kết thúc bằng `docker compose up -d`,
-# nên qdrant/policy/vault tự lên lại — không cần SSH vào làm gì thêm.
+# nên qdrant/policy tự lên lại — không cần SSH vào làm gì thêm.
 
 
 def vm_set(running: bool) -> None:
@@ -198,11 +190,6 @@ def run_gc_revisions(name: str) -> None:
             log.warning("không xoá được %s: %s", full_name, exc)
 
 
-def run_execute_job(job: str) -> None:
-    log.info("chạy Cloud Run job %s", job)
-    _call("POST", f"{RUN_API}/projects/{PROJECT_ID}/locations/{REGION}/jobs/{job}:run")
-
-
 # --- điều phối ------------------------------------------------------------
 
 
@@ -220,20 +207,6 @@ def start() -> list[str]:
     sql_wait_runnable()
     vm_wait_running()
     done += [f"cloud sql {SQL_INSTANCE} lên", f"vm {VM_NAME} lên"]
-
-    if VAULT_RESEED_JOB:
-        # Phải chạy *sau* khi VM lên (Vault mới nhận request) và *trước* khi
-        # Cloud Run nhận traffic, nếu không request đầu tiên trong ngày đọc
-        # phải một Vault rỗng và trả kết quả sai mà không báo lỗi.
-        try:
-            run_execute_job(VAULT_RESEED_JOB)
-            done.append(f"job {VAULT_RESEED_JOB} đã chạy (re-seed Vault)")
-        except RuntimeError as exc:
-            log.error("re-seed Vault THẤT BẠI: %s — UC-1 sẽ trả rỗng mà không báo lỗi", exc)
-            done.append(f"CẢNH BÁO: {VAULT_RESEED_JOB} lỗi: {exc}")
-    else:
-        log.warning("VAULT_RESEED_JOB để trống — Vault dev-mode vừa mất sạch secret khi VM tắt")
-        done.append("CẢNH BÁO: không re-seed Vault (VAULT_RESEED_JOB trống)")
 
     for svc in RUN_SERVICES:
         run_set_min_instances(svc, MIN_INSTANCES_ON)

@@ -68,7 +68,6 @@ UPSTREAM_IMAGES=(
     "postgres:16-alpine"
     "qdrant/qdrant:v1.12.4"
     "openpolicyagent/opa:1.19.0"
-    "hashicorp/vault:1.18"
     "mailhog/mailhog:v1.0.1"
 )
 for image in "${UPSTREAM_IMAGES[@]}"; do

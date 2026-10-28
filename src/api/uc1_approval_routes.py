@@ -65,7 +65,7 @@ from src.models.schemas import UtcTimestamp
 from src.policy.audit import audit_sink
 from src.policy.pep import PEPClient, get_pep_client
 from src.services.llm import ChatModelFactory, get_chat_model_factory
-from src.services.vault_secret_store import VaultKvStore, get_vault_store, resolve_credential_via
+from src.services.secret_store import SecretStore, get_secret_store, resolve_credential_via
 from src.workflow.uc1_connections import verified_objects_for_spec
 from src.workflow.uc1_sandbox_runs import list_sandbox_runs, sandbox_run_count
 
@@ -351,7 +351,7 @@ async def run_golden_set(
     db: Annotated[Session, Depends(get_db)],
     model_factory: Annotated[ChatModelFactory, Depends(get_chat_model_factory)],
     pep_client: Annotated[PEPClient, Depends(get_pep_client)],
-    vault: Annotated[VaultKvStore, Depends(get_vault_store)],
+    secrets: Annotated[SecretStore, Depends(get_secret_store)],
 ) -> GoldenSetRunResponse:
     """UC1-17 (#133), FR-33: run the 23-case golden-set smoke test now and log
     every case's verdict — the record `submit_version_for_approval` reads its
@@ -374,7 +374,7 @@ async def run_golden_set(
             model_factory=model_factory,
             judge_model_factory=model_factory,
             pep_client=pep_client,
-            tool_implementations=default_tool_implementations(resolve_credential=resolve_credential_via(vault)),
+            tool_implementations=default_tool_implementations(resolve_credential=resolve_credential_via(secrets)),
             audit_sink=audit_sink(),
             verified_connection_objects=verified_objects_for_spec(db, spec),
         ),

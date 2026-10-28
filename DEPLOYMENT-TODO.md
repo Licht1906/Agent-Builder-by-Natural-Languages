@@ -229,7 +229,7 @@ gcloud run deploy backend --image="$AR/backend:$TAG" --region=$REGION \
   --network=app-vpc --subnet=app-subnet --vpc-egress=private-ranges-only \
   --port=8000 --min-instances=1 --memory=1Gi --cpu=1 --timeout=300 \
   --set-secrets="$SECRETS" \
-  --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://10.10.0.2:6333@OPA_URL=http://10.10.0.2:8181@VAULT_URL=http://10.10.0.2:8200@CORS_ORIGINS=https://$PROJECT_ID.web.app@FRONTEND_URL=https://$PROJECT_ID.web.app@RERANKER_URL=$(gcloud run services describe reranker --region=$REGION --format='value(status.url)')" \
+  --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://10.10.0.2:6333@OPA_URL=http://10.10.0.2:8181@CORS_ORIGINS=https://$PROJECT_ID.web.app@FRONTEND_URL=https://$PROJECT_ID.web.app@RERANKER_URL=$(gcloud run services describe reranker --region=$REGION --format='value(status.url)')" \
   --allow-unauthenticated
 
 # 4. Frontend

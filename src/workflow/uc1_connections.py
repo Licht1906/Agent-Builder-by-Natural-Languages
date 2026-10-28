@@ -1,4 +1,4 @@
-"""UC1-08 (#122) — the connections registry: credential → Vault, dry-run probe (FR-20..24).
+"""UC1-08 (#122) — the connections registry: credential → `SecretStore`, dry-run probe (FR-20..24).
 
 `src.api.connection_routes` is the only door onto this module, and it is a
 door the meta-agent's prompt never touches — FR-21's "không đi qua context
@@ -7,6 +7,10 @@ runs. `create_connection` never hands the credential back out once it has
 written it: the row it returns carries only `credential_ref`
 (`vault://conn/<name>`), the same pointer contract
 `src.agentspec.spec.Connection.credential_ref` requires (§7).
+
+The credential lives in the platform's one `SecretStore` (DS-20), under the
+key `conn/<name>` (`UC1Connection.vault_path`). The `vault://` prefix of the
+pointer is the spec's format, kept as written; no Vault is dialled.
 """
 
 from collections.abc import Sequence
@@ -17,8 +21,8 @@ from sqlalchemy.orm import Session
 
 from src.agentspec.spec import AgentSpec, ConnectionType
 from src.db.models import UC1Connection, UC1ConnectionProbeStatus
+from src.services.secret_store import SecretNotFoundError, SecretStore, SecretUnreadableError
 from src.services.uc1_connection_probe import SUPPORTED_PROBE_TYPES, ProbeResult, ProbeStatus, probe_postgres_connection
-from src.services.vault_secret_store import VaultKvStore, VaultSecretNotFoundError, VaultUnavailableError
 
 _VAULT_PATH_PREFIX = "conn"
 
@@ -28,7 +32,7 @@ class UnsupportedProbeProviderError(ValueError):
 
 
 class ConnectionAlreadyExistsError(ValueError):
-    """`name` already names a connection — `POST /connections` refuses rather than silently overwriting Vault."""
+    """`name` already names a connection — `POST /connections` refuses rather than silently overwriting its secret."""
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -46,7 +50,7 @@ def credential_ref_of(name: str) -> str:
 
 def create_connection(
     db: Session,
-    vault: VaultKvStore,
+    secrets: SecretStore,
     *,
     name: str,
     type_: ConnectionType,
@@ -56,17 +60,17 @@ def create_connection(
     read_only: bool,
     created_by_id: int,
 ) -> UC1Connection:
-    """Write `credential` to Vault, then a row naming only the pointer — never the value.
+    """Write `credential` to the secret store, then a row naming only the pointer — never the value.
 
-    Refuses a duplicate `name` before writing anything to Vault: two
-    connections must never share one KV v2 path, since a second `put` there
+    Refuses a duplicate `name` before writing any secret: two connections
+    must never share one key, since a second `put` there
     would silently replace the first connection's credential with the
     second's (FR-20).
     """
     if db.execute(select(UC1Connection).where(UC1Connection.name == name)).scalar_one_or_none() is not None:
         raise ConnectionAlreadyExistsError(name)
 
-    vault.put(_vault_path(name), credential)
+    secrets.put(_vault_path(name), credential)
     row = UC1Connection(
         name=name,
         type=type_,
@@ -88,12 +92,12 @@ def list_connections(db: Session) -> Sequence[UC1Connection]:
     return db.execute(select(UC1Connection).order_by(UC1Connection.id.desc())).scalars().all()
 
 
-def run_probe(db: Session, vault: VaultKvStore, connection: UC1Connection) -> UC1Connection:
-    """`POST /connections/{id}/probe` for real (FR-23): resolve the credential from Vault, dial out, persist the verdict.
+def run_probe(db: Session, secrets: SecretStore, connection: UC1Connection) -> UC1Connection:
+    """`POST /connections/{id}/probe` for real (FR-23): resolve the credential, dial out, persist the verdict.
 
     Raises `UnsupportedProbeProviderError` for a connection type this build
     cannot dry-run yet — a 4xx at the route, not a crash. Every failure past
-    that point (Vault unreachable, credential never written, the target
+    that point (credential unreadable or never written, the target
     unreachable, a base table where a view should be) is written onto the
     row as a `failed` verdict instead — FR-23's "lỗi rõ ràng, không treo".
     """
@@ -103,8 +107,8 @@ def run_probe(db: Session, vault: VaultKvStore, connection: UC1Connection) -> UC
         )
 
     try:
-        dsn = vault.get(connection.vault_path)
-    except (VaultSecretNotFoundError, VaultUnavailableError) as exc:
+        dsn = secrets.get(connection.vault_path)
+    except (SecretNotFoundError, SecretUnreadableError) as exc:
         return _apply(db, connection, ProbeResult(status=ProbeStatus.FAILED, detail=f"Không đọc được credential: {exc}"))
 
     result = probe_postgres_connection(dsn=dsn, allowed_objects=connection.allowed_objects)

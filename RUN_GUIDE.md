@@ -66,7 +66,7 @@ Nên bật hết bằng một lệnh:
 ```bash
 make up
 # tương đương:
-# docker compose up -d --wait db qdrant reranker policy vault mailhog
+# docker compose up -d --wait db qdrant reranker policy mailhog
 ```
 
 `--wait` đợi tới khi mọi healthcheck xanh chứ không chỉ tới khi Docker đã tạo
@@ -80,7 +80,6 @@ sau model đã nằm trong volume `hf_cache`, chỉ còn vài chục giây).
 | `qdrant` | 6333 | **Upload vẫn 201, ingest chết ngầm.** Tài liệu ở trạng thái `failed`, và dấu hiệu đầu tiên là agent trả lời "tài liệu không đề cập" về đúng cái tài liệu bạn vừa tải lên |
 | `reranker` | 8001 | Không sập, nhưng tìm kiếm **tệ đi thấy rõ**: `src/services/reranker.py` lùi về thứ tự RRF thô, bỏ luôn ngưỡng điểm, và chỉ để lại một dòng log |
 | `policy` | 8181 | Fail **closed** ngay lời gọi tool đầu tiên — đúng thiết kế, không phải bug |
-| `vault` | 8200 | Tool ERP báo "chưa có kết nối ERP nào được cấu hình" |
 | `mailhog` | 1025/8025 | Không gửi/xem được mail thử |
 
 Tắt cho nhẹ máy khi nghỉ: `make stop` (đỗ container lại; **không** dùng
@@ -538,9 +537,9 @@ nhớ luôn (`@lru_cache`).
 Mỗi ngày khi bật máy lên code tiếp, ba lệnh ở ba tab terminal:
 
 - **Tab 1 (dịch vụ nền):** `make up`
-  → bật `db` `qdrant` `reranker` `policy` `vault` `mailhog` và đợi tới khi tất
+  → bật `db` `qdrant` `reranker` `policy` `mailhog` và đợi tới khi tất
   cả xanh. Không có `make` trên Windows thì:
-  `docker compose up -d --wait db qdrant reranker policy vault mailhog`
+  `docker compose up -d --wait db qdrant reranker policy mailhog`
 - **Tab 2 (Backend):** `.\.venv\Scriptsctivate` rồi
   `uvicorn src.main:app --reload --host 0.0.0.0 --port 8000 --loop src.server_loop:new_event_loop`
   → http://localhost:8000/docs

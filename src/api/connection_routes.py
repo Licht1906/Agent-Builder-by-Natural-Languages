@@ -2,7 +2,7 @@
 
 Deliberately its own router, reachable from nothing the meta-agent's prompt
 touches (`src.metaagent.draft_spec` never imports this module and this module
-never imports it back) — FR-21's "credential đi thẳng từ frontend vào Vault
+never imports it back) — FR-21's "credential đi thẳng từ frontend vào kho secret
 qua endpoint riêng, không đi qua context window của LLM" is a fact about the
 call graph, not a runtime filter stripping a field. Every route requires
 `AgentUser` (§3's actor table: nhân viên CNTT / `agent_admin` wires up
@@ -18,7 +18,7 @@ from src.auth.dependencies import AdminUser
 from src.db.base import get_db
 from src.db.models import UC1Connection
 from src.models.schemas import UC1ConnectionCreateRequest, UC1ConnectionResponse
-from src.services.vault_secret_store import VaultStoreDep
+from src.services.secret_store import SecretStoreDep
 from src.workflow.uc1_connections import (
     ConnectionAlreadyExistsError,
     UnsupportedProbeProviderError,
@@ -49,13 +49,13 @@ def list_my_connections(user: AdminUser, db: Annotated[Session, Depends(get_db)]
 
 @router.post("", response_model=UC1ConnectionResponse, status_code=status.HTTP_201_CREATED)
 def create_my_connection(
-    request: UC1ConnectionCreateRequest, user: AdminUser, db: Annotated[Session, Depends(get_db)], vault: VaultStoreDep
+    request: UC1ConnectionCreateRequest, user: AdminUser, db: Annotated[Session, Depends(get_db)], secrets: SecretStoreDep
 ) -> UC1ConnectionResponse:
-    """FR-20/FR-21: write the credential to Vault, return only its pointer."""
+    """FR-20/FR-21: write the credential to the secret store, return only its pointer."""
     try:
         connection = create_connection(
             db,
-            vault,
+            secrets,
             name=request.name,
             type_=request.type,
             credential=request.credential,
@@ -71,11 +71,11 @@ def create_my_connection(
 
 @router.post("/{connection_id}/probe", response_model=UC1ConnectionResponse)
 def probe_my_connection(
-    connection: OwnedConnection, user: AdminUser, db: Annotated[Session, Depends(get_db)], vault: VaultStoreDep
+    connection: OwnedConnection, user: AdminUser, db: Annotated[Session, Depends(get_db)], secrets: SecretStoreDep
 ) -> UC1ConnectionResponse:
     """FR-23: dry-run the connection for real. Always 200 — `connected`/`failed` is the answer, never a crash."""
     try:
-        updated = run_probe(db, vault, connection)
+        updated = run_probe(db, secrets, connection)
     except UnsupportedProbeProviderError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
     return UC1ConnectionResponse.model_validate(updated)

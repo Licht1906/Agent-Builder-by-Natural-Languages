@@ -24,10 +24,10 @@ from src.config import get_settings
 from src.db.models import UC1AgentSpecVersion, UC1PendingAction, User, UserRole
 from src.main import app
 from src.policy.pep import AuthzRequest, Decision, Effect, get_pep_client
-from src.services.vault_secret_store import get_vault_store
+from src.services.secret_store import get_secret_store
 from tests.conftest import auth_header
 from tests.test_agentspec.conftest import spec_payload
-from tests.test_api.test_connection_routes import _FakeVault
+from tests.test_api.test_connection_routes import _FakeSecretStore
 
 pytestmark = pytest.mark.asyncio
 
@@ -49,12 +49,12 @@ def _approval_binding_pep():
 
 
 @pytest.fixture(autouse=True)
-def _fake_vault_and_pep():
+def _fake_secrets_and_pep():
     pep = _approval_binding_pep()
-    app.dependency_overrides[get_vault_store] = lambda: _FakeVault()
+    app.dependency_overrides[get_secret_store] = lambda: _FakeSecretStore()
     app.dependency_overrides[get_pep_client] = lambda: pep
     yield pep
-    app.dependency_overrides.pop(get_vault_store, None)
+    app.dependency_overrides.pop(get_secret_store, None)
     app.dependency_overrides.pop(get_pep_client, None)
 
 
@@ -156,7 +156,7 @@ async def test_approving_sends_the_real_reminder_and_marks_the_row_approved(
     assert row.decided_by_id == approver.id
 
 
-async def test_the_requester_may_not_approve_their_own_action(client: AsyncClient, db_session, _fake_vault_and_pep) -> None:
+async def test_the_requester_may_not_approve_their_own_action(client: AsyncClient, db_session, _fake_secrets_and_pep) -> None:
     """FR-46: refused by *both* layers, not the API's check alone — proven by
     asserting the PEP was actually reached (`pep.seen`), not merely that the
     HTTP response happened to be 403.
@@ -173,8 +173,8 @@ async def test_the_requester_may_not_approve_their_own_action(client: AsyncClien
     )
 
     assert response.status_code == 403, response.text
-    assert _fake_vault_and_pep.seen, "the PEP was never asked — self-approval was refused by the API layer alone"
-    assert _fake_vault_and_pep.seen[-1].principal.sub == _fake_vault_and_pep.seen[-1].approvals[0].approver_sub
+    assert _fake_secrets_and_pep.seen, "the PEP was never asked — self-approval was refused by the API layer alone"
+    assert _fake_secrets_and_pep.seen[-1].principal.sub == _fake_secrets_and_pep.seen[-1].approvals[0].approver_sub
     db_session.refresh(row)
     assert row.status.value == "pending"
 

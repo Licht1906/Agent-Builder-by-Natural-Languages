@@ -54,7 +54,7 @@ from src.db.base import get_db
 from src.db.models import UC1PendingAction, UC1PendingActionStatus, User
 from src.policy.audit import audit_sink
 from src.policy.pep import Approval, PEPClient, Principal, get_pep_client
-from src.services.vault_secret_store import VaultKvStore, get_vault_store, resolve_credential_via
+from src.services.secret_store import SecretStore, get_secret_store, resolve_credential_via
 from src.workflow.uc1_pending_actions import get_pending_action, list_pending_actions
 
 router = APIRouter(prefix="/approvals/actions", tags=["uc1-action-approval"])
@@ -146,7 +146,7 @@ class _ApprovalAttempt:
     approver: User
     reason: str | None
     pep_client: PEPClient
-    vault: VaultKvStore
+    secrets: SecretStore
     db: Session
 
     @property
@@ -155,7 +155,7 @@ class _ApprovalAttempt:
 
 
 def _bound_tool_for(attempt: _ApprovalAttempt, capability: Capability) -> BoundTool:
-    implementation = default_tool_implementations(resolve_credential=resolve_credential_via(attempt.vault))[attempt.row.tool]
+    implementation = default_tool_implementations(resolve_credential=resolve_credential_via(attempt.secrets))[attempt.row.tool]
     return BoundTool(name=attempt.row.tool, scope=capability.scope, connection_id=attempt.row.connection_id, implementation=implementation)
 
 
@@ -230,7 +230,7 @@ def decide_action(
     user: CurrentUser,
     db: Annotated[Session, Depends(get_db)],
     pep_client: Annotated[PEPClient, Depends(get_pep_client)],
-    vault: Annotated[VaultKvStore, Depends(get_vault_store)],
+    secrets: Annotated[SecretStore, Depends(get_secret_store)],
 ) -> ActionDecisionResponse:
     row = get_pending_action(db, action_hash)
     if row is None:
@@ -248,5 +248,5 @@ def decide_action(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="decision phải là 'approve' hoặc 'reject'")
 
     spec = _policy_spec_for(db, row.agent_id, row.version)
-    attempt = _ApprovalAttempt(row=row, spec=spec, approver=user, reason=payload.reason, pep_client=pep_client, vault=vault, db=db)
+    attempt = _ApprovalAttempt(row=row, spec=spec, approver=user, reason=payload.reason, pep_client=pep_client, secrets=secrets, db=db)
     return _attempt_approval(attempt)

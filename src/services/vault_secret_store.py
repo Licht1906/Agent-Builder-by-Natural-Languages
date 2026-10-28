@@ -1,21 +1,13 @@
-"""HashiCorp Vault KV v2 — UC1-08 (#122), spec.md §6.2.
+"""HashiCorp Vault KV v2 — the exported package's `secrets.backend: vault` (DS-13).
 
-Chosen over `src.services.secret_store.EncryptedDbSecretStore` (ADR-0045) for
-the reason spec.md §6.2 states explicitly: that store holds BYODB credentials
-an admin writes ahead of time through `PUT /admin/secrets/{key}`. A UC-1
-connection's credential arrives from a creator, at runtime, typed into a
-browser form — Vault KV v2 is what that flow is built for; SOPS+age (the
-other candidate) is for secrets baked into a deployment artifact before it
-ships, not one a person types in during setup. §6.2 records both as
-considered and this as the one chosen. The two stores are not interchangeable
-and this module does not try to unify them.
+A client, not a service the platform runs. The platform itself reads every
+credential through `src.services.secret_store.SecretStore` and no longer
+ships a Vault (DS-20 / ADR-0059 §9); this stays for a company that keeps its
+own secrets in Vault and points its package at it (`src.standalone.config`).
 
-`credential_ref` (`src.agentspec.spec.Connection.credential_ref`) is
-`vault://<path>` — `<path>` is this store's key, one KV v2 secret per
-connection, under a fixed mount (`settings.vault_kv_mount`). Raw REST calls,
-not the `hvac` SDK, the same call `src.services.connection_probe` already made
-for Qdrant: one HTTP dependency this platform already has, rather than a
-second one whose retry/redirect behaviour this module would not control.
+Raw REST calls, not the `hvac` SDK: one HTTP dependency this platform already
+has, rather than a second one whose retry/redirect behaviour this module
+would not control.
 
 Every method fails loudly. Vault unreachable, refusing the token, or a 5xx
 is never "no secret" — `VaultUnavailableError` — the same distinction
@@ -23,23 +15,12 @@ is never "no secret" — `VaultUnavailableError` — the same distinction
 `src.services.secret_store`: an incident is not a missing reference.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Any
 
 import httpx
-from fastapi import Depends
-
-from src.config import get_settings
 
 _SECRET_FIELD = "value"
-
-#: `(vault_path) -> secret`. Named the way this repo names every other
-#: single-callable seam (`HttpGet`, `ViewLister`, `PEPClient`) — what
-#: `src.compiler.tools.default_tool_implementations` takes as its own
-#: `resolve_credential`.
-ResolveCredential = Callable[[str], str]
-
 
 class VaultUnavailableError(RuntimeError):
     """Vault could not be reached, refused the token, or answered with something unusable."""
@@ -111,49 +92,3 @@ def _secret_value_of(body: Any, path: str) -> str:
         return str(body["data"]["data"][_SECRET_FIELD])
     except (KeyError, TypeError) as exc:
         raise VaultUnavailableError(f"Vault trả về dữ liệu không đọc được cho {path!r}") from exc
-
-
-def get_vault_store() -> VaultKvStore:
-    """FastAPI dependency: the one place a request builds the real Vault client.
-
-    Declared the way `get_secret_store`/`get_pep_client` are — a test aims
-    `POST /connections` at a fake by overriding this, and the real KV v2
-    client is the default rather than a branch on a flag.
-    """
-    settings = get_settings()
-    return VaultKvStore(base_url=settings.vault_url, token=settings.vault_token, mount=settings.vault_kv_mount)
-
-
-VaultStoreDep = Annotated[VaultKvStore, Depends(get_vault_store)]
-
-
-def resolve_credential_via(vault: VaultKvStore) -> ResolveCredential:
-    """A `ResolveCredential` bound to `vault`, degrading a *missing* secret to
-    `""` — and never an unreachable one.
-
-    Shared by every caller of `default_tool_implementations` (sandbox chat,
-    the golden-set runner) for the reason `src.api.sandbox_routes`'s own
-    original copy of this gave: a stub or real tool implementation only needs
-    to *prove* its pointer resolves through Vault at call time, and a
-    connection nobody has wired up yet (a fresh sandbox run, most tests) must
-    not fail the whole turn over it. That argument covers
-    `VaultSecretNotFoundError`, and only it.
-
-    `VaultUnavailableError` propagates. Catching it here collapsed exactly the
-    distinction this module's own header draws — "an incident is not a missing
-    reference" — and did so at the one seam every tool implementation reads
-    credentials through, which is the worst possible place to lose it: an
-    unreachable Vault arrived at `src.compiler.tools`' ERP tools looking
-    identical to "no connection configured", they reported it as an empty
-    result set, and the agent told a user there were no overdue receivables.
-    A caller that must not fail its whole turn over this catches it and says
-    which of the two happened — see `_unreadable` there.
-    """
-
-    def _resolve(vault_path: str) -> str:
-        try:
-            return vault.get(vault_path)
-        except VaultSecretNotFoundError:
-            return ""
-
-    return _resolve

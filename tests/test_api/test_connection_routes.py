@@ -1,8 +1,8 @@
 """UC1-08 (#122) — `POST /connections`, `POST /connections/{id}/probe`, spec.md §19.
 
-`get_vault_store` is overridden with an in-process fake KV store (same shape
-`app.dependency_overrides[get_pep_client]` uses for the PEP) — no live Vault
-container in this suite. `probe_postgres_connection` itself is exercised
+`get_secret_store` is overridden with an in-process fake store (same shape
+`app.dependency_overrides[get_pep_client]` uses for the PEP) — the credential
+lands in the platform's `SecretStore` since DS-20, and this fake stands in for it. `probe_postgres_connection` itself is exercised
 directly against seams in `tests/test_services/test_uc1_connection_probe.py`;
 here the point is the HTTP contract: the credential never rides in a response,
 and only `agent_admin` may reach this router at all.
@@ -14,36 +14,46 @@ import pytest
 from httpx import AsyncClient
 
 from src.main import app
+from src.services.secret_store import SecretNotFoundError, get_secret_store
 from src.services.uc1_connection_probe import ProbeStatus
-from src.services.vault_secret_store import VaultSecretNotFoundError, get_vault_store
 from tests.conftest import auth_header
 
 pytestmark = pytest.mark.asyncio
 
 
 @dataclass
-class _FakeVault:
+class _FakeSecretStore:
+    """`SecretStore` in memory — `get` raises `SecretNotFoundError` for a key never `put`, as the real one does."""
+
     values: dict[str, str] = field(default_factory=dict)
 
-    def put(self, path: str, value: str) -> None:
-        self.values[path] = value
+    def put(self, key: str, value: str) -> None:
+        self.values[key] = value
 
-    def get(self, path: str) -> str:
-        if path not in self.values:
-            raise VaultSecretNotFoundError(path)
-        return self.values[path]
+    def get(self, key: str) -> str:
+        if key not in self.values:
+            raise SecretNotFoundError(key)
+        return self.values[key]
+
+    def delete(self, key: str) -> None:
+        self.values.pop(key, None)
+
+    def rotate(self, key: str, value: str) -> None:
+        if key not in self.values:
+            raise SecretNotFoundError(key)
+        self.values[key] = value
 
 
 @pytest.fixture
-def fake_vault() -> _FakeVault:
-    vault = _FakeVault()
-    app.dependency_overrides[get_vault_store] = lambda: vault
-    yield vault
-    app.dependency_overrides.pop(get_vault_store, None)
+def fake_secrets() -> _FakeSecretStore:
+    store = _FakeSecretStore()
+    app.dependency_overrides[get_secret_store] = lambda: store
+    yield store
+    app.dependency_overrides.pop(get_secret_store, None)
 
 
 async def test_creating_a_connection_never_echoes_the_credential(
-    client: AsyncClient, agent_admin_token: str, fake_vault: _FakeVault
+    client: AsyncClient, agent_admin_token: str, fake_secrets: _FakeSecretStore
 ) -> None:
     response = await client.post(
         "/api/v1/connections",
@@ -61,11 +71,11 @@ async def test_creating_a_connection_never_echoes_the_credential(
     body = response.json()
     assert body["credential_ref"] == "vault://conn/erp_readonly"
     assert "s3cr3t" not in response.text
-    assert fake_vault.values["conn/erp_readonly"] == "postgresql://ro:s3cr3t@erp.internal:5432/erp"
+    assert fake_secrets.values["conn/erp_readonly"] == "postgresql://ro:s3cr3t@erp.internal:5432/erp"
 
 
-async def test_a_duplicate_name_is_refused_rather_than_overwriting_vault(
-    client: AsyncClient, agent_admin_token: str, fake_vault: _FakeVault
+async def test_a_duplicate_name_is_refused_rather_than_overwriting_its_secret(
+    client: AsyncClient, agent_admin_token: str, fake_secrets: _FakeSecretStore
 ) -> None:
     payload = {
         "name": "erp_readonly_dup",
@@ -83,11 +93,11 @@ async def test_a_duplicate_name_is_refused_rather_than_overwriting_vault(
         headers=auth_header(agent_admin_token),
     )
     assert second.status_code == 409
-    assert fake_vault.values["conn/erp_readonly_dup"] == "postgresql://ro:first@erp.internal:5432/erp"
+    assert fake_secrets.values["conn/erp_readonly_dup"] == "postgresql://ro:first@erp.internal:5432/erp"
 
 
 async def test_only_agent_admin_may_create_a_connection(
-    client: AsyncClient, creator_token: str, fake_vault: _FakeVault
+    client: AsyncClient, creator_token: str, fake_secrets: _FakeSecretStore
 ) -> None:
     response = await client.post(
         "/api/v1/connections",
@@ -99,7 +109,7 @@ async def test_only_agent_admin_may_create_a_connection(
 
 
 async def test_probe_dry_runs_the_connection_and_persists_the_verdict(
-    client: AsyncClient, agent_admin_token: str, fake_vault: _FakeVault, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, agent_admin_token: str, fake_secrets: _FakeSecretStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     created = await client.post(
         "/api/v1/connections",
@@ -137,7 +147,7 @@ async def test_probe_dry_runs_the_connection_and_persists_the_verdict(
 
 
 async def test_probe_with_a_bad_credential_answers_clearly_rather_than_hanging(
-    client: AsyncClient, agent_admin_token: str, fake_vault: _FakeVault
+    client: AsyncClient, agent_admin_token: str, fake_secrets: _FakeSecretStore
 ) -> None:
     created = await client.post(
         "/api/v1/connections",
@@ -145,7 +155,7 @@ async def test_probe_with_a_bad_credential_answers_clearly_rather_than_hanging(
         headers=auth_header(agent_admin_token),
     )
     connection_id = created.json()["id"]
-    del fake_vault.values["conn/erp_no_secret"]  # simulate: the secret was never actually reachable
+    del fake_secrets.values["conn/erp_no_secret"]  # simulate: the secret was never actually reachable
 
     response = await client.post(f"/api/v1/connections/{connection_id}/probe", headers=auth_header(agent_admin_token))
 
@@ -156,7 +166,7 @@ async def test_probe_with_a_bad_credential_answers_clearly_rather_than_hanging(
 
 
 async def test_probe_on_an_unsupported_connection_type_is_a_422_not_a_crash(
-    client: AsyncClient, agent_admin_token: str, fake_vault: _FakeVault
+    client: AsyncClient, agent_admin_token: str, fake_secrets: _FakeSecretStore
 ) -> None:
     created = await client.post(
         "/api/v1/connections",
@@ -171,7 +181,7 @@ async def test_probe_on_an_unsupported_connection_type_is_a_422_not_a_crash(
 
 
 async def test_list_connections_never_returns_a_credential(
-    client: AsyncClient, agent_admin_token: str, fake_vault: _FakeVault
+    client: AsyncClient, agent_admin_token: str, fake_secrets: _FakeSecretStore
 ) -> None:
     await client.post(
         "/api/v1/connections",

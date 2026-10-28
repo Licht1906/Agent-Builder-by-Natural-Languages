@@ -31,7 +31,7 @@ DATABASE_URL='postgresql://postgres:postgres@127.0.0.1:5433/app_dev' pytest test
 | Sống sót | Mất |
 |---|---|
 | Role Postgres `agt_*` (cluster-level, `drop_all` không chạm) | Toàn bộ `uc1_agent_spec_versions` |
-| Secret trong Vault (nếu Vault không restart) | `uc1_connections`, `deployments`, transcript |
+| — | `uc1_connections`, `deployments`, transcript, credential trong SecretStore (`secret_store_entries`) |
 | Dữ liệu demo, *nếu* suite tình cờ seed lại | Accounts bạn tự tạo (2 account seed được tạo lại) |
 
 Khôi phục: chạy lại từ bước 1 bên dưới. Không cần dựng lại role Postgres.
@@ -40,27 +40,27 @@ Khôi phục: chạy lại từ bước 1 bên dưới. Không cần dựng lạ
 
 ## 1. Thứ tự khởi động
 
-Thứ tự này có lý do, không tuỳ ý: `seed-vault` cần Vault đã sống, `seed-demo` cần schema đã migrate.
+Thứ tự này có lý do, không tuỳ ý: `seed-demo` và `seed-uc1-credentials` đều cần schema đã migrate.
 
 ```bash
-docker compose up -d db qdrant policy vault reranker   # hạ tầng
+docker compose up -d db qdrant policy reranker         # hạ tầng
 make migrate                                            # alembic upgrade head
 make seed-demo                                          # dữ liệu AR dạng Olist
-make seed-vault                                         # credential vào Vault  ← xem ghi chú
+make seed-uc1-credentials                               # credential vào SecretStore ← xem ghi chú
 make verify-uc1                                         # tuỳ chọn: chứng minh grant + RLS còn nguyên
 make run                                                # backend, cổng 8000
 make frontend-run                                        # frontend, cổng 5173
 ```
 
-**`make seed-vault` phải chạy lại sau mỗi lần restart Vault.** Vault ở §16.2 chạy dev mode, giữ secret
-trong RAM. Script seed `conn/erp_readonly` = `settings.database_url` — đúng cái DSN bạn sẽ nhập tay ở
-bước 3, nên chạy target này là khỏi phải gõ.
+**Credential nằm trong SecretStore của nền tảng (Postgres, DS-20)**, nên sống qua restart — chỉ mất khi
+`pytest` reset schema, lúc đó `make seed-uc1` ghi lại cả dữ liệu lẫn credential. Script seed
+`conn/erp_readonly` = `settings.database_url` — đúng cái DSN bạn sẽ nhập tay ở bước 3, nên chạy target này
+là khỏi phải gõ.
 
 Kiểm tra nhanh trước khi mở UI:
 
 ```bash
 curl -s localhost:8000/health                    # {"status":"ok",...,"database":"ok"}
-curl -s localhost:8200/v1/sys/seal-status        # "sealed":false
 ```
 
 ---
@@ -178,7 +178,7 @@ Ba chỗ phải khớp chính xác, lệch là hỏng âm thầm:
 - `id` phải **chứa** `erp` → `_connection_id_for` (`graph.py`) khớp domain của tool `erp.query_receivables` bằng `"erp" in connection.id`
 - `allowed_objects` phải có `v_ar_open` → chính danh sách `provision_agent_role` lặp qua để GRANT
 
-Ba `credential_ref` ở trên đều là path mà `make seed-vault` đã ghi sẵn (`scripts/seed_vault_credentials.py`:
+Ba `credential_ref` ở trên đều là khoá mà `make seed-uc1-credentials` đã ghi sẵn (`scripts/seed_uc1_credentials.py`:
 `conn/erp_readonly`, `conn/smtp_internal`, `conn/tasktracker`), nên không phải tạo thêm gì trong tab **Kết nối**:
 chỉ `conn_erp` cần một dòng `uc1_connections` đã probe xanh (FR-24 chỉ xác thực `allowed_objects`, mà hai
 connection kia không khai object nào). `granted_views` lọc `type == postgres and read_only`, nên thêm
@@ -281,17 +281,7 @@ openai.RateLimitError: 429 ... 'is_byok': False,
 Xử lý tạm: chờ ~1 phút rồi thử lại (nó tự hết). Xử lý thật trước ngày demo: thêm provider key riêng
 ở <https://openrouter.ai/settings/integrations> để khỏi dùng pool chung.
 
-### #3 — Vault báo `unhealthy` nhưng vẫn tốt
-
-`docker-compose.yml` healthcheck gọi `vault status`, mà `VAULT_ADDR` default là `https://` trong khi
-dev mode chạy `http://`:
-
-```
-Error checking seal status: ... http: server gave HTTP response to HTTPS client
-```
-
-Vault hoàn toàn bình thường. Xác nhận bằng `curl -s localhost:8200/v1/sys/seal-status` → `"sealed":false`.
-Sửa hẳn thì thêm `VAULT_ADDR=http://127.0.0.1:8200` vào env của healthcheck.
+### #3 — *(đã gỡ: Vault không còn chạy từ DS-20)*
 
 ### #4 — `min_pass_rate` là 0.5, không phải 0.9
 
@@ -385,7 +375,7 @@ Ba trạng thái giờ phân biệt được, và đây là bảng để đọc 
 | `{'rows': [], 'source': ...}` | Đọc được, RLS scope ra 0 dòng — **là một sự thật về dữ liệu** |
 | `{'source': ..., 'error': ...}` | Không đọc được. Không kết luận gì về công nợ từ dòng này |
 
-`resolve_credential_via` cũng thôi gộp `VaultUnavailableError` vào `""`: Vault sập giờ báo là sự cố,
+`resolve_credential_via` cũng thôi gộp `SecretUnreadableError` vào `""` (trước DS-20 là `VaultUnavailableError`): credential không đọc được giờ báo là sự cố,
 không còn giả dạng "chưa cấu hình kết nối". Đúng nguyên tắc mà header của chính module đó đã tuyên
 bố từ đầu — *"an incident is not a missing reference"*.
 

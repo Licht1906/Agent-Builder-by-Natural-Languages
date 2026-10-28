@@ -12,7 +12,7 @@ ENV_FILE="${1:-infra/gcp/.env.production}"
 [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE — copy .env.example there and fill it in" >&2; exit 1; }
 
 # Set by deploy.yml directly from Cloud SQL/the internal-services VM/Cloud Run
-# config, not from a secret — see setup.sh's printed DATABASE_URL/VAULT_TOKEN
+# config, not from a secret — see setup.sh's printed DATABASE_URL
 # (already pushed to Secret Manager by setup.sh itself) and DEPLOYMENT.md.
 #
 # RERANKER_URL nằm trong danh sách này vì một lý do cứng hơn "không cần thiết":
@@ -23,7 +23,7 @@ ENV_FILE="${1:-infra/gcp/.env.production}"
 # NETWORK_POLICY_HOST_ALIASES bị bỏ theo đúng phần "Known gaps" của
 # DEPLOYMENT.md: giá trị trong .env.example map `smtp.internal.corp` sang
 # `mailhog`, một service dev-only không tồn tại trên GCP.
-SKIP_KEYS=" DATABASE_URL QDRANT_URL OPA_URL VAULT_URL VAULT_TOKEN SMTP_HOST APP_ENV CORS_ORIGINS FRONTEND_URL RERANKER_URL NETWORK_POLICY_HOST_ALIASES "
+SKIP_KEYS=" DATABASE_URL QDRANT_URL OPA_URL SMTP_HOST APP_ENV CORS_ORIGINS FRONTEND_URL RERANKER_URL NETWORK_POLICY_HOST_ALIASES "
 
 while IFS='=' read -r key value; do
   case "$key" in

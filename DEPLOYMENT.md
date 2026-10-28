@@ -13,11 +13,11 @@ tầng chúng cần.
 | `db` (Postgres+pgvector) | Cloud SQL for PostgreSQL, private IP, **zonal** | Managed, có backup; `CREATE EXTENSION vector` chạy một lần sau khi tạo |
 | `qdrant` | Compute Engine VM (`internal-services`), không public IP | Cần persistent disk, Cloud Run không mount volume được |
 | `policy` (OPA) | Cùng VM `internal-services` | Stateless nhưng cần policy file cố định — gộp chung VM cho đỡ phức tạp thay vì tách Cloud Run riêng |
-| `vault` | Cùng VM `internal-services`, **vẫn dev-mode** | Xem "Known gaps" bên dưới |
+| `vault` | **Bỏ** (DS-20) | Mọi credential nằm trong SecretStore của nền tảng — bảng `secret_store_entries` trong Cloud SQL, mã hoá bằng `SECRET_STORE_KEY`. Gói xuất ra vẫn đọc được Vault *của công ty* (`secrets.backend: vault`) |
 | `mailhog` | **Bỏ** | Dev-only. Cần SMTP relay thật, cấu hình qua `SMTP_HOST`/`SMTP_USERNAME`/`SMTP_PASSWORD` |
 | `frontend/` | Firebase Hosting | SPA tĩnh; Hosting đồng thời reverse-proxy `/api/**` sang Cloud Run `backend` |
 
-Cloud Run (`backend`) nối vào `qdrant`/`policy`/`vault` trên VM qua **Direct
+Cloud Run (`backend`) nối vào `qdrant`/`policy` trên VM qua **Direct
 VPC egress** (`--network=app-vpc --subnet=app-subnet`), egress
 `private-ranges-only` — traffic ra Internet thật (OpenAI/OpenRouter/Tavily/SMTP
 relay) đi thẳng, không vòng qua VPC. Không dùng Serverless VPC Access
@@ -86,8 +86,6 @@ disk giảm bằng cách đổi loại/kích thước chứ không giảm theo l
 - **Request ngoài khung giờ sẽ fail, không phải chờ.** Cloud Run service vẫn
   tồn tại và vẫn nhận request; nó cold start rồi chết ở bước kết nối DB. Nếu
   cần một trang "ngoài giờ làm việc" tử tế hơn thì phải thêm, chưa có.
-- **Vault mất secret mỗi đêm** — xem "Known gaps", đây là hệ quả nghiêm trọng
-  nhất và đã có bước xử lý trong chuỗi `start`.
 
 ### Đổi khung giờ
 
@@ -184,38 +182,35 @@ trên — chúng đổi tiền lấy thời gian sẵn sàng, cái này đổi t
   chỗ khác) và lúc ấy `CORS_ORIGINS` mới thật sự có việc để làm.
 - **VM không có external IP, nên phải có Cloud NAT.** Không phải tuỳ chọn:
   `vm-startup.sh` cần `apt-get` và `download.docker.com` để cài Docker, còn
-  `docker compose up` cần kéo image qdrant/opa/vault từ Docker Hub. Thiếu NAT
+  `docker compose up` cần kéo image qdrant/opa từ Docker Hub. Thiếu NAT
   thì startup script chết câm lúc boot, và triệu chứng chỉ lộ ra ở lần SSH kế
   tiếp dưới dạng `sudo: docker: command not found` — không liên quan gì tới
   Docker. Private Google Access không thay được: nó chỉ mở API của Google.
-- **Vault vẫn dev-mode.** `src/services/vault_secret_store.py` gọi thẳng
-  Vault KV v2 REST API, không có lớp trừu tượng để đổi sang Secret Manager mà
-  không sửa code — và `src/config.py` (§16.1) đã ghi rõ production-mode +
-  auto-unseal nằm ngoài MVP. VM sinh một `VAULT_TOKEN` ngẫu nhiên (không phải
-  `dev-only-vault-token` mặc định trong repo) nhưng dữ liệu vẫn in-memory: mất
-  khi VM restart, không TLS nội bộ. Ghi một ticket theo dõi việc dựng Vault
-  production-mode (GCS storage backend + Cloud KMS auto-unseal) trước khi hệ
-  thống giữ BYODB credential thật của khách hàng.
+- ~~**Vault vẫn dev-mode.**~~ **Đã đóng (DS-20 / ADR-0059 §9).** Nền tảng không
+  còn chạy Vault. Mọi credential — BYODB, tool đã đăng ký, DSN của Hệ CSDL, kết
+  nối UC-1 — đọc qua một `SecretStore` duy nhất (`src/services/secret_store.py`):
+  bảng `secret_store_entries` trong Cloud SQL, mã hoá AES-256-GCM bằng
+  `SECRET_STORE_KEY` (biến môi trường, không bao giờ nằm trong DB). Bền qua mọi
+  lần tắt/bật VM, có backup cùng Cloud SQL, không có gì để unseal. Bước re-seed
+  Vault mỗi sáng trong `app-scheduler` vì thế cũng bị gỡ.
 
-  **Lịch tắt máy ban đêm nâng gap này từ rủi ro lý thuyết lên chuyện hằng
-  ngày.** Trước đây "mất khi VM restart" là hiếm; giờ VM tắt lúc 20:00 mỗi
-  ngày nên Vault mất sạch secret *mỗi đêm*. Kiểu hỏng thì tệ hơn cả việc mất:
-  `scripts/seed_vault_credentials.py` đã ghi rõ — `resolve_credential_via`
-  (`src/services/vault_secret_store.py`) hạ một secret thiếu thành `""` có
-  chủ đích, nên `erp.query_receivables` trả `{"rows": [], "note": "chưa có kết
-  nối ERP nào được cấu hình"}`, và agent — được đưa một kết quả rỗng chứ không
-  phải một lỗi — trả lời rằng nó không có dữ liệu. Mọi case `correct_lookup`
-  trong golden set fail theo cách đó, và không case nào nói "Vault".
-
-  Nên chuỗi `start` của `app-scheduler` chạy Cloud Run Job `backend-vault-seed`
-  (do `deploy.yml` tạo) sau khi VM lên và *trước* khi Cloud Run nhận traffic.
-  Nếu job đó thiếu hoặc lỗi, function ghi một dòng `CẢNH BÁO` vào log rồi vẫn
-  chạy tiếp — kiểm tra dòng đó là cách duy nhất để biết, vì bản thân hệ thống
-  sẽ không báo gì:
+  Deployment dựng trước DS-20 dọn một lần:
 
   ```bash
-  gcloud functions logs read app-scheduler --region=$REGION --gen2 --limit=50 | grep -i vault
+  # VM: đẩy compose mới (không còn vault) rồi gỡ container cũ
+  gcloud compute scp infra/gcp/docker-compose.internal.yml internal-services:/opt/app/docker-compose.yml \
+    --zone=$ZONE --tunnel-through-iap
+  gcloud compute ssh internal-services --zone=$ZONE --tunnel-through-iap \
+    --command="cd /opt/app && sudo docker compose up -d --remove-orphans"
+  gcloud secrets delete app-vault-token          # không còn ai đọc
+  gcloud compute firewall-rules update allow-connector-to-internal --rules=tcp:6333,tcp:6334,tcp:8181
+  gcloud run jobs delete backend-vault-seed --region=$REGION
+  PROJECT_ID=<gcp-project-id> bash infra/gcp/schedule.sh   # function không còn VAULT_RESEED_JOB
   ```
+
+  Credential từng chỉ nằm trong Vault dev-mode không chuyển được (nó in-memory):
+  credential UC-1 do `backend-seed-credentials` ghi lại ở lần deploy kế tiếp; kết
+  nối nào tạo tay qua `POST /connections` thì nhập lại.
 - **Reranker không yêu cầu xác thực** trên Cloud Run — giữ đúng mô hình tin
   cậy hiện có của `docker-compose.yml` (gọi được qua tên service, không auth).
   Muốn siết lại (Cloud Run IAM + ID token) cần sửa
@@ -255,12 +250,12 @@ Script này (idempotent, chạy lại an toàn nếu lỗi giữa chừng):
    `vm-startup.sh` cài xong Docker, push
    `infra/gcp/docker-compose.internal.yml` và
    `docs/usecase_spec/platform/authz.rego` vào VM qua `gcloud compute scp`,
-   khởi động `qdrant`/`policy`/`vault`.
+   khởi động `qdrant`/`policy`.
 4. Tạo service account cho Cloud Run runtime và cho GitHub Actions deployer,
    gán IAM roles tối thiểu cần thiết.
 5. Dựng Workload Identity Federation — GitHub Actions xác thực bằng OIDC
    token, không cần lưu service-account key JSON nào trong repo/secrets.
-6. Đẩy `DATABASE_URL` và `VAULT_TOKEN` (vừa sinh ra) vào Secret Manager.
+6. Đẩy `DATABASE_URL` vào Secret Manager.
 
 Cuối script sẽ in ra một danh sách biến — thêm chúng vào **Settings → Secrets
 and variables → Actions** của repo trên GitHub (mục *Variables*, không phải
@@ -320,7 +315,7 @@ Sau đó khai báo secret thật (API key, mật khẩu):
 cp .env.example infra/gcp/.env.production
 # điền OPENAI_API_KEY, OPENROUTER_API_KEY, JWT_SECRET, SECRET_STORE_KEY,
 # SEED_*_PASSWORD, SMTP_USERNAME/PASSWORD, v.v.
-# ĐỂ TRỐNG: DATABASE_URL, QDRANT_URL, OPA_URL, VAULT_URL, VAULT_TOKEN,
+# ĐỂ TRỐNG: DATABASE_URL, QDRANT_URL, OPA_URL,
 # SMTP_HOST, APP_ENV, CORS_ORIGINS, FRONTEND_URL — deploy.yml tự set những
 # cái này từ hạ tầng vừa dựng.
 
@@ -348,8 +343,9 @@ lint/test/`opa test`/frontend build như hiện tại → nếu xanh,
 3. Deploy `backend` (nối Cloud SQL qua unix socket, nối VM qua Direct VPC egress)
    và `reranker`, trỏ `RERANKER_URL` của `backend` vào URL Cloud Run thật của
    `reranker`.
-4. Cập nhật Cloud Run Job `backend-vault-seed` (không chạy ở đây —
-   `app-scheduler` gọi nó mỗi sáng sau khi VM lên).
+4. Chạy Cloud Run Job `backend-seed-credentials` (`scripts/seed_uc1_credentials.py`):
+   ghi credential của các tool UC-1 vào SecretStore. Idempotent; chạy mỗi lần
+   deploy cho chắc, không cần chạy lại mỗi sáng vì store nằm trong Cloud SQL.
 5. Smoke test `GET /health`.
 6. Gọi `app-scheduler?action=reconcile` — trả hạ tầng về đúng trạng thái theo
    giờ. Deploy trong giờ làm việc thì để nguyên; deploy lúc nửa đêm thì tắt
@@ -376,8 +372,8 @@ thì khác: `firebase-tools` ở đó dùng Application Default Credentials do
 
 ## Bật lịch bật/tắt (sau lần deploy đầu tiên)
 
-Phải xếp sau vì `schedule.sh` cần Cloud Run Job `backend-vault-seed` đã tồn
-tại, mà job đó do `deploy.yml` tạo.
+Phải xếp sau vì `schedule.sh` bật/tắt các service Cloud Run (`backend`,
+`reranker`), mà chúng do `deploy.yml` tạo.
 
 ```bash
 PROJECT_ID=<gcp-project-id> REGION=asia-southeast1 bash infra/gcp/schedule.sh
@@ -393,8 +389,6 @@ gcloud functions logs read app-scheduler --region=$REGION --gen2 --limit=50
 gcloud scheduler jobs run app-start --location=$REGION
 ```
 
-Trong log của lần `app-start`, tìm dòng re-seed Vault. Nếu là `CẢNH BÁO` thì
-đọc "Known gaps" — bỏ qua nó nghĩa là UC-1 trả rỗng mỗi sáng mà không báo lỗi.
 
 ## Seed lần đầu (thủ công, không nằm trong pipeline)
 
@@ -408,8 +402,8 @@ gcloud run jobs deploy backend-oneoff --image=<backend-image-vừa-deploy> \
   --set-secrets=<danh-sách-app-secrets-như-deploy.yml> \
   --command=python --args="scripts/init_qdrant.py"
 gcloud run jobs execute backend-oneoff --region=$REGION --wait
-# tương tự cho scripts/seed_kb.py, scripts/seed_uc1_demo_data.py,
-# scripts/seed_vault_credentials.py — đổi --args mỗi lần
+# tương tự cho scripts/seed_kb.py, scripts/seed_uc1_demo_data.py — đổi --args mỗi lần
+# (credential UC-1 thì deploy.yml đã seed: job backend-seed-credentials)
 ```
 
 ## Cập nhật `authz.rego`
@@ -430,7 +424,7 @@ gcloud compute ssh internal-services --zone=$ZONE --tunnel-through-iap \
 
 - `infra/gcp/setup.sh` — provision hạ tầng một lần.
 - `infra/gcp/vm-startup.sh` — startup script của VM `internal-services`.
-- `infra/gcp/docker-compose.internal.yml` — subset `qdrant`/`policy`/`vault`
+- `infra/gcp/docker-compose.internal.yml` — subset `qdrant`/`policy`
   chạy trên VM đó, cùng image/version pin với `docker-compose.yml` gốc.
 - `infra/gcp/sync-secrets.sh` — đồng bộ `infra/gcp/.env.production` vào
   Secret Manager.

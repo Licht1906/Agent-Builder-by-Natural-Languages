@@ -19,7 +19,9 @@
 #                client in-process — none of those four are separate
 #                deployable services in this codebase today).
 #   policy    -> `policy` (OPA), below.
-#   vault     -> `vault`, below.
+#   vault     -> not present since DS-20 (ADR-0059 §9): every credential the
+#                platform holds is in its SecretStore, a Postgres table
+#                (`src.services.secret_store`) — durable, nothing to unseal.
 #   llm       -> not present, and now deliberately so rather than for want of
 #                wiring. `ChatModelFactory` (`src.services.llm`) reaches two
 #                hosted APIs: OpenAI directly (`OPENAI_API_KEY`) for the
@@ -127,32 +129,6 @@ services:
     # depends on `service_started` below, the same accommodation already made
     # for `reranker`.
 
-  # UC1-08 (#122), §6.2/§16.1: Vault in dev-server mode — an in-memory backend,
-  # auto-unsealed, seeded with one root token. Good enough to demo FR-20..23;
-  # production-mode + auto-unseal is explicitly out of scope (§16.1) and would
-  # need its own storage backend, TLS, and an unseal ceremony `install.sh`
-  # cannot do unattended anyway. `VAULT_DEV_ROOT_TOKEN_ID` is what
-  # `settings.vault_token` (`src.services.vault_secret_store`) has to match.
-  vault:
-    image: hashicorp/vault:1.18
-    ports:
-      - "8200:8200"
-    environment:
-      VAULT_DEV_ROOT_TOKEN_ID: dev-only-vault-token
-      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-      # The healthcheck below runs `vault status`, which talks to `VAULT_ADDR`
-      # and defaults to *https*://127.0.0.1:8200. Dev mode serves plain HTTP, so
-      # without this the probe fails forever with "server gave HTTP response to
-      # HTTPS client" and `backend` never gets past its `service_healthy` wait.
-      VAULT_ADDR: http://127.0.0.1:8200
-    cap_add:
-      - IPC_LOCK
-    healthcheck:
-      test: ["CMD", "vault", "status"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   # UC1-21 (#137), §16.2: "SMTP | MailHog | xem được email mà không gửi ra
   # ngoài thật". `mail.send_reminder`'s real send (`src.compiler.tools`) is
   # plain SMTP against whatever `SMTP_HOST`/`SMTP_PORT` name — this service is
@@ -173,15 +149,13 @@ services:
     env_file:
       - .env
     environment:
-      # Overrides .env's DATABASE_URL/QDRANT_URL/RERANKER_URL/OPA_URL/VAULT_URL:
+      # Overrides .env's DATABASE_URL/QDRANT_URL/RERANKER_URL/OPA_URL:
       # inside the compose network these are reachable by service name, not
       # `localhost`.
       DATABASE_URL: postgresql://postgres:postgres@db:5432/app_dev
       QDRANT_URL: http://qdrant:6333
       RERANKER_URL: http://reranker:8001
       OPA_URL: http://policy:8181
-      VAULT_URL: http://vault:8200
-      VAULT_TOKEN: dev-only-vault-token
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
     depends_on:
@@ -202,8 +176,6 @@ services:
       # bug to route around with a slower dependency wait.
       policy:
         condition: service_started
-      vault:
-        condition: service_healthy
       mailhog:
         condition: service_started
     volumes:
