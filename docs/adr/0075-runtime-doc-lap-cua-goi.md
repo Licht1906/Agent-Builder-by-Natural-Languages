@@ -25,7 +25,7 @@ ADR-0059 §10: gói xuất ra là một runtime cố định cộng cấu hình 
    - Đọc secret xảy ra trước khi import ORM, vì URL Postgres của gói cũng là một secret và `src.db.base` gắn engine ngay lúc import.
    - Không khởi động được thì thoát với mã 2, trước khi mở cổng.
 6. **LLM theo `base_url` OpenAI-compatible; model ánh xạ từ model bundle ghi.** Mỗi node giữ model đã được eval trên nền tảng, và chi phí được tính theo giá tham chiếu của model đó. `runtime.yaml` (`llm.models`) ánh xạ model ấy sang model công ty phục vụ; mọi model còn lại, kể cả các lời gọi nội bộ của runtime, dùng `default_model`.
-7. **Người hỏi đến từ `auth`.** Bản này chỉ có `trusted_header`: thiếu header thì 401, không bao giờ rơi về một người hỏi mặc định. `oidc`, `jwt` và `custom` là việc của DS-14; khai một chế độ chưa có thì gói từ chối khởi động. Lượt duyệt chỉ do chính người hỏi xem và quyết.
+7. **Người hỏi đến từ `auth`.** Bản này chỉ có `trusted_header`: thiếu header thì 401, không bao giờ rơi về một người hỏi mặc định. `oidc`, `jwt` và `custom` là việc của DS-14; khai một chế độ chưa có thì gói từ chối khởi động. (Đã có từ DS-14 — xem ADR-0076.) Lượt duyệt chỉ do chính người hỏi xem và quyết.
 
 ## Consequences
 

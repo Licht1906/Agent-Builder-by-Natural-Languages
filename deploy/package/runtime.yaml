@@ -24,9 +24,20 @@ llm:                            # any OpenAI-compatible endpoint
   models:                       # the model a node was evaluated with on the platform -> the model served here
     gpt-4.1-mini: qwen2.5-72b-instruct
 
-auth:
-  mode: trusted_header          # a gateway in front of the package signs people in and passes who they are
-  header: X-Asker               # requests without it are refused (401) — never a default asker
+auth:                           # who is asking — one value, matched against access.yaml's identity.match_by
+  mode: trusted_header          # trusted_header | jwt | oidc | custom; anything unverified is a 401, never a default asker
+  header: X-Asker               # trusted_header: a gateway in front of the package signed the person in
+  # claim: email                # jwt/oidc: which claim of the token is the asker
+  # jwt:                        # a token your identity system signs (Authorization: Bearer ...)
+  #   key_secret: jwt_key       #   HS*: the shared key; RS*/ES*: the PEM public key — itself a required secret
+  #   algorithms: [HS256]
+  #   issuer: https://sso.company.internal
+  #   audience: agent-cong-no
+  # oidc:                       # an OpenID Connect issuer; keys found through discovery, rotations followed
+  #   issuer: https://sso.company.internal/realms/staff
+  #   audience: agent-cong-no
+  # custom:                     # your own file with exactly one function: resolve_principal(request) -> str | None
+  #   module: auth_adapter.py
 
 secrets:
   backend: env                  # env | file | vault

@@ -93,13 +93,58 @@ class EmbeddingConfig(BaseModel):
     model: str = Field(..., min_length=1)
 
 
+class JwtSettings(BaseModel):
+    """A bearer token the company's own identity system signs (DS-14)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: The secret holding the verifying key: the shared key for HS*, the PEM public key for RS*/ES*.
+    key_secret: str = Field(..., min_length=1)
+    algorithms: list[str] = Field(default_factory=lambda: ["HS256"], min_length=1)
+    issuer: str | None = None
+    audience: str | None = None
+    leeway_seconds: int = Field(default=30, ge=0, le=600)
+
+
+class OidcSettings(BaseModel):
+    """An OpenID Connect issuer: its signing keys found through discovery (or `jwks_url`), cached."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issuer: str = Field(..., min_length=1)
+    audience: str = Field(..., min_length=1)
+    jwks_url: str | None = None
+    algorithms: list[str] = Field(default_factory=lambda: ["RS256"], min_length=1)
+    leeway_seconds: int = Field(default=30, ge=0, le=600)
+
+
+class CustomAuthSettings(BaseModel):
+    """A file the company writes, with exactly one function: `resolve_principal(request) -> str | None`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    module: str = "auth_adapter.py"
+
+
 class AuthConfig(BaseModel):
-    """How an asker is identified. `trusted_header` here; `oidc`/`jwt`/`custom` are DS-14's."""
+    """How an asker is identified (DS-14). Whatever the mode, it yields one value — the `claim` — or a 401.
+
+    That value is what `access.yaml`'s `identity.match_by` is matched against
+    (DS-03), so a token that is valid but names somebody the employee view
+    does not hold is answered "không có quyền", never a 500 and never a
+    default asker.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["trusted_header", "oidc", "jwt", "custom"] = "trusted_header"
+    #: `trusted_header`: the header a gateway that already signed the person in passes their identity in.
     header: str = "X-Asker"
+    #: `jwt`/`oidc`: which claim of the token is the asker.
+    claim: str = "email"
+    jwt: JwtSettings | None = None
+    oidc: OidcSettings | None = None
+    custom: CustomAuthSettings | None = None
 
 
 class RuntimeConfig(BaseModel):
@@ -221,6 +266,8 @@ def required_secrets(config: RuntimeConfig) -> list[str]:
         names.append(config.llm.api_key_secret)
     if config.embedding is not None and config.embedding.api_key_secret:
         names.append(config.embedding.api_key_secret)
+    if config.auth.mode == "jwt" and config.auth.jwt is not None:
+        names.append(config.auth.jwt.key_secret)
     return list(dict.fromkeys(names))
 
 

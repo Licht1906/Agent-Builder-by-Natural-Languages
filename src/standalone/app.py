@@ -5,12 +5,10 @@ importable from here: the platform's routers are never imported at all, so
 the package cannot grow one by accident (`test_standalone_runtime` lists the
 routes).
 
-**Who is asking** comes from `runtime.yaml`'s `auth`. `trusted_header` — a
-gateway in front of the package that has already signed the person in and
-passes who they are in one header — is the mode served here; `oidc`, `jwt`
-and `custom` are DS-14's, and asking for one now refuses to start rather than
-quietly running everyone as nobody. A request that names nobody is a 401: it
-never falls back to a default asker.
+**Who is asking** comes from `runtime.yaml`'s `auth` — `trusted_header`,
+`jwt`, `oidc` or `custom`, all reduced to one value or a 401 by
+`src.standalone.auth` (DS-14). A request that names nobody never falls back
+to a default asker.
 
 **Approvals are decided by the person who asked** (ADR-0059 §7), so the
 approval routes only ever show and decide the caller's own pauses.
@@ -24,6 +22,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
@@ -37,7 +36,8 @@ from src.db.base import SessionLocal
 from src.db.models import RunApproval, RunApprovalStatus
 from src.services.llm import ChatModelFactory
 from src.services.tracing import NullTrace
-from src.standalone.config import LlmConfig, RuntimeConfigError
+from src.standalone.auth import build_authenticator
+from src.standalone.config import LlmConfig
 from src.standalone.package import Package, PackageIds, asker_user_id, database_ready, prepare_database, reader_for
 from src.workflow.approvals import (
     ApprovalDecisionError,
@@ -98,13 +98,16 @@ def openai_compatible_factory(llm: LlmConfig, api_key: str | None) -> ChatModelF
     return build
 
 
-def _asker(request: Request) -> str:
-    """Who is asking — from the trusted header `runtime.yaml` names, or a 401. Never a default."""
-    header = request.app.state.auth_header
-    value = (request.headers.get(header) or "").strip()
-    if not value:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Thiếu header {header}")
-    return value
+async def _asker(request: Request) -> str:
+    """Who is asking, by `runtime.yaml`'s `auth` — or a 401. Never a default asker (DS-14)."""
+    asker = await request.app.state.authenticate(request)
+    if asker is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Chưa xác thực được người hỏi",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return asker
 
 
 def _ids(request: Request) -> PackageIds:
@@ -115,15 +118,18 @@ Asker = Annotated[str, Depends(_asker)]
 Ids = Annotated[PackageIds, Depends(_ids)]
 
 
-def create_app(package: Package, *, model_factory: ChatModelFactory | None = None) -> FastAPI:
-    """The package as an ASGI app. `model_factory` is a test seam; left out, it is `runtime.yaml`'s LLM."""
-    if package.config.auth.mode != "trusted_header":
-        raise RuntimeConfigError(
-            f"auth.mode {package.config.auth.mode!r} chưa được hỗ trợ trong bản này — dùng 'trusted_header' (DS-14 thêm oidc, jwt, custom)"
-        )
+def create_app(
+    package: Package,
+    *,
+    model_factory: ChatModelFactory | None = None,
+    auth_transport: httpx.BaseTransport | None = None,
+) -> FastAPI:
+    """The package as an ASGI app. `model_factory` and `auth_transport` (an OIDC issuer) are test seams."""
+    authenticate = build_authenticator(
+        package.config.auth, secrets=package.secrets, base=package.base, transport=auth_transport
+    )
     llm_key = package.secrets.get(package.config.llm.api_key_secret or "")
     factory = model_factory or openai_compatible_factory(package.config.llm, llm_key)
-    header = package.config.auth.header
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -135,7 +141,7 @@ def create_app(package: Package, *, model_factory: ChatModelFactory | None = Non
         await close_checkpointer()
 
     app = FastAPI(title=f"{package.name} — gói agent", lifespan=lifespan)
-    app.state.auth_header = header
+    app.state.authenticate = authenticate
 
     @app.get("/health")
     def health() -> dict[str, Any]:

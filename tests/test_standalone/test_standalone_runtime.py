@@ -241,7 +241,7 @@ async def test_a_request_naming_nobody_is_a_401_never_a_default_asker(
         response = await client.post("/chat", json={"message": "xin chào"})
 
     assert response.status_code == 401
-    assert "X-Asker" in response.text
+    assert response.json()["detail"] == "Chưa xác thực được người hỏi"
 
 
 async def test_an_approval_is_shown_to_and_decided_by_the_asker_alone(
@@ -367,15 +367,16 @@ def test_a_workflow_reading_an_undeclared_database_does_not_start(
     assert SOURCE_ID in str(caught.value)
 
 
-def test_an_auth_mode_this_build_does_not_serve_refuses_to_start(
+def test_an_auth_mode_named_without_its_settings_refuses_to_start(
     package_dir: Callable[..., Path], secrets_env: None
 ) -> None:
+    """`mode: jwt` with no `auth.jwt` block is a package nobody could sign in to — refused, by name (DS-14)."""
     package = _loaded(package_dir(auth={"mode": "jwt"}))
 
     with pytest.raises(RuntimeConfigError) as caught:
         create_app(package)
 
-    assert "jwt" in str(caught.value)
+    assert "auth.jwt" in str(caught.value)
 
 
 def test_the_llm_is_the_companys_endpoint_mapped_from_the_models_the_bundle_names() -> None:

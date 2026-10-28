@@ -87,6 +87,8 @@ class Package:
     secrets: Mapping[str, str]
     trusted_hosts: frozenset[str]
     warnings: list[str] = field(default_factory=list)
+    #: The directory `runtime.yaml` is in — what its relative paths (`auth.custom.module`) are relative to.
+    base: Path = Path(".")
 
 
 class ResolvedSecrets:
@@ -179,6 +181,7 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
         secrets=dict(secrets),
         trusted_hosts=trusted,
         warnings=warnings,
+        base=base,
     )
 
 
