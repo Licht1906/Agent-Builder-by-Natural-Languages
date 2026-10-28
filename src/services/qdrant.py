@@ -53,6 +53,7 @@ class PointPayload(TypedDict):
     chunk_text: str
     chunk_index: int
 
+
 #: Matches `bge-m3` (ADR-0044 §2) — verified 1024-dim against `/api/embed`.
 DENSE_VECTOR_NAME = "dense"
 DENSE_VECTOR_SIZE = 1024
@@ -70,18 +71,24 @@ def get_qdrant_client() -> QdrantClient:
     return QdrantClient(url=get_settings().qdrant_url)
 
 
-def ensure_collection(client: QdrantClient) -> None:
+def ensure_collection(
+    client: QdrantClient, *, collection: str = COLLECTION_NAME, dense_size: int = DENSE_VECTOR_SIZE
+) -> None:
     """Create `documents_kb` if absent. Safe to call on every startup.
 
     Never drops or recreates an existing collection — an idempotent init must
     not be the thing that deletes a Knowledge Base's data on the second run.
+
+    `collection` and `dense_size` are the exported package's (DS-18): its own
+    collection, as wide as the company's embedding model makes vectors. The
+    shape — named dense + sparse, the payload indexes — is this one.
     """
-    if not client.collection_exists(COLLECTION_NAME):
+    if not client.collection_exists(collection):
         client.create_collection(
-            collection_name=COLLECTION_NAME,
+            collection_name=collection,
             vectors_config={
                 DENSE_VECTOR_NAME: models.VectorParams(
-                    size=DENSE_VECTOR_SIZE,
+                    size=dense_size,
                     distance=models.Distance.COSINE,
                     quantization_config=models.ScalarQuantization(
                         scalar=models.ScalarQuantizationConfig(
@@ -103,7 +110,7 @@ def ensure_collection(client: QdrantClient) -> None:
     # script still ends up with the indexes it should have.
     for field_name in PAYLOAD_INDEX_FIELDS:
         client.create_payload_index(
-            collection_name=COLLECTION_NAME,
+            collection_name=collection,
             field_name=field_name,
             field_schema=models.PayloadSchemaType.KEYWORD,
         )
@@ -158,11 +165,13 @@ def delete_knowledge_base_points(client: QdrantClient, kb_id: str) -> None:
     )
 
 
-def upsert_passages(client: QdrantClient, points: Sequence[models.PointStruct]) -> None:
-    """Write `points` into `documents_kb`. The caller decides ids, vectors and payload."""
+def upsert_passages(
+    client: QdrantClient, points: Sequence[models.PointStruct], *, collection: str = COLLECTION_NAME
+) -> None:
+    """Write `points` into `documents_kb` (or the package's own collection). The caller decides ids, vectors and payload."""
     if not points:
         return
-    client.upsert(COLLECTION_NAME, points=list(points))
+    client.upsert(collection, points=list(points))
 
 
 #: What counts as a word for the sparse vector — the same definition

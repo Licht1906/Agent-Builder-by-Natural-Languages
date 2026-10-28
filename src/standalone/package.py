@@ -48,11 +48,12 @@ from src.db.models import (
     UserRole,
     VersionStatus,
 )
-from src.models.node_registry import DataQueryConfig, NodeType
+from src.models.node_registry import DataQueryConfig, KnowledgeSearchConfig, NodeType
 from src.models.solution_spec import AgentSolutionSpecification
 from src.models.workflow import WorkflowJSON
 from src.services.secret_store import SecretNotFoundError
 from src.standalone.config import RuntimeConfig, RuntimeConfigError
+from src.standalone.documents import missing_shelves
 from src.workflow.runtime import ensure_runnable, mcp_action_names, wire_name
 from src.workflow.tools import GMAIL
 
@@ -118,6 +119,8 @@ class Package:
     warnings: list[str] = field(default_factory=list)
     #: The directory `runtime.yaml` is in — what its relative paths (`auth.custom.module`) are relative to.
     base: Path = Path(".")
+    #: The Knowledge Base ids the workflow's `knowledge_search` nodes search — folders under `documents/` (DS-18).
+    shelves: tuple[str, ...] = ()
 
 
 class ResolvedSecrets:
@@ -173,6 +176,9 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
             f"Workflow gửi mail ({MAIL_SEND}) nhưng runtime.yaml chưa có mail — khai mail.mode: smtp | gmail_oauth | custom"
         )
     unreachable = [name for name in actions if name != MAIL_SEND]
+    shelves = _searched_shelves(workflow)
+    if shelves:
+        _check_documents(config, shelves, base)
     sources: dict[str, DatabaseSource] = {}
     problems: list[str] = []
     warnings: list[str] = []
@@ -207,10 +213,6 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
             "DB thật thiếu thứ agent dùng — sửa DB hoặc access.yaml rồi khởi động lại:\n"
             + "\n".join(f"- {problem}" for problem in problems)
         )
-    if any(node.type is NodeType.KNOWLEDGE_SEARCH for node in workflow.nodes):
-        warnings.append(
-            "Workflow có node knowledge_search — gói chưa mang tài liệu theo (DS-18), node đó sẽ không tìm thấy gì"
-        )
     if config.auth.mode == "oidc" and config.auth.oidc is not None and not config.auth.oidc.client_id:
         warnings.append(
             "auth.oidc chưa có client_id — trang chat của gói không đăng nhập được, chỉ API /chat dùng được"
@@ -229,7 +231,31 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
         trusted_hosts=trusted,
         warnings=warnings,
         base=base,
+        shelves=tuple(shelves),
     )
+
+
+def _searched_shelves(workflow: WorkflowJSON) -> list[str]:
+    """The Knowledge Base ids every `knowledge_search` node searches, sorted."""
+    return sorted(
+        {
+            str(ref)
+            for node in workflow.nodes_of_type(NodeType.KNOWLEDGE_SEARCH)
+            for ref in KnowledgeSearchConfig.model_validate(node.config).source_ids
+        }
+    )
+
+
+def _check_documents(config: RuntimeConfig, shelves: Sequence[str], base: Path) -> None:
+    """A workflow that searches documents needs them, an embedding endpoint and a Qdrant — all named at once."""
+    root = _path(config.documents, base)
+    problems = [f"thiếu thư mục {root / shelf} (kho tài liệu {shelf})" for shelf in missing_shelves(root, shelves)]
+    if config.embedding is None:
+        problems.append("runtime.yaml thiếu embedding (base_url, model)")
+    if config.qdrant is None:
+        problems.append("runtime.yaml thiếu qdrant (url)")
+    if problems:
+        raise RuntimeConfigError("Workflow tìm trong tài liệu nhưng: " + "; ".join(problems))
 
 
 def check_schema(

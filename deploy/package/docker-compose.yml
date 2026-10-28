@@ -1,0 +1,62 @@
+# The exported package, run inside the company (DS-13 … DS-18). The export (DS-19) puts this file in its zip
+# beside bundle.json, runtime.yaml, access.yaml and documents/.
+#
+#   .env: every secret runtime.yaml names (AGENT_SECRET_<NAME>) and AGENT_DB_PASSWORD
+#   docker compose up -d                       # runtime + its Postgres + its Qdrant
+#   docker compose --profile reranker up -d    # … and the reranker (then reranker.enabled: true in runtime.yaml)
+#
+# runtime.yaml points at these services by name: qdrant.url http://qdrant:6333, reranker.url http://reranker:8001,
+# and the package's own database is the `runtime_db` secret, e.g.
+#   AGENT_SECRET_RUNTIME_DB=postgresql://agent:<password>@postgres:5432/agent
+# The company's ERP, LLM, embedding endpoint, SSO and mail relay are its own — never part of this file.
+
+services:
+  runtime:
+    image: ${AGENT_RUNTIME_IMAGE:-agent-runtime:latest}
+    ports:
+      - "${AGENT_PORT:-8080}:8080"
+    volumes:
+      - ./:/etc/agent:ro            # bundle.json, runtime.yaml, access.yaml, documents/ — read only
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:                         # the package's OWN database: checkpoints, approvals, audit chain
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_DB: agent
+      POSTGRES_PASSWORD: ${AGENT_DB_PASSWORD:?set AGENT_DB_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:                           # the package's documents, indexed at the first start (DS-18)
+    image: qdrant/qdrant:v1.12.4
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", ":> /dev/tcp/127.0.0.1/6333"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  reranker:                         # optional: the platform's rerank service image (CPU unless given a GPU)
+    image: ${AGENT_RERANKER_IMAGE:-agent-reranker:latest}
+    profiles: ["reranker"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data:

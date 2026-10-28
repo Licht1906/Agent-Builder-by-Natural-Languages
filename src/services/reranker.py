@@ -63,31 +63,39 @@ def _parsed_ranking(body: object, document_count: int) -> tuple[list[int], list[
 
 
 def _rerank(query: str, documents: Sequence[str]) -> RerankResult:
-    if not documents:
-        return RerankResult(ranked_indices=[], scores=[], reranked=True)
-
     settings = get_settings()
-    try:
-        response = httpx.post(
-            f"{settings.reranker_url}/rerank",
-            json={"query": query, "documents": list(documents)},
-            timeout=settings.reranker_timeout_seconds,
-        )
-        response.raise_for_status()
-        ranked_indices, scores = _parsed_ranking(response.json(), len(documents))
-        return RerankResult(ranked_indices=ranked_indices, scores=scores, reranked=True)
-    except (httpx.TransportError, httpx.HTTPStatusError, ValueError, TypeError, KeyError) as exc:
-        # ValueError covers a non-JSON 200 body and everything
-        # `_parsed_ranking` rejects; KeyError a body missing
-        # ranked_indices/scores; TypeError a body whose fields are the wrong
-        # type to sort or measure. A misbehaving reranker is the same "must
-        # not 500" case as a dead one, not just a connection drop.
-        logger.warning("Reranker unusable (%s) — falling back to unranked order", exc)
-        return RerankResult(
-            ranked_indices=list(range(len(documents))),
-            scores=None,
-            reranked=False,
-        )
+    return rerank_at(settings.reranker_url, timeout=settings.reranker_timeout_seconds)(query, documents)
+
+
+def rerank_at(url: str, *, timeout: float, transport: httpx.BaseTransport | None = None) -> RerankerClient:
+    """A `RerankerClient` for the rerank service at `url` — the platform's, or an exported package's own (DS-18).
+
+    `transport` is a test seam. Same never-raise contract as the module says.
+    """
+
+    def rerank(query: str, documents: Sequence[str]) -> RerankResult:
+        if not documents:
+            return RerankResult(ranked_indices=[], scores=[], reranked=True)
+        try:
+            with httpx.Client(timeout=timeout, transport=transport) as client:
+                response = client.post(f"{url.rstrip('/')}/rerank", json={"query": query, "documents": list(documents)})
+            response.raise_for_status()
+            ranked_indices, scores = _parsed_ranking(response.json(), len(documents))
+            return RerankResult(ranked_indices=ranked_indices, scores=scores, reranked=True)
+        except (httpx.TransportError, httpx.HTTPStatusError, ValueError, TypeError, KeyError) as exc:
+            # ValueError covers a non-JSON 200 body and everything
+            # `_parsed_ranking` rejects; KeyError a body missing
+            # ranked_indices/scores; TypeError a body whose fields are the wrong
+            # type to sort or measure. A misbehaving reranker is the same "must
+            # not 500" case as a dead one, not just a connection drop.
+            logger.warning("Reranker unusable (%s) — falling back to unranked order", exc)
+            return RerankResult(
+                ranked_indices=list(range(len(documents))),
+                scores=None,
+                reranked=False,
+            )
+
+    return rerank
 
 
 def get_reranker_client() -> RerankerClient:

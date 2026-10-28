@@ -24,7 +24,7 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
@@ -47,6 +47,7 @@ from src.services.llm import ChatModelFactory
 from src.services.tracing import NullTrace
 from src.standalone.auth import build_authenticator
 from src.standalone.config import LlmConfig
+from src.standalone.documents import NoDocuments
 from src.standalone.mail import build_mail_sender, mail_invoker
 from src.standalone.package import Package, PackageIds, asker_user_id, database_ready, prepare_database, reader_for
 from src.workflow.approvals import (
@@ -56,7 +57,7 @@ from src.workflow.approvals import (
     decide_approval,
     parked_leg,
 )
-from src.workflow.knowledge import DEFAULT_PASSAGE_LIMIT, Passage
+from src.workflow.knowledge import KnowledgeStore
 from src.workflow.runtime import Resumption, stream_workflow_reply
 from src.workflow.tools import GMAIL, ToolInvoker
 
@@ -78,15 +79,6 @@ class DecisionRequest(BaseModel):
 
     approved: bool
     reason: str | None = Field(default=None, max_length=2000)
-
-
-class _NoDocuments:
-    """The package's `KnowledgeStore` until documents travel with it (DS-18): nothing to find."""
-
-    def search(
-        self, query: str, *, source_refs: Sequence[str], limit: int = DEFAULT_PASSAGE_LIMIT
-    ) -> tuple[Passage, ...]:
-        return ()
 
 
 def openai_compatible_factory(llm: LlmConfig, api_key: str | None) -> ChatModelFactory:
@@ -136,17 +128,20 @@ def create_app(
     auth_transport: httpx.BaseTransport | None = None,
     mail_transport: httpx.BaseTransport | None = None,
     ui_dir: Path | None = None,
+    knowledge: KnowledgeStore | None = None,
 ) -> FastAPI:
     """The package as an ASGI app.
 
     `model_factory`, `auth_transport` (an OIDC issuer) and `mail_transport`
     (Google, for `gmail_oauth`) are test seams; `ui_dir` is the chat page's
-    build (`default_ui_dir` otherwise).
+    build (`default_ui_dir` otherwise); `knowledge` is what `knowledge_search`
+    nodes search — `prepare_knowledge`'s store (DS-18), nothing to find otherwise.
     """
     authenticate = build_authenticator(
         package.config.auth, secrets=package.secrets, base=package.base, transport=auth_transport
     )
     # The bundle's `gmail.send_email` leaves through the company's channel (DS-16); the approval in front stays.
+    documents = knowledge if knowledge is not None else NoDocuments()
     invokers: dict[str, ToolInvoker] = {
         GMAIL: mail_invoker(
             build_mail_sender(package.config.mail, secrets=package.secrets, base=package.base, transport=mail_transport)
@@ -183,7 +178,7 @@ def create_app(
             caller=_caller(who),
         )
         identity = RunIdentity.for_run(thread, ids.version_id)
-        return _stream(package, factory, invokers, identity, payload.message, asker=who)
+        return _stream(package, factory, invokers, documents, identity, payload.message, asker=who)
 
     @app.get("/approvals")
     def my_pending_approvals(who: Asker, ids: Ids) -> list[dict[str, Any]]:
@@ -230,7 +225,14 @@ def create_app(
             carried_usage=leg.carried_usage,
         )
         return _stream(
-            package, factory, invokers, leg.identity, leg.input_message, asker=leg.run_as or who, resume=resumption
+            package,
+            factory,
+            invokers,
+            documents,
+            leg.identity,
+            leg.input_message,
+            asker=leg.run_as or who,
+            resume=resumption,
         )
 
     return app
@@ -309,6 +311,7 @@ def _stream(
     package: Package,
     factory: ChatModelFactory,
     invokers: Mapping[str, ToolInvoker],
+    knowledge: KnowledgeStore,
     identity: RunIdentity,
     message: str,
     *,
@@ -331,7 +334,7 @@ def _stream(
                 message,
                 services=RunServices(model_factory=factory, trace=NullTrace()),
                 conversation=conversation,
-                knowledge=_NoDocuments(),
+                knowledge=knowledge,
                 databases=reader_for(package, asker),
                 sandbox=False,
                 identity=identity,

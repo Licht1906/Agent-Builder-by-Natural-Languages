@@ -86,11 +86,38 @@ class LlmConfig(BaseModel):
 
 
 class EmbeddingConfig(BaseModel):
+    """An OpenAI-compatible `/embeddings` endpoint — what the package's documents are indexed with (DS-18).
+
+    Like `llm`, data stays in the company only when this points inside it: every passage is sent here.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     base_url: str = Field(..., min_length=1)
     api_key_secret: str | None = None
     model: str = Field(..., min_length=1)
+    #: Passages per request.
+    batch_size: int = Field(default=32, ge=1, le=512)
+    timeout_seconds: float = Field(default=60, gt=0, le=600)
+
+
+class QdrantConfig(BaseModel):
+    """The package's own Qdrant, which holds nothing but this package's documents."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(..., min_length=1)
+    collection: str = Field(default="agent_documents", min_length=1)
+
+
+class RerankerConfig(BaseModel):
+    """The rerank service (the platform's `reranker` image). Off unless switched on: search then keeps the fused order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    url: str = "http://reranker:8001"
+    timeout_seconds: float = Field(default=30, gt=0, le=300)
 
 
 class JwtSettings(BaseModel):
@@ -212,6 +239,10 @@ class RuntimeConfig(BaseModel):
     data_sources: list[DataSourceConfig] = Field(default_factory=list)
     llm: LlmConfig
     embedding: EmbeddingConfig | None = None
+    #: Where the bundle's documents are: `<documents>/<knowledge base id>/<file>` (DS-18).
+    documents: str = "documents"
+    qdrant: QdrantConfig | None = None
+    reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     auth: AuthConfig = Field(default_factory=AuthConfig)
     #: Required once the bundle can send mail; absent, a send is refused by name.
     mail: MailConfig | None = None

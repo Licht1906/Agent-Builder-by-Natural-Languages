@@ -271,36 +271,13 @@ class QdrantKnowledgeStore:
 
     def _fused_candidates(self, query: str, kb_ids: list[str], dense_vector: list[float]) -> list[models.ScoredPoint]:
         """Dense top-k and sparse top-k over `kb_ids`, RRF-fused into one candidate list — ADR-0044 §3."""
-        settings = get_settings()
         source_filter = models.Filter(
             must=[
                 models.FieldCondition(key="kb_id", match=models.MatchAny(any=kb_ids)),
                 models.FieldCondition(key="owner_id", match=models.MatchValue(value=str(self.owner_id))),
             ]
         )
-        sparse_vector = sparse_vector_of(query)
-
-        return self.qdrant_client.query_points(
-            COLLECTION_NAME,
-            prefetch=[
-                models.Prefetch(
-                    query=dense_vector,
-                    using=DENSE_VECTOR_NAME,
-                    filter=source_filter,
-                    limit=settings.knowledge_dense_top_k,
-                ),
-                models.Prefetch(
-                    query=sparse_vector,
-                    using=SPARSE_VECTOR_NAME,
-                    filter=source_filter,
-                    limit=settings.knowledge_sparse_top_k,
-                ),
-            ],
-            query=models.FusionQuery(fusion=models.Fusion.RRF),
-            query_filter=source_filter,
-            limit=max(settings.knowledge_dense_top_k, settings.knowledge_sparse_top_k),
-            with_payload=True,
-        ).points
+        return fused_points(self.qdrant_client, COLLECTION_NAME, query, dense_vector, source_filter)
 
     def _byodb_candidates(self, dense_vector: list[float], kbs: Sequence[KnowledgeBase]) -> list[_Candidate]:
         """`kbs` (every one `byodb`), searched dense-only through its own `ExternalConnection` — RAG-21.
@@ -316,9 +293,13 @@ class QdrantKnowledgeStore:
         settings = get_settings()
         candidates: list[_Candidate] = []
         for kb in kbs:
-            connection = self.db.get(ExternalConnection, kb.external_connection_id) if kb.external_connection_id else None
+            connection = (
+                self.db.get(ExternalConnection, kb.external_connection_id) if kb.external_connection_id else None
+            )
             if connection is None:
-                raise KnowledgeSourceError(f"Knowledge Base {kb.name!r} ở chế độ byodb nhưng chưa gắn kết nối ngoài nào")
+                raise KnowledgeSourceError(
+                    f"Knowledge Base {kb.name!r} ở chế độ byodb nhưng chưa gắn kết nối ngoài nào"
+                )
             secret = self._resolve_secret(connection)
             adapter = adapter_for_connection(connection, secret=secret, http_post=self.http_post)
             try:
@@ -371,14 +352,7 @@ class QdrantKnowledgeStore:
         serving, and it is the worst one to quietly hand eight slots of the same
         Điều to.
         """
-        rerank_result = self.reranker_client(query, [candidate.text for candidate in candidates])
-        if not rerank_result.reranked or rerank_result.scores is None:
-            logger.warning("Reranker unavailable for a knowledge search — returning fused order, unthresholded")
-            ordered = [candidates[i] for i in rerank_result.ranked_indices]
-        else:
-            threshold = get_settings().knowledge_rerank_score_threshold
-            ordered = [candidates[i] for i in rerank_result.ranked_indices if rerank_result.scores[i] > threshold]
-        return tuple(_passage_of(candidate) for candidate in _spread_across_sections(ordered, limit=limit))
+        return ranked_passages(query, candidates, limit=limit, reranker_client=self.reranker_client)
 
     def _owned_kbs(self, source_refs: Sequence[str]) -> list[KnowledgeBase]:
         """Every ref in `source_refs`, checked real and owned by `self.owner_id` — or a `KnowledgeSourceError` naming what is not.
@@ -405,9 +379,7 @@ class QdrantKnowledgeStore:
         owned = {
             kb.id: kb
             for kb in self.db.execute(
-                select(KnowledgeBase).where(
-                    KnowledgeBase.id.in_(wanted), KnowledgeBase.owner_id == self.owner_id
-                )
+                select(KnowledgeBase).where(KnowledgeBase.id.in_(wanted), KnowledgeBase.owner_id == self.owner_id)
             ).scalars()
         }
         missing = sorted(wanted - owned.keys())
@@ -416,6 +388,66 @@ class QdrantKnowledgeStore:
                 f"Không tìm thấy Knowledge Base cho nguồn dữ liệu: {', '.join(str(kb_id) for kb_id in missing)}"
             )
         return list(owned.values())
+
+
+def fused_points(
+    client: QdrantClient, collection: str, query: str, dense_vector: list[float], source_filter: models.Filter
+) -> list[models.ScoredPoint]:
+    """Dense top-k and sparse top-k under `source_filter`, RRF-fused by Qdrant — ADR-0044 §3.
+
+    A function rather than a method so the exported package (DS-18) ranks its
+    own collection exactly as the platform ranks `documents_kb`.
+    """
+    settings = get_settings()
+    return client.query_points(
+        collection,
+        prefetch=[
+            models.Prefetch(
+                query=dense_vector, using=DENSE_VECTOR_NAME, filter=source_filter, limit=settings.knowledge_dense_top_k
+            ),
+            models.Prefetch(
+                query=sparse_vector_of(query),
+                using=SPARSE_VECTOR_NAME,
+                filter=source_filter,
+                limit=settings.knowledge_sparse_top_k,
+            ),
+        ],
+        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        query_filter=source_filter,
+        limit=max(settings.knowledge_dense_top_k, settings.knowledge_sparse_top_k),
+        with_payload=True,
+    ).points
+
+
+def passages_of_points(
+    query: str, points: Sequence[models.ScoredPoint], *, limit: int, reranker_client: RerankerClient | None
+) -> tuple[Passage, ...]:
+    """Managed-mode hits as the answer: reranked (or not), thresholded, spread across sections."""
+    candidates = [_candidate_of_point(point) for point in points]
+    return ranked_passages(query, candidates, limit=limit, reranker_client=reranker_client) if candidates else ()
+
+
+def ranked_passages(
+    query: str, candidates: Sequence[_Candidate], *, limit: int, reranker_client: RerankerClient | None
+) -> tuple[Passage, ...]:
+    """`candidates`, reordered and thresholded by the reranker — or in fused order without one.
+
+    `reranker_client=None` is a reranker switched off on purpose (the exported
+    package's `reranker.enabled: false`): the fused order, no threshold, and no
+    warning, since nothing is down. A reranker that *is* configured but
+    answers unusably degrades the same way, with the warning.
+    """
+    if reranker_client is None:
+        ordered = list(candidates)
+    else:
+        rerank_result = reranker_client(query, [candidate.text for candidate in candidates])
+        if not rerank_result.reranked or rerank_result.scores is None:
+            logger.warning("Reranker unavailable for a knowledge search — returning fused order, unthresholded")
+            ordered = [candidates[i] for i in rerank_result.ranked_indices]
+        else:
+            threshold = get_settings().knowledge_rerank_score_threshold
+            ordered = [candidates[i] for i in rerank_result.ranked_indices if rerank_result.scores[i] > threshold]
+    return tuple(_passage_of(candidate) for candidate in _spread_across_sections(ordered, limit=limit))
 
 
 def _spread_across_sections(candidates: Sequence[_Candidate], *, limit: int) -> list[_Candidate]:
@@ -564,6 +596,9 @@ def get_knowledge_store(
 
 __all__ = [
     "DEFAULT_PASSAGE_LIMIT",
+    "fused_points",
+    "passages_of_points",
+    "ranked_passages",
     "KnowledgeSourceError",
     "KnowledgeStore",
     "Passage",

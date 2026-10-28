@@ -42,14 +42,21 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
 
     from src.standalone.app import create_app
+    from src.standalone.documents import prepare_knowledge
     from src.standalone.package import load_package
 
     try:
         package = load_package(config, secrets, base=config_path.parent)
-        app = create_app(package)
+        # Before the port opens: an answer must never cite a shelf still half-indexed (DS-18).
+        knowledge, report = prepare_knowledge(config, package.shelves, secrets, base=config_path.parent)
+        app = create_app(package, knowledge=knowledge)
     except RuntimeConfigError as exc:
         print(f"Gói không khởi động: {exc}", file=sys.stderr)
         return 2
+    if package.shelves:
+        print(f"Tài liệu: {len(report.indexed)} file vừa index, {len(report.kept)} file đã có sẵn", file=sys.stderr)
+        for label, reason in report.failed.items():
+            print(f"Không index được {label}: {reason}", file=sys.stderr)
     # The loop the async Postgres driver talks to — see `src.server_loop`.
     uvicorn.run(app, host=args.host, port=args.port, loop="src.server_loop:new_event_loop")
     return 0

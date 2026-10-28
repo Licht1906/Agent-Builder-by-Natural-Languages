@@ -26,6 +26,22 @@ llm:                            # any OpenAI-compatible endpoint
   models:                       # the model a node was evaluated with on the platform -> the model served here
     gpt-4.1-mini: qwen2.5-72b-instruct
 
+# Documents (DS-18) — needed when the agent searches documents (knowledge_search). The bundle carries the original
+# files in documents/<knowledge base id>/ and the platform's extraction of each in documents/.extraction/.
+# On start-up every file not yet indexed (by content hash and embedding model) is indexed; a second start indexes
+# nothing again. Every passage is sent to embedding.base_url — point it inside the company, like llm.base_url.
+documents: documents
+embedding:                      # any OpenAI-compatible /embeddings endpoint (vLLM, TEI, Ollama, LiteLLM…)
+  base_url: http://llm.internal/v1
+  api_key_secret: llm_key
+  model: bge-m3                 # changing the model re-indexes everything on the next start
+qdrant:                         # the package's own Qdrant; holds nothing but this package's documents
+  url: http://qdrant:6333
+  collection: agent_documents
+reranker:                       # the platform's rerank service image; off by default — search keeps the fused order
+  enabled: false
+  url: http://reranker:8001
+
 auth:                           # who is asking — one value, matched against access.yaml's identity.match_by
   mode: trusted_header          # trusted_header | jwt | oidc | custom; anything unverified is a 401, never a default asker
   header: X-Asker               # trusted_header: a gateway in front of the package signed the person in
