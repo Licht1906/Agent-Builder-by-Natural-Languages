@@ -483,6 +483,10 @@ export const evaluation = {
     upload(`/agents/${agentId}/eval-suite/import?dry_run=${dryRun ? "true" : "false"}`, file),
   exportSuite: (agentId, format) => requestText(`/agents/${agentId}/eval-suite/export?format=${format}`),
   template: (agentId) => requestText(`/agents/${agentId}/eval-suite/template.csv`),
+  /** DS-22: the sample suite the agent's template ships, if any — `{available, name, case_count}`. */
+  sample: (agentId) => request(`/agents/${agentId}/eval-suite/sample`),
+  /** Load it through the ordinary importer — the same row report as an upload. */
+  loadSample: (agentId) => request(`/agents/${agentId}/eval-suite/sample`, { method: "POST" }),
 };
 
 export const approvals = {

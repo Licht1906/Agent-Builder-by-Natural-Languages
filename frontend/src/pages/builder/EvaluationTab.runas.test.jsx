@@ -13,6 +13,7 @@ vi.mock("../../lib/api", async () => {
     evaluation: {
       generate: vi.fn(), cases: vi.fn(), run: vi.fn(), latest: vi.fn(), updateCase: vi.fn(),
       removeCase: vi.fn(), importSuite: vi.fn(), exportSuite: vi.fn(), template: vi.fn(),
+      sample: vi.fn().mockResolvedValue({ available: false, name: null, case_count: 0 }), loadSample: vi.fn(),
     },
   };
 });

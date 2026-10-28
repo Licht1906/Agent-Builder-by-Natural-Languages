@@ -3,10 +3,13 @@
 ADR-0054 §6 (EVAL-7 / #157): các file trong thư mục này là **seed** để CI và
 bản air-gap dựng lại database — không còn là nơi người tạo sửa bộ đề.
 
-- `uc1_ar_v3.jsonl` — golden set của agent UC-1. Pipeline UC-1 và script nạp
-  riêng của nó đã gỡ (DS-21); file ở lại như một bộ đề thật để kiểm importer
-  chung (`tests/test_api/test_eval_suite_import.py`) và làm nguồn khi dựng bộ
-  đề cho agent công nợ trên V2.
+- `cong_no_v1.jsonl` — bộ đề mẫu của template công nợ (`database_qa`,
+  `database_outreach`; DS-22): golden set UC-1 cũ (`uc1_ar_v3.jsonl`, đã gỡ)
+  chuyển sang schema suite V2. Mỗi case có `run_as` là một nhân viên demo
+  (`src/evals/sample_suites.py: DEMO_ASKERS` — DS-23 seed các email này), kỳ
+  vọng nêu tính chất chứ không nêu con số; `source_case` giữ id UC-1 gốc. Nạp
+  bằng nút "Nạp bộ đề mẫu" ở tab Evaluation (`POST /agents/{id}/eval-suite/sample`);
+  sau khi nạp, sửa qua UI/API suite của agent, không sửa file này bằng PR.
 - `meta_agent_v1.jsonl` — cùng schema nạp được bằng importer chung
   (`POST /agents/{agent_id}/eval-suite/import`), chưa có script nạp riêng.
 - `meta_agent_data_source_v1.jsonl` — DS-11: các case "nhu cầu đọc dữ liệu

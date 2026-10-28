@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ListChecks, CheckCircle2, XCircle, Wand2, ShieldAlert, Trash2, Upload, Download,
-  AlertTriangle, X, ChevronDown, Filter, Ruler, Gavel, Unplug,
+  AlertTriangle, X, ChevronDown, Filter, Ruler, Gavel, Unplug, BookOpenCheck,
 } from "lucide-react";
 import * as api from "../../lib/api";
 import { ErrorNote, Note, PageShell, Section, Spinner } from "../../components/ui";
@@ -71,6 +71,7 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
   const [selected, setSelected] = useState(() => new Set());
   const [uploading, setUploading] = useState(false);
   const [runMenu, setRunMenu] = useState(false);
+  const [sample, setSample] = useState(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -87,6 +88,28 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
   }, [agentId, versionId]);
 
   useEffect(() => { load(); }, [load]);
+
+  /* The template's own sample suite (DS-22) — offered only when it ships one. */
+  useEffect(() => {
+    let live = true;
+    api.evaluation.sample(agentId).then((found) => live && setSample(found)).catch(() => live && setSample(null));
+    return () => { live = false; };
+  }, [agentId, versionId]);
+
+  async function loadSample() {
+    setBusy("sample");
+    setError("");
+    try {
+      const report = await api.evaluation.loadSample(agentId);
+      await load();
+      notify(t("{n} case(s) imported, {s} skipped, {e} error(s)", { n: report.added_count, s: report.skipped_count, e: report.error_count }));
+    } catch (err) {
+      setError(err.message);
+      notify(err.message, "error");
+    } finally {
+      setBusy("");
+    }
+  }
 
   /** Who a case asks as (DS-05) — blank clears it, "nobody asking". */
   async function saveRunAs(testCase, runAs) {
@@ -317,6 +340,17 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
               <button className="btn btn-secondary" onClick={() => setUploading(true)} disabled={!!busy} style={{ height: 38 }}>
                 <Upload size={13} />{t("Upload cases")}
               </button>
+              {sample?.available && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={loadSample}
+                  disabled={!!busy}
+                  style={{ height: 38 }}
+                  title={t("{name} — {n} cases, each asked by a demo employee", { name: sample.name, n: sample.case_count })}
+                >
+                  {busy === "sample" ? <Spinner size={13} /> : <BookOpenCheck size={13} />}{t("Load sample suite")}
+                </button>
+              )}
               <div style={{ position: "relative", marginLeft: "auto" }}>
                 <button className="btn btn-primary" onClick={() => setRunMenu((v) => !v)} disabled={!!busy || cases.length === 0} style={{ height: 38 }}>
                   {busy === "run" ? <Spinner size={13} /> : <ListChecks size={13} />}{t("Run evaluation")}<ChevronDown size={12} />

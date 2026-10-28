@@ -301,7 +301,7 @@ def import_suite(db: Session, agent: Agent, *, content: bytes, filename: str, dr
         result = _validate_row(row, existing_keys=existing_keys, workflow=workflow, category_by_criterion=category_by_criterion)
         results.append(result)
         if result.status == "added" and result.case is not None:
-            existing_keys.add((result.case.input_message, result.case.criterion))
+            existing_keys.add(_key_of(result.case.input_message, result.case.criterion, result.case.run_as))
             to_write.append(result.case)
 
     if not dry_run and to_write:
@@ -316,9 +316,22 @@ def import_suite(db: Session, agent: Agent, *, content: bytes, filename: str, dr
     return ImportReport(rows=results, dry_run=dry_run)
 
 
-def _existing_keys(db: Session, suite_id: int) -> set[tuple[str, str]]:
-    rows = db.execute(select(EvalCase.input_message, EvalCase.criterion).where(EvalCase.suite_id == suite_id))
-    return {(input_message, criterion) for input_message, criterion in rows}
+def _key_of(input_message: str, criterion: str, run_as: str | None) -> tuple[str, str, str]:
+    """A row's identity in its suite: ADR-0054 §2's `(input, criterion)`, plus who asks it.
+
+    `run_as` joined the key with DS-22: since DS-05 a case is a question *somebody*
+    asks, and the same question from a rep and from their lead is two cases — the
+    very pair a cross-scope check is made of. Rows that name nobody keep their
+    old identity (`""`).
+    """
+    return (input_message, criterion, run_as or "")
+
+
+def _existing_keys(db: Session, suite_id: int) -> set[tuple[str, str, str]]:
+    rows = db.execute(
+        select(EvalCase.input_message, EvalCase.criterion, EvalCase.run_as).where(EvalCase.suite_id == suite_id)
+    )
+    return {_key_of(input_message, criterion, run_as) for input_message, criterion, run_as in rows}
 
 
 def _latest_version(db: Session, agent: Agent) -> AgentVersion | None:
@@ -350,7 +363,7 @@ def _category_by_criterion(version: AgentVersion | None) -> dict[str, SuccessCri
 def _validate_row(
     row: ImportedRow,
     *,
-    existing_keys: set[tuple[str, str]],
+    existing_keys: set[tuple[str, str, str]],
     workflow: WorkflowJSON | None,
     category_by_criterion: dict[str, SuccessCriterionCategory],
 ) -> RowResult:
@@ -370,9 +383,9 @@ def _validate_row(
         except (json.JSONDecodeError, ValidationError, TypeError) as exc:
             return RowResult(row=row.row_number, status="error", reason=f"'expected_check' không đọc được: {exc}")
 
-    key = (row.input, criterion)
+    key = _key_of(row.input, criterion, row.run_as)
     if key in existing_keys:
-        return RowResult(row=row.row_number, status="skipped", reason="Đã có case trùng (input, criterion)")
+        return RowResult(row=row.row_number, status="skipped", reason="Đã có case trùng (input, criterion, run_as)")
 
     category = _resolve_category(row.category, criterion, category_by_criterion)
     if row.category is not None and category is None:

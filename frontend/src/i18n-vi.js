@@ -1214,4 +1214,7 @@ export const VI = {
   "Export standalone package": "Xuất gói chạy độc lập",
   "Only an approved version can be exported as a package.": "Chỉ version đã duyệt mới xuất được gói.",
   "Package downloaded": "Đã tải gói về",
+  /* DS-22 — bộ đề mẫu đi kèm template công nợ. */
+  "Load sample suite": "Nạp bộ đề mẫu",
+  "{name} — {n} cases, each asked by a demo employee": "{name} — {n} case, mỗi case do một nhân viên demo hỏi",
 };

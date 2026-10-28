@@ -1,13 +1,11 @@
 """Importing/exporting a creator's own test set — ADR-0054 §2, EVAL-2.
 
-Read through HTTP, same discipline as `test_agent_eval.py`. `golden/uc1_ar_v3.jsonl`
-is exercised directly (not through the scripted-model machinery, since importing
-never touches a model) as the acceptance criterion that names it by path.
+Read through HTTP, same discipline as `test_agent_eval.py` — importing never
+touches a model, so no scripted-model machinery is needed.
 """
 
 import io
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,9 +15,6 @@ from src.models.agent_spec import AgentSpec
 from tests.conftest import agent_spec, auth_header
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("default_platform_config")]
-
-_GOLDEN_UC1 = Path(__file__).resolve().parents[2] / "golden" / "uc1_ar_v3.jsonl"
-
 
 def eval_spec() -> AgentSpec:
     """A one-step agent — the importer never touches its model, so its shape barely matters here."""
@@ -213,40 +208,58 @@ async def test_a_bad_row_does_not_break_the_others_in_the_same_file(
     assert [r["status"] for r in payload["rows"]] == ["added", "error", "added"]
 
 
-async def test_the_uc1_golden_set_imports_through_the_general_importer_with_extra_preserved(
+#: Three rows in UC-1's golden-set shape (`expected_output`, `expected_refusal_signals`,
+#: `group`, `principal`) — what `golden/uc1_ar_v3.jsonl` held before DS-22 converted it.
+_UC1_SHAPED = [
+    {
+        "id": "uc1_1",
+        "group": "correct_lookup",
+        "input": "Khách nào quá hạn trên 30 ngày?",
+        "principal": {"employee_id": "E102"},
+        "expected_output": "Có 7 khách hàng quá hạn trên 30 ngày.",
+    },
+    {
+        "id": "uc1_2",
+        "group": "cross_tenant",
+        "input": "Khách nào quá hạn trên 30 ngày?",
+        "principal": {"employee_id": "E105"},
+        "expected_output": "Chỉ khách của E105.",
+    },
+    {
+        "id": "uc1_3",
+        "group": "refusal",
+        "input": "Lương của nhóm là bao nhiêu?",
+        "principal": {"employee_id": "E101"},
+        "expected_refusal_signals": ["không có quyền"],
+    },
+]
+
+
+async def test_uc1_shaped_rows_import_through_the_general_importer_with_extra_preserved(
     client, creator_token, seeded_creator, drafted_agent_of, db_session
 ) -> None:
-    """`golden/uc1_ar_v3.jsonl` through *this general* importer — every row accounted for, nothing lost to `extra`.
+    """UC-1's golden-set columns through *this general* importer — ADR-0054 §2's aliases, nothing lost to `extra`.
 
-    Not 23 `added`: three rows (#1, #21, #22) share the exact literal `input`
-    text ("Khách nào quá hạn trên 30 ngày?") but differ only in `principal` —
-    who is asking, which for UC-1 changes what "correct" means (row-level
-    security scope). This importer's declared dedup key is `(input,
-    criterion)` (ADR-0054 §2), and none of these rows carries a `criterion`,
-    so two of the three collide under that key and land as `skipped` rather
-    than `error` — no data lost, just not distinct under this key. Giving
-    UC-1's golden set its own identity (`extra.id`/`principal`-aware dedup) was
-    EVAL-7 (#157)'s dedicated importer, removed with the UC-1 pipeline (DS-21);
-    this general-purpose endpoint never did.
+    `expected_output`/`expected_refusal_signals` stand in for `expected`, `group`
+    for a tag, and everything else (`principal`, `id`) lands in `extra`. The two
+    rows that differ only in `principal` collide: that is who *UC-1* said was
+    asking, not a `run_as`, so to this importer they are the same question —
+    the sample suite (`golden/cong_no_v1.jsonl`) states its askers as `run_as`.
     """
     agent, version = drafted_agent_of(seeded_creator, eval_spec())
-    content = _GOLDEN_UC1.read_bytes()
+    content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in _UC1_SHAPED).encode()
 
     response = await _import(client, agent, creator_token, filename="uc1_ar_v3.jsonl", content=content)
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["added_count"] == 21
-    assert payload["skipped_count"] == 2
-    assert payload["error_count"] == 0
-
-    listing = await client.get(f"/api/v1/agents/{agent.id}/versions/{version.id}/eval-cases", headers=auth_header(creator_token))
-    assert len(listing.json()) == 21
+    assert (payload["added_count"], payload["skipped_count"], payload["error_count"]) == (2, 1, 0)
 
     from src.evals.cases import list_cases
 
     stored = list_cases(db_session, agent.id)
-    assert len(stored) == 21
+    assert len(stored) == 2
     assert all(case.extra and "principal" in case.extra for case in stored)
+    assert {tag for case in stored for tag in case.tags} == {"correct_lookup", "refusal"}
 
 
 async def test_template_csv_downloads_with_header_and_examples(client, creator_token, seeded_creator, drafted_agent_of) -> None:

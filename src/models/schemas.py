@@ -1279,6 +1279,14 @@ class SuiteImportRowResponse(BaseModel):
     reason: str | None = Field(default=None, description="Vì sao — bỏ trống khi added và không có gì đáng nói")
 
 
+class SampleSuiteResponse(BaseModel):
+    """Whether an agent's template ships a sample suite to load (DS-22), and what it is."""
+
+    available: bool
+    name: str | None = None
+    case_count: int = 0
+
+
 class SuiteImportResponse(BaseModel):
     """The whole report of one import — a row-by-row account plus the totals a screen shows first."""
 

@@ -54,6 +54,7 @@ from src.evals.cases import (
 from src.evals.gate import score_for, version_blocker
 from src.evals.results import latest_run, results_of, skipped_of
 from src.evals.runner import EvalRunError, EvalServices, run_eval
+from src.evals.sample_suites import case_count, sample_suite_of_agent
 from src.evals.suite_io import SuiteImportError, export_suite, import_suite, template_csv
 from src.evals.workflow_cases import generate_workflow_cases
 from src.evals.workflow_runner import run_workflow_eval
@@ -64,6 +65,7 @@ from src.models.schemas import (
     EvalGenerationResponse,
     EvalRunRequest,
     EvalRunResponse,
+    SampleSuiteResponse,
     SuiteImportResponse,
     SuiteImportRowResponse,
 )
@@ -123,6 +125,39 @@ async def import_my_agents_eval_suite(
         report = import_suite(db, agent, content=content, filename=file.filename or "", dry_run=dry_run)
     except SuiteImportError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    return SuiteImportResponse(
+        rows=[SuiteImportRowResponse(row=r.row, status=r.status, reason=r.reason) for r in report.rows],
+        added_count=report.added_count,
+        skipped_count=report.skipped_count,
+        error_count=report.error_count,
+        dry_run=report.dry_run,
+    )
+
+
+@router.get("/{agent_id}/eval-suite/sample", response_model=SampleSuiteResponse)
+def my_agents_sample_suite(agent: OwnedAgent, db: Annotated[Session, Depends(get_db)]) -> SampleSuiteResponse:
+    """Whether the agent's template ships a sample suite (DS-22) — what the Evaluation tab offers to load."""
+    sample = sample_suite_of_agent(db, agent)
+    if sample is None:
+        return SampleSuiteResponse(available=False)
+    return SampleSuiteResponse(available=True, name=sample.name, case_count=case_count(sample))
+
+
+@router.post("/{agent_id}/eval-suite/sample", response_model=SuiteImportResponse)
+def import_my_agents_sample_suite(
+    agent: OwnedAgent,
+    db: Annotated[Session, Depends(get_db)],
+    dry_run: Annotated[bool, Query(description="true = chỉ kiểm, không ghi gì xuống DB")] = False,
+) -> SuiteImportResponse:
+    """Load the template's sample suite through the ordinary importer — the same row report, the same dedup.
+
+    404 when the agent's template ships none. Loading twice adds nothing the
+    second time: each row is a duplicate `(input, criterion)` and is skipped.
+    """
+    sample = sample_suite_of_agent(db, agent)
+    if sample is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template của agent này không có bộ đề mẫu")
+    report = import_suite(db, agent, content=sample.content(), filename=sample.path.name, dry_run=dry_run)
     return SuiteImportResponse(
         rows=[SuiteImportRowResponse(row=r.row, status=r.status, reason=r.reason) for r in report.rows],
         added_count=report.added_count,
