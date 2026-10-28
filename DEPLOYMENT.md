@@ -401,8 +401,30 @@ gcloud run jobs deploy backend-oneoff --image=<backend-image-vừa-deploy> \
   --set-secrets=<danh-sách-app-secrets-như-deploy.yml> \
   --command=python --args="scripts/init_qdrant.py"
 gcloud run jobs execute backend-oneoff --region=$REGION --wait
-# tương tự cho scripts/seed_kb.py, scripts/seed_uc1_demo_data.py — đổi --args mỗi lần
+# tương tự cho scripts/seed_kb.py — đổi --args mỗi lần
 ```
+
+## ERP mẫu (DS-23)
+
+Database của công ty demo — `erp_mau` trên cùng instance Cloud SQL, do `setup.sh` tạo kèm secret
+`app-erp-mau-dsn`. `deploy.yml` seed lại nó mỗi lần deploy (job `backend-seed-erp-mau`,
+`scripts/seed_erp_mau.py`): idempotent, hạn trả tính lùi từ ngày chạy nên con số demo luôn đúng. Mail
+"gửi khách" đi tới `ERP_MAU_CUSTOMER_MAILBOX` (GitHub Actions variable; mặc định
+`khachhang@erp-mau.local`) — đặt về hộp thư người demo mở được.
+
+Deployment dựng trước DS-23 tạo database và secret một lần:
+
+```bash
+gcloud sql databases create erp_mau --instance=$SQL_INSTANCE
+# cùng user appuser với DATABASE_URL, chỉ đổi tên database:
+printf '%s' "postgresql://appuser:<mật-khẩu>@/erp_mau?host=/cloudsql/$GCP_SQL_CONNECTION_NAME" \
+  | gcloud secrets create app-erp-mau-dsn --replication-policy=automatic --data-file=-
+```
+
+Để người tạo agent cắm nó làm Hệ CSDL: DSN dùng **private IP** của instance
+(`postgresql://appuser:<mật-khẩu>@<private-ip>:5432/erp_mau`), và thêm IP đó vào
+`DATABASE_SOURCE_TRUSTED_HOSTS` của backend — địa chỉ nội bộ bị chặn nếu không được liệt kê.
+Quy tắc truy cập mẫu: `deploy/erp-mau/access.yaml`.
 
 ## File liên quan
 

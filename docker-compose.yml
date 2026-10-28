@@ -122,6 +122,44 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  # DS-23: "ERP mẫu" — the demo company's business database, its own Postgres on purpose: it stands for a
+  # customer's ERP, which is never the platform's database. Register it as a Hệ CSDL with
+  #   postgresql://erp:erp@erp-mau:5432/erp_mau   (from the backend container)
+  #   postgresql://erp:erp@localhost:5433/erp_mau (from a backend run on the host — add localhost to
+  #                                                DATABASE_SOURCE_TRUSTED_HOSTS on your own machine only)
+  # and paste deploy/erp-mau/access.yaml's rules (or let the meta-agent draft them).
+  erp-mau:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: erp
+      POSTGRES_PASSWORD: erp
+      POSTGRES_DB: erp_mau
+    ports:
+      - "5433:5432"
+    volumes:
+      - erp_mau_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp -d erp_mau"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Seeds it on every `docker compose up`, and exits: idempotent, and due dates are counted back from the
+  # day it runs, so "3 khách quá hạn trên 30 ngày" stays true whatever day the demo is. Customer mail goes to
+  # ERP_MAU_CUSTOMER_MAILBOX (plus-addressed per customer) — point it at an inbox the presenter can open.
+  erp-mau-seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "scripts/seed_erp_mau.py"]
+    environment:
+      ERP_MAU_DSN: postgresql://erp:erp@erp-mau:5432/erp_mau
+      ERP_MAU_CUSTOMER_MAILBOX: ${ERP_MAU_CUSTOMER_MAILBOX:-khachhang@erp-mau.local}
+    depends_on:
+      erp-mau:
+        condition: service_healthy
+    restart: "no"
+
   backend:
     build:
       context: .
@@ -139,6 +177,8 @@ services:
       RERANKER_URL: http://reranker:8001
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
+      # The demo ERP is the one private host a creator may register here (DS-23).
+      DATABASE_SOURCE_TRUSTED_HOSTS: erp-mau
     depends_on:
       db:
         condition: service_healthy
@@ -163,5 +203,6 @@ services:
 
 volumes:
   pgdata:
+  erp_mau_data:
   qdrant_data:
   hf_cache:

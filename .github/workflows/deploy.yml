@@ -137,6 +137,27 @@ jobs:
             --max-retries=0
           gcloud run jobs execute backend-migrate --region="$REGION" --wait
 
+      # DS-23: "ERP mẫu", the demo company's database, re-seeded on every deploy — idempotent, and its due
+      # dates are counted back from the day it runs, so the demo's numbers hold. Its own database on the
+      # same Cloud SQL instance (infra/gcp/setup.sh creates it and the `app-erp-mau-dsn` secret); no RLS,
+      # so plain INSERTs that Cloud SQL's non-superuser can make. Skipped where the secret does not exist.
+      - name: Seed ERP mẫu (nếu có app-erp-mau-dsn)
+        run: |
+          if ! gcloud secrets describe app-erp-mau-dsn >/dev/null 2>&1; then
+            echo "Chưa có secret app-erp-mau-dsn — bỏ qua seed ERP mẫu"
+            exit 0
+          fi
+          gcloud run jobs deploy backend-seed-erp-mau \
+            --image="$AR_HOST/$PROJECT_ID/app/backend:${{ needs.build-and-push.outputs.tag }}" \
+            --region="$REGION" \
+            --service-account="${{ vars.GCP_RUN_SA }}" \
+            --set-cloudsql-instances="${{ vars.GCP_SQL_CONNECTION_NAME }}" \
+            --set-secrets="ERP_MAU_DSN=app-erp-mau-dsn:latest" \
+            --set-env-vars="ERP_MAU_CUSTOMER_MAILBOX=${{ vars.ERP_MAU_CUSTOMER_MAILBOX || 'khachhang@erp-mau.local' }}" \
+            --command=python --args="scripts/seed_erp_mau.py" \
+            --max-retries=0
+          gcloud run jobs execute backend-seed-erp-mau --region="$REGION" --wait
+
   deploy:
     needs: [build-and-push, migrate]
     runs-on: ubuntu-latest

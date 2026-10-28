@@ -96,6 +96,13 @@ gcloud sql users create appuser --instance="$SQL_INSTANCE" --password="$DB_PASSW
 SQL_CONNECTION_NAME=$(gcloud sql instances describe "$SQL_INSTANCE" --format='value(connectionName)')
 DATABASE_URL="postgresql://appuser:${DB_PASSWORD}@/${SQL_DB}?host=/cloudsql/${SQL_CONNECTION_NAME}"
 
+# DS-23: "ERP mẫu", the demo company's database — its own database on this instance, seeded by deploy.yml's
+# `backend-seed-erp-mau` job through the unix socket. A creator registers it as a Hệ CSDL by the
+# instance's private IP (see DEPLOYMENT.md, "ERP mẫu").
+gcloud sql databases describe erp_mau --instance="$SQL_INSTANCE" >/dev/null 2>&1 || \
+  gcloud sql databases create erp_mau --instance="$SQL_INSTANCE"
+ERP_MAU_DSN="postgresql://appuser:${DB_PASSWORD}@/erp_mau?host=/cloudsql/${SQL_CONNECTION_NAME}"
+
 # `gcloud sql connect` KHÔNG dùng được ở đây: nó chạy bằng cách whitelist IP
 # client lên public IP của instance, mà instance này tạo với --no-assign-ip.
 # Đường vào duy nhất là từ trong VPC — VM internal-services đã nằm sẵn ở đó.
@@ -272,8 +279,8 @@ gcloud iam service-accounts add-iam-policy-binding "$DEPLOY_SA@$PROJECT_ID.iam.g
   --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUM/locations/global/workloadIdentityPools/$WIF_POOL/attribute.repository/$GITHUB_REPO" \
   >/dev/null
 
-echo "== storing DATABASE_URL in Secret Manager (sync-secrets.sh handles the rest) =="
-for pair in "app-database-url=$DATABASE_URL"; do
+echo "== storing DATABASE_URL and the ERP mẫu DSN in Secret Manager (sync-secrets.sh handles the rest) =="
+for pair in "app-database-url=$DATABASE_URL" "app-erp-mau-dsn=$ERP_MAU_DSN"; do
   name="${pair%%=*}"; value="${pair#*=}"
   gcloud secrets describe "$name" >/dev/null 2>&1 || gcloud secrets create "$name" --replication-policy=automatic
   printf '%s' "$value" | gcloud secrets versions add "$name" --data-file=-

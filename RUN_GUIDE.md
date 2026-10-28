@@ -58,7 +58,7 @@ Hai biến đáng chú ý trong `.env`:
 
 ## 2. Khởi Chạy Các Dịch Vụ Nền (Docker)
 
-Backend dial tới **sáu** dịch vụ, không phải một. `depends_on` trong
+Backend dial tới **bốn** dịch vụ (cộng "ERP mẫu" khi bạn cắm nó làm Hệ CSDL), không phải một. `depends_on` trong
 `docker-compose.yml` chỉ xếp thứ tự cho backend **chạy trong compose** — khi
 bạn chạy backend từ máy mình bằng `make run`, nó không bật giúp bạn cái nào cả.
 Nên bật hết bằng một lệnh:
@@ -66,7 +66,7 @@ Nên bật hết bằng một lệnh:
 ```bash
 make up
 # tương đương:
-# docker compose up -d --wait db qdrant reranker mailhog
+# docker compose up -d --wait db qdrant reranker mailhog erp-mau
 ```
 
 `--wait` đợi tới khi mọi healthcheck xanh chứ không chỉ tới khi Docker đã tạo
@@ -80,6 +80,7 @@ sau model đã nằm trong volume `hf_cache`, chỉ còn vài chục giây).
 | `qdrant` | 6333 | **Upload vẫn 201, ingest chết ngầm.** Tài liệu ở trạng thái `failed`, và dấu hiệu đầu tiên là agent trả lời "tài liệu không đề cập" về đúng cái tài liệu bạn vừa tải lên |
 | `reranker` | 8001 | Không sập, nhưng tìm kiếm **tệ đi thấy rõ**: `src/services/reranker.py` lùi về thứ tự RRF thô, bỏ luôn ngưỡng điểm, và chỉ để lại một dòng log |
 | `mailhog` | 1025/8025 | Không gửi/xem được mail thử |
+| `erp-mau` | 5433 | Không có DB của công ty demo để cắm làm Hệ CSDL. Seed bằng `make seed-demo` (hoặc service `erp-mau-seed` khi chạy cả compose) |
 
 Tắt cho nhẹ máy khi nghỉ: `make stop` (đỗ container lại; **không** dùng
 `docker compose down` — lệnh đó xoá container).

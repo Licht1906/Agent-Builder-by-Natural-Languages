@@ -1,4 +1,4 @@
-.PHONY: up stop run migrate init-qdrant reconcile-qdrant seed-kb seed-demo seed-uc1 verify-uc1 \
+.PHONY: up stop run migrate init-qdrant reconcile-qdrant seed-kb seed-demo verify-uc1 \
         test lint format typecheck check clean \
         frontend-install frontend-run frontend-build frontend-test frontend-check \
         check-all
@@ -22,7 +22,7 @@
 # before it answers, so "started" and "usable" are about two minutes apart on
 # a cold cache and this target would otherwise hand back a prompt that lies.
 up:
-	docker compose up -d --wait db qdrant reranker mailhog
+	docker compose up -d --wait db qdrant reranker mailhog erp-mau
 
 # `stop`, never `down`: `down` removes the containers, and with them anything
 # not on a named volume. This just parks them.
@@ -56,24 +56,15 @@ reconcile-qdrant:
 seed-kb: init-qdrant
 	python scripts/seed_kb.py
 
-# UC1-15 (#116): the Olist-shaped AR rows `v_ar_open`/`v_customer_safe` read.
-# Without `--reset` this fails loudly on a conflict rather than duplicating the
-# dataset — pass it by hand (`python scripts/seed_uc1_demo_data.py --reset`) to
-# replace a previous run's rows, the same reason `reconcile-qdrant` keeps its
-# own delete flag out of the target.
+# DS-23: "ERP mẫu", the demo company's database (compose service `erp-mau`, port 5433). Idempotent, and
+# true on the day it runs — `erp-mau-seed` already runs it on every `docker compose up`; this is the same
+# script for a backend run on the host. ERP_MAU_DSN / ERP_MAU_CUSTOMER_MAILBOX override the defaults.
 seed-demo:
-	python scripts/seed_uc1_demo_data.py
-
-# The one command after `pytest` has run: the suite resets the schema on this
-# same database (`tests/conftest.py::_fresh_postgres_schema`, no SQLite
-# fallback per issue #3), which empties `fin_invoice`/`customers`/`orders`/
-# `crm_sales_assignment`. Kept as an alias of `seed-demo` since the UC-1
-# pipeline's credentials went with it (DS-21).
-seed-uc1: seed-demo
+	python scripts/seed_erp_mau.py
 
 # UC1-14 (#115): proves the grants and row-level security the seeded data is
-# read through. Rolls everything it writes back, so it is safe to run after
-# `seed-uc1` to confirm the surface is intact.
+# read through. Rolls everything it writes back, so it is safe to run at any
+# time to confirm the surface is intact.
 verify-uc1:
 	python scripts/verify_uc1_data_surface.py
 

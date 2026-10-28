@@ -11,6 +11,11 @@ một nguyên nhân gốc, và #2 chặn #3.
 
 ## 1. `seed_uc1_demo_data` — RLS chặn `COPY FROM`
 
+> **Đã xử lý (DS-23).** Dữ liệu demo không còn nằm trong Postgres của nền tảng: "ERP mẫu" là một database
+> riêng (`erp_mau` trên cùng instance Cloud SQL), không có RLS — phạm vi do nền tảng áp ở tầng code — và
+> được seed bằng `scripts/seed_erp_mau.py` (INSERT thường, idempotent) qua job `backend-seed-erp-mau` mà
+> `deploy.yml` chạy mỗi lần deploy. `scripts/seed_uc1_demo_data.py` đã gỡ. Phần dưới giữ làm lịch sử.
+
 **Triệu chứng.** Job seed chết, dữ liệu demo UC-1 không có trên production:
 
 ```

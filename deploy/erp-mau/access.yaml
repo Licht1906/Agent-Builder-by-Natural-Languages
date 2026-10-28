@@ -1,0 +1,24 @@
+# Quy tắc truy cập của Hệ CSDL "ERP mẫu" (DS-23) — cái meta-agent nháp ra ở bước 3 của kịch bản demo, viết sẵn
+# để so và để test (tests/test_db/test_erp_mau_seed.py đọc file này).
+#
+# Nhân viên KD thấy khách của chính mình, trưởng nhóm thấy cả phòng, kế toán trưởng thấy mọi phòng.
+identity:
+  view: v_employees
+  match_by: email
+  attributes:
+    employee_code: employee_code
+    department: department
+    position: position
+rules:
+  - position: Nhân viên KD
+    views:
+      v_ar_open: {where: {sales_rep_id: employee_code}}
+      v_customer_safe: {where: {sales_rep_id: employee_code}}
+  - position: Trưởng nhóm KD
+    views:
+      v_ar_open: {where: {department: department}}
+      v_customer_safe: {where: {department: department}}
+  - position: Kế toán trưởng
+    views:
+      v_ar_open: all
+      v_customer_safe: all
