@@ -282,13 +282,15 @@ async def test_an_approval_is_shown_to_and_decided_by_the_asker_alone(
 
 
 async def test_the_package_serves_chat_approvals_and_health_and_nothing_else(
-    package_dir: Callable[..., Path], secrets_env: None
+    package_dir: Callable[..., Path], secrets_env: None, tmp_path: Path
 ) -> None:
-    app = create_app(_loaded(package_dir()), model_factory=_platform_factory())
+    """The API, plus the chat page that uses it (DS-17) — and not one route more."""
+    (tmp_path / "ui" / "assets").mkdir(parents=True)
+    app = create_app(_loaded(package_dir()), model_factory=_platform_factory(), ui_dir=tmp_path / "ui")
 
     served = {route.path for route in app.routes if not route.path.startswith(("/docs", "/redoc", "/openapi"))}
 
-    assert served == {"/health", "/chat", "/approvals", "/approvals/{approval_id}"}
+    assert served == {"/health", "/chat", "/approvals", "/approvals/{approval_id}", "/", "/assets", "/ui-config"}
 
 
 def test_the_package_never_imports_a_platform_router() -> None:

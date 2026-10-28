@@ -1,0 +1,27 @@
+# The two stand-ins a package demo needs beside the package itself (DS-17):
+# a company sign-in and a mailbox. Neither is ever part of a real package.
+#
+#   docker compose -f deploy/package/docker-compose.demo.yml up -d
+#
+# mock-oidc — an OpenID Connect issuer with a sign-in form: type any username and,
+#   in "claims", {"email": "an@cty.vn"} — the email the employee view matches on.
+#   runtime.yaml:
+#     auth:
+#       mode: oidc
+#       claim: email
+#       oidc: {issuer: http://localhost:8091/default, audience: agent-demo, client_id: agent-demo}
+# mailhog — catches what the package sends; read it at http://localhost:8025.
+#   runtime.yaml:
+#     mail: {mode: smtp, smtp: {host: localhost, port: 1025, from: agent@cty.vn, starttls: false}}
+
+services:
+  mock-oidc:
+    image: ghcr.io/navikt/mock-oauth2-server:2.1.10
+    ports:
+      - "8091:8080"
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    ports:
+      - "1025:1025"
+      - "8025:8025"

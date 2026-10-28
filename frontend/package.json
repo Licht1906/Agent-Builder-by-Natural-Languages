@@ -10,7 +10,9 @@
     "i18n:check": "node scripts/i18n-check.mjs",
     "smoke": "node scripts/smoke-render.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:package": "vite build --config vite.package.config.js",
+    "dev:package": "vite --config vite.package.config.js"
   },
   "dependencies": {
     "lucide-react": "^0.383.0",

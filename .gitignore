@@ -44,6 +44,9 @@ deploy/network-policies/
 # UC1-34 (#146): packaged air-gapped artifacts (images.tar makes these large)
 dist/
 
+# DS-17: the package chat's build (`npm run build:package`), made in Dockerfile.runtime
+frontend/dist-package/
+
 # Logs
 logs/
 *.log

@@ -1,7 +1,7 @@
 # Image `runtime` — the exported package's runtime, DS-13 / ADR-0059 §10.
 #
 # One agent, run inside the company: `python -m src.standalone` serves chat,
-# approvals and health and nothing else (no Designer/Builder/admin/PM route is
+# approvals, health and the chat page at / (DS-17) and nothing else (no Designer/Builder/admin/PM route is
 # mounted — see src/standalone/app.py). The three files a company edits are
 # mounted at /etc/agent: bundle.json, access.yaml, runtime.yaml.
 #
@@ -10,6 +10,17 @@
 #     -e AGENT_SECRET_RUNTIME_DB=... -e AGENT_SECRET_ERP_DSN=... -e AGENT_SECRET_LLM_KEY=... agent-runtime
 #
 # A missing secret stops the container at start-up, naming the secret.
+
+# ---- Stage 0: the chat page (DS-17) — `npm run build:package` → /ui ----
+FROM node:20-slim AS ui
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+COPY frontend/ ./
+RUN npm run build:package
 
 # ---- Stage 1: Build ----
 FROM python:3.11-slim AS builder
@@ -34,6 +45,7 @@ ENV PYTHONPATH=/app \
 RUN useradd -m appuser
 
 COPY src ./src
+COPY --from=ui /frontend/dist-package ./ui
 
 USER appuser
 

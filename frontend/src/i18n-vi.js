@@ -1194,4 +1194,14 @@ export const VI = {
   /* ADR-0056 §8 — nếp gấp của một case đã đạt. Giữ ngắn: nó là nhãn của nếp
      gấp, không phải một câu giải thích. */
   "what it did and answered": "agent đã làm gì và trả lời gì",
+  /* DS-17 — trang chat của gói chạy độc lập. Người đọc là nhân viên công ty,
+     không phải người tạo agent. */
+  "This package could not describe itself (HTTP {status})": "Gói không trả về được cấu hình của nó (HTTP {status})",
+  "Your sign-in has ended — sign in again.": "Phiên đăng nhập đã hết — hãy đăng nhập lại.",
+  "Sign in with your company account": "Đăng nhập bằng tài khoản công ty",
+  "The package has no auth.oidc.client_id, so this page cannot sign anyone in — ask IT to set it in runtime.yaml.":
+    "Gói chưa có auth.oidc.client_id nên trang này chưa đăng nhập được — nhờ IT khai trong runtime.yaml.",
+  "Paste the access token your company's sign-in gave you": "Dán access token mà hệ thống đăng nhập của công ty cấp cho bạn",
+  "Continue": "Tiếp tục",
+  "Sign out": "Đăng xuất",
 };

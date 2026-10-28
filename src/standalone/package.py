@@ -211,6 +211,10 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
         warnings.append(
             "Workflow có node knowledge_search — gói chưa mang tài liệu theo (DS-18), node đó sẽ không tìm thấy gì"
         )
+    if config.auth.mode == "oidc" and config.auth.oidc is not None and not config.auth.oidc.client_id:
+        warnings.append(
+            "auth.oidc chưa có client_id — trang chat của gói không đăng nhập được, chỉ API /chat dùng được"
+        )
     if unreachable:
         warnings.append(
             "Gói chỉ có kênh gửi mail; các action sau sẽ báo lỗi nếu workflow gọi tới: " + ", ".join(unreachable)

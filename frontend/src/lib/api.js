@@ -24,14 +24,14 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY) || null;
 export const setToken = (token) => localStorage.setItem(TOKEN_KEY, token);
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
-function parseJson(text) {
+export function parseJson(text) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
 /* FastAPI says `detail`, and says it in two shapes: a sentence for the errors
    the code raises on purpose, and a list of field problems for a body pydantic
    refused. Both end up as one line, because a toast has one line. */
-function messageOf(payload, status) {
+export function messageOf(payload, status) {
   const detail = payload && payload.detail;
   if (typeof detail === "string" && detail) return detail;
   if (Array.isArray(detail) && detail.length) {
@@ -124,6 +124,13 @@ export async function stream(path, body, onEvent, { signal } = {}) {
     const text = await response.text();
     throw new ApiError(response.status, messageOf(parseJson(text), response.status), text);
   }
+  await readEvents(response, onEvent);
+}
+
+/** An event-stream response, frame by frame: `onEvent(name, data)` in order.
+ *  Shared with the exported package's chat (DS-17), which talks to its own
+ *  runtime rather than `/api/v1` but streams the same event names. */
+export async function readEvents(response, onEvent) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

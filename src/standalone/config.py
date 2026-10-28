@@ -113,6 +113,10 @@ class OidcSettings(BaseModel):
 
     issuer: str = Field(..., min_length=1)
     audience: str = Field(..., min_length=1)
+    #: The public client the package's chat page signs people in as (Authorization Code + PKCE, DS-17).
+    #: The page sends the ID token, so `audience` is this id. Not a secret — the page has no secret.
+    client_id: str | None = None
+    scope: str = "openid email profile"
     jwks_url: str | None = None
     algorithms: list[str] = Field(default_factory=lambda: ["RS256"], min_length=1)
     leeway_seconds: int = Field(default=30, ge=0, le=600)

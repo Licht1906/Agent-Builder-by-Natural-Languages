@@ -37,7 +37,8 @@ auth:                           # who is asking — one value, matched against a
   #   audience: agent-cong-no
   # oidc:                       # an OpenID Connect issuer; keys found through discovery, rotations followed
   #   issuer: https://sso.company.internal/realms/staff
-  #   audience: agent-cong-no
+  #   audience: agent-cong-no   #   the chat page sends the ID token, so: the client_id below
+  #   client_id: agent-cong-no  #   a PUBLIC client (PKCE, no secret); redirect URI = this package's own / , web origin allowed
   # custom:                     # your own file with exactly one function: resolve_principal(request) -> str | None
   #   module: auth_adapter.py
 

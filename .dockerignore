@@ -19,3 +19,7 @@ eval/
 .dockerignore
 Dockerfile
 docker-compose.yml
+# The image builds its own: a host's node_modules (another OS's binaries) must never be copied in.
+frontend/node_modules
+frontend/dist
+frontend/dist-package

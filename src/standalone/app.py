@@ -1,7 +1,8 @@
 """The exported package's HTTP surface — chat, approvals, health, and nothing else (DS-13).
 
-Four routes. No Designer, Builder, admin or PM route is mounted, and none is
-importable from here: the platform's routers are never imported at all, so
+Four API routes, plus the chat page that uses them (DS-17: `/`, `/assets`,
+`/ui-config`). No Designer, Builder, admin or PM route is mounted, and none
+is importable from here: the platform's routers are never imported at all, so
 the package cannot grow one by accident (`test_standalone_runtime` lists the
 routes).
 
@@ -21,14 +22,18 @@ else, so the approval and its payload binding are the platform runtime's.
 import hashlib
 import json
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -130,11 +135,13 @@ def create_app(
     model_factory: ChatModelFactory | None = None,
     auth_transport: httpx.BaseTransport | None = None,
     mail_transport: httpx.BaseTransport | None = None,
+    ui_dir: Path | None = None,
 ) -> FastAPI:
     """The package as an ASGI app.
 
     `model_factory`, `auth_transport` (an OIDC issuer) and `mail_transport`
-    (Google, for `gmail_oauth`) are test seams.
+    (Google, for `gmail_oauth`) are test seams; `ui_dir` is the chat page's
+    build (`default_ui_dir` otherwise).
     """
     authenticate = build_authenticator(
         package.config.auth, secrets=package.secrets, base=package.base, transport=auth_transport
@@ -159,6 +166,7 @@ def create_app(
 
     app = FastAPI(title=f"{package.name} — gói agent", lifespan=lifespan)
     app.state.authenticate = authenticate
+    _serve_ui(app, package, ui_dir if ui_dir is not None else default_ui_dir())
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -226,6 +234,65 @@ def create_app(
         )
 
     return app
+
+
+def default_ui_dir() -> Path:
+    """Where the chat page's build is: `AGENT_UI_DIR` (the image sets it), else the repo's `frontend/dist-package`."""
+    configured = os.environ.get("AGENT_UI_DIR")
+    if configured:
+        return Path(configured)
+    return Path(__file__).resolve().parents[2] / "frontend" / "dist-package"
+
+
+def ui_config(package: Package) -> dict[str, Any]:
+    """What the chat page needs to sign someone in — names and URLs, never a secret or a header the gateway sets."""
+    auth = package.config.auth
+    described: dict[str, Any] = {"mode": auth.mode}
+    if auth.mode == "oidc" and auth.oidc is not None:
+        described["oidc"] = {"issuer": auth.oidc.issuer, "client_id": auth.oidc.client_id, "scope": auth.oidc.scope}
+    return {"agent": package.name, "auth": described}
+
+
+def _serve_ui(app: FastAPI, package: Package, ui_dir: Path) -> None:
+    """The chat page (DS-17) at `/`, its assets at `/assets`, and `/ui-config` — three routes, no API of their own.
+
+    Without a build (`npm run build:package`) the page answers 404 saying so;
+    the API still works. The page's headers keep the OIDC code out of any
+    `Referer`, the page out of frames, and every script and request on this
+    origin — plus the issuer the page signs in with, the one other place it
+    may talk to (a company's network may have nothing else to reach, and the
+    platform's web fonts are deliberately not among them).
+    """
+    index = ui_dir / "index.html"
+    issuer = package.config.auth.oidc.issuer if package.config.auth.mode == "oidc" and package.config.auth.oidc else ""
+    issuer_origin = "{0.scheme}://{0.netloc}".format(urlsplit(issuer)) if issuer else ""
+    headers = {
+        "Cache-Control": "no-cache",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Content-Security-Policy": (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            f"connect-src 'self' {issuer_origin}".rstrip()
+            + "; frame-ancestors 'none'; base-uri 'none'"
+        ),
+    }
+
+    @app.get("/ui-config")
+    def describe() -> dict[str, Any]:
+        return ui_config(package)
+
+    @app.get("/", include_in_schema=False)
+    def page() -> FileResponse:
+        if not index.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Gói này không kèm giao diện chat (chưa build frontend/dist-package) — API /chat vẫn dùng được",
+            )
+        return FileResponse(index, headers=headers)
+
+    if (ui_dir / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=ui_dir / "assets"), name="assets")
 
 
 def _caller(asker: str) -> str:
