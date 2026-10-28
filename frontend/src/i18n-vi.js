@@ -1204,4 +1204,14 @@ export const VI = {
   "Paste the access token your company's sign-in gave you": "Dán access token mà hệ thống đăng nhập của công ty cấp cho bạn",
   "Continue": "Tiếp tục",
   "Sign out": "Đăng xuất",
+  /* DS-19 — nút xuất gói chạy độc lập trên tab Deploy. */
+  "Export a standalone package": "Xuất gói chạy độc lập",
+  "A zip the company runs on its own servers: the agent, its access rules, its documents, a docker-compose file and a README. No password, DSN or token is ever in it — IT fills those in.":
+    "Một file zip công ty tự chạy trên máy chủ của mình: agent, quy tắc truy cập, tài liệu, docker-compose và README. Không có mật khẩu, DSN hay token nào trong đó — IT tự điền.",
+  "Include images for air-gap": "Kèm images cho air-gap",
+  "No signed images on this platform yet — an admin runs scripts/package_runtime_images.sh and sets PACKAGE_IMAGES_PATH.":
+    "Nền tảng chưa có bộ images đã ký — quản trị viên chạy scripts/package_runtime_images.sh rồi đặt PACKAGE_IMAGES_PATH.",
+  "Export standalone package": "Xuất gói chạy độc lập",
+  "Only an approved version can be exported as a package.": "Chỉ version đã duyệt mới xuất được gói.",
+  "Package downloaded": "Đã tải gói về",
 };

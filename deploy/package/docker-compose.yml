@@ -14,7 +14,8 @@ services:
   runtime:
     image: ${AGENT_RUNTIME_IMAGE:-agent-runtime:latest}
     ports:
-      - "${AGENT_PORT:-8080}:8080"
+      # 127.0.0.1 by default: with auth.mode trusted_header only a gateway on this machine may reach it.
+      - "${AGENT_BIND:-127.0.0.1}:${AGENT_PORT:-8080}:8080"
     volumes:
       - ./:/etc/agent:ro            # bundle.json, runtime.yaml, access.yaml, documents/ — read only
     env_file:

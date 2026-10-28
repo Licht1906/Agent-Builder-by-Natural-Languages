@@ -298,6 +298,10 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     extraction_vlm_model: str = "qwen/qwen3-vl-32b-instruct"
     extraction_cache_dir: str = "./data/extraction_cache"
+    # DS-19: the signed images tar `scripts/package_runtime_images.sh` writes —
+    # what "Kèm images cho air-gap" puts in an exported package. Empty: the
+    # option is offered greyed out, saying an admin has not provided one yet.
+    package_images_path: str = ""
 
     # Ingest cost (RAG-15 / #101). `None` = no soft limit configured, which is
     # the honest default: a ceiling nobody set should not silently start

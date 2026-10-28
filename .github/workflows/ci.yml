@@ -115,6 +115,26 @@ jobs:
       - name: opa test
         run: opa test docs/usecase_spec/platform/ -v
 
+  # DS-19: the exported package, run the way a company runs it — unzip, fill in
+  # the secrets .env.example names, `docker compose up` — and the agent answers.
+  package-smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Unzip + secrets + docker compose up
+        run: ./scripts/smoke_package.sh
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

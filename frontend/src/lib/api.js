@@ -103,6 +103,19 @@ export async function requestText(path) {
   return text;
 }
 
+/** One binary GET — a file the screen saves as it came (DS-19's package zip).
+ *  Resolves `{ blob, filename }`, the name read off `Content-Disposition`. */
+export async function requestBlob(path) {
+  const response = await send(path);
+  if (!response.ok) {
+    const text = await response.text();
+    throw new ApiError(response.status, messageOf(parseJson(text), response.status), text);
+  }
+  const disposition = response.headers.get("content-disposition") || "";
+  const named = /filename\*=UTF-8''([^;]+)/i.exec(disposition) || /filename="?([^";]+)"?/i.exec(disposition);
+  return { blob: await response.blob(), filename: named ? decodeURIComponent(named[1]) : null };
+}
+
 /** One JSON request. Resolves with the parsed body, or throws `ApiError`. */
 export async function request(path, options) {
   const response = await send(path, options);
@@ -226,6 +239,11 @@ export const agents = {
   /** One version as a portable JSON bundle — the spec and the graph, stamped
    *  with the format they were written against. */
   exportVersion: (agentId, versionId) => request(`/agents/${agentId}/versions/${versionId}/export`),
+  /** DS-19: whether this version may leave as a package (approved), and whether air-gap images can go with it. */
+  packageOptions: (agentId, versionId) => request(`/agents/${agentId}/versions/${versionId}/package/options`),
+  /** The package zip itself — `{ blob, filename }`. */
+  exportPackage: (agentId, versionId, airgap) =>
+    requestBlob(`/agents/${agentId}/versions/${versionId}/package?airgap=${airgap ? "true" : "false"}`),
   /** A bundle back into a new agent. Answers with the agent, the version it
    *  landed on, and every node whose model this deployment had to reassign —
    *  that last one is a sentence the creator has to read, not a detail. */

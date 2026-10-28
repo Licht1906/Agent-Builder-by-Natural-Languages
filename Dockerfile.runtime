@@ -40,6 +40,7 @@ COPY --from=builder /install /usr/local
 # `src` is imported from /app, not installed (see Dockerfile).
 ENV PYTHONPATH=/app \
     AGENT_RUNTIME_CONFIG=/etc/agent/runtime.yaml \
+    AGENT_UI_DIR=/app/ui \
     PORT=8080
 
 RUN useradd -m appuser

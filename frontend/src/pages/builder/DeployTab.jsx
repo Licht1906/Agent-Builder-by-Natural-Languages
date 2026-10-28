@@ -3,6 +3,7 @@ import { Rocket, Copy, Check, KeyRound, Gauge, Send, GitCompare, Users, External
 import * as api from "../../lib/api";
 import { ErrorNote, Hint, PageShell, Spinner, StatusBadge } from "../../components/ui";
 import VersionCompare from "./VersionCompare";
+import PackageExport from "./PackageExport";
 import { useLang } from "../../i18n";
 import { useAgentActivity } from "../../components/agent-presence";
 
@@ -348,6 +349,9 @@ export default function DeployTab({ agentId, versionId, versionStatus, onVersion
             </>
           )}
         </div>
+
+        {/* ---- Standalone package (DS-19) ---- */}
+        <PackageExport agentId={agentId} versionId={versionId} versionStatus={versionStatus} notify={notify} />
 
         {/* ---- Version history ---- */}
         <div className="blueprint" style={{ padding: "var(--space-5)" }}>

@@ -24,16 +24,21 @@ audited, rather than as a silent side effect of being an admin.
 """
 
 import json
+import pathlib
+import re
+import shutil
+import tempfile
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from src.agents.conversations import find as find_conversation
 from src.agents.conversations import list_for as list_conversations
@@ -41,6 +46,7 @@ from src.agents.conversations import record_turn
 from src.agents.costs import CostFigure, estimated_cost, worst_case_cost
 from src.agents.flow import FlowDiagram, flow_of
 from src.agents.memory import get_checkpointer
+from src.agents.package_export import PackageExportError, airgap_images, export_package
 from src.agents.portability import BUNDLE_FORMAT, BundleError, export_bundle, import_bundle
 from src.agents.removal import AgentInUseError, delete_agent
 from src.agents.runtime import (
@@ -69,7 +75,17 @@ from src.approvals.dossier import RequestedTool, requested_tools
 from src.auth.dependencies import CurrentUser
 from src.datasources.sources import views_built_on
 from src.db.base import get_db
-from src.db.models import Agent, AgentVersion, Deployment, RunApproval, RunApprovalStatus, RunOutcome, SandboxRun, User
+from src.db.models import (
+    Agent,
+    AgentVersion,
+    Deployment,
+    RunApproval,
+    RunApprovalStatus,
+    RunOutcome,
+    SandboxRun,
+    User,
+    VersionStatus,
+)
 from src.deployments.publication import visible_to
 from src.interview.generation import NoAssignableModelError, SpecGenerationError
 from src.interview.refinement import BlankInstructionError, draft_from_refinement
@@ -626,6 +642,48 @@ def export_my_agents_version(
         return export_bundle(agent, version, database_schema=views_built_on(db, agent.owner_id, version.workflow))
     except BundleError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+
+
+@router.get("/{agent_id}/versions/{version_id}/package/options")
+def my_versions_package_options(version: OwnedVersion) -> dict[str, bool]:
+    """Whether "Xuất gói chạy độc lập" may be pressed for this version, and whether air-gap images can go with it."""
+    return {"approved": version.status is VersionStatus.APPROVED, "airgap_available": airgap_images() is not None}
+
+
+@router.get("/{agent_id}/versions/{version_id}/package")
+def export_my_versions_package(
+    agent: OwnedAgent,
+    version: OwnedVersion,
+    db: Annotated[Session, Depends(get_db)],
+    airgap: Annotated[bool, Query(description="Kèm images cho air-gap")] = False,
+) -> FileResponse:
+    """This approved version as a zip a company runs itself (DS-19) — see `src.agents.package_export`.
+
+    A version not yet approved, a Hệ CSDL without rules, a shelf that cannot
+    travel, air-gap images nobody provided: each a 409 naming it, before a
+    byte is written. The zip is built in a temporary file and removed once sent.
+    """
+    folder = pathlib.Path(tempfile.mkdtemp(prefix="agent-package-"))
+    target = folder / "package.zip"
+    try:
+        export_package(db, agent, version, target, airgap=airgap)
+    except PackageExportError as exc:
+        _remove_tree(folder)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    except Exception:
+        _remove_tree(folder)
+        raise
+    slug = re.sub(r"[^A-Za-z0-9.-]+", "-", agent.name).strip("-")[:60] or "agent"
+    return FileResponse(
+        target,
+        media_type="application/zip",
+        filename=f"{slug}-v{version.id}-goi-chay-doc-lap.zip",
+        background=BackgroundTask(_remove_tree, folder),
+    )
+
+
+def _remove_tree(folder: pathlib.Path) -> None:
+    shutil.rmtree(folder, ignore_errors=True)
 
 
 @router.get("/{agent_id}/versions/{version_id}/flow", response_model=VersionFlowResponse)
