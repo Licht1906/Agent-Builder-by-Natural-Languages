@@ -144,6 +144,7 @@ from src.workflow.tools import (
     SandboxBehavior,
     ToolAction,
     ToolDefinition,
+    ToolInvoker,
     ToolStatus,
     mock_answer,
     offered_actions,
@@ -691,6 +692,13 @@ class WorkflowRunContext:
     #: on a run nobody wired one into, which a `data_query` node reports as
     #: a failed read rather than reaching for a database itself.
     databases: DatabaseReader | None = None
+    #: `{tool_id: implementation}` this deployment puts in place of a
+    #: connection's own — the exported package's mail channel standing in for
+    #: `gmail` (DS-16), whose own implementation borrows a creator's OAuth
+    #: token that does not exist there. Only *how* the call is made changes:
+    #: the action, its risk, its approval and DS-08's payload binding are still
+    #: the registry's, so swapping the channel can never lift a gate.
+    invokers: Mapping[str, ToolInvoker] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1451,12 +1459,13 @@ async def _run_resolved_mcp(
         # `google_drive`) declare it to resolve whose account the run borrows;
         # a registered MCP server's invoker has no such parameter and no
         # business knowing which agent called.
-        if "agent_id" in inspect.signature(tool.invoke).parameters:
+        invoke = run.invokers.get(tool.id, tool.invoke)
+        if "agent_id" in inspect.signature(invoke).parameters:
             answer = await asyncio.to_thread(
-                partial(tool.invoke, action.name, payload, agent_id=run.identity.thread.agent_id)
+                partial(invoke, action.name, payload, agent_id=run.identity.thread.agent_id)
             )
         else:
-            answer = await asyncio.to_thread(tool.invoke, action.name, payload)
+            answer = await asyncio.to_thread(invoke, action.name, payload)
     except Exception as exc:  # noqa: BLE001 — a refused action is reportable, not fatal
         reason = f"Không thực hiện được hành động {action.name!r}: {exc}"
         if approved_call:
@@ -2544,6 +2553,7 @@ async def stream_workflow_reply(
     scripted_approvals: ScriptedApprovals | None = None,
     databases: DatabaseReader | None = None,
     live_sends: bool = False,
+    invokers: Mapping[str, ToolInvoker] | None = None,
 ) -> AsyncIterator[WorkflowEvent]:
     """Run `workflow` against `message` on `conversation`, yielding events as they happen.
 
@@ -2619,6 +2629,7 @@ async def stream_workflow_reply(
         scripted_approvals=scripted_approvals,
         workflow=workflow,
         databases=databases,
+        invokers=dict(invokers or {}),
     )
     graph = compile_workflow_graph(workflow, checkpointer=conversation.checkpointer, run=run)
     entry: Any = Command(resume=resume.decision) if resume else initial_state(message)

@@ -41,9 +41,25 @@ auth:                           # who is asking — one value, matched against a
   # custom:                     # your own file with exactly one function: resolve_principal(request) -> str | None
   #   module: auth_adapter.py
 
+mail:                           # where the agent's approved mails leave (gmail.send_email in the bundle) — required if it sends
+  mode: smtp                    # smtp | gmail_oauth | custom; switching mode never needs a new bundle
+  smtp:                         # the company's relay
+    host: smtp.company.internal
+    port: 587
+    from: no-reply@company.vn   # every mail is sent from this address; the agent cannot change it
+    user: agent-mailer
+    password_secret: smtp_pass
+    starttls: true              # a password_secret requires starttls; set false only for a password-less test relay (MailHog)
+  # gmail_oauth:                # a Gmail account the company owns
+  #   client_id: 1234.apps.googleusercontent.com
+  #   client_secret_secret: gmail_client_secret
+  #   refresh_token_secret: gmail_refresh_token
+  # custom:                     # your own file with exactly one function: send_email(to, subject, body) -> str (message id)
+  #   module: mail_adapter.py
+
 secrets:
   backend: env                  # env | file | vault
-  env_prefix: AGENT_SECRET_     # env:  AGENT_SECRET_RUNTIME_DB, AGENT_SECRET_ERP_DSN, AGENT_SECRET_LLM_KEY
+  env_prefix: AGENT_SECRET_     # env:  AGENT_SECRET_RUNTIME_DB, AGENT_SECRET_ERP_DSN, AGENT_SECRET_LLM_KEY, AGENT_SECRET_SMTP_PASS
   # directory: /run/secrets     # file: one file per secret, named as above
   # vault: {url: https://vault.internal, mount: secret, token_env: VAULT_TOKEN}
 

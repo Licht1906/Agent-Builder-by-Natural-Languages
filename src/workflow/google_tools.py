@@ -291,6 +291,16 @@ def _plain_text(body: str) -> str:
 
 
 def _rfc822(args: Mapping[str, Any]) -> str:
+    message = email_message(args)
+    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+
+def email_message(args: Mapping[str, Any]) -> EmailMessage:
+    """`send_email`/`create_draft`'s `{to, subject, body}` as one plain-text message — no `From`.
+
+    Shared with the exported package's mail channel (DS-16), so a mail sent
+    over SMTP there reads exactly as one sent through Gmail here.
+    """
     to = str(args.get("to", "")).strip()
     subject = str(args.get("subject", "")).strip()
     body = _plain_text(str(args.get("body", "")))
@@ -300,7 +310,7 @@ def _rfc822(args: Mapping[str, Any]) -> str:
     message["To"] = to
     message["Subject"] = _plain_text(subject).strip()
     message.set_content(body)
-    return base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+    return message
 
 
 # --------------------------------------------------------------------------- #

@@ -12,6 +12,10 @@ to a default asker.
 
 **Approvals are decided by the person who asked** (ADR-0059 §7), so the
 approval routes only ever show and decide the caller's own pauses.
+
+**An approved mail leaves through `runtime.yaml`'s `mail`** (DS-16): the
+channel stands in for the `gmail` connection's implementation and nothing
+else, so the approval and its payload binding are the platform runtime's.
 """
 
 import hashlib
@@ -38,6 +42,7 @@ from src.services.llm import ChatModelFactory
 from src.services.tracing import NullTrace
 from src.standalone.auth import build_authenticator
 from src.standalone.config import LlmConfig
+from src.standalone.mail import build_mail_sender, mail_invoker
 from src.standalone.package import Package, PackageIds, asker_user_id, database_ready, prepare_database, reader_for
 from src.workflow.approvals import (
     ApprovalDecisionError,
@@ -48,6 +53,7 @@ from src.workflow.approvals import (
 )
 from src.workflow.knowledge import DEFAULT_PASSAGE_LIMIT, Passage
 from src.workflow.runtime import Resumption, stream_workflow_reply
+from src.workflow.tools import GMAIL, ToolInvoker
 
 _log = logging.getLogger(__name__)
 
@@ -123,11 +129,22 @@ def create_app(
     *,
     model_factory: ChatModelFactory | None = None,
     auth_transport: httpx.BaseTransport | None = None,
+    mail_transport: httpx.BaseTransport | None = None,
 ) -> FastAPI:
-    """The package as an ASGI app. `model_factory` and `auth_transport` (an OIDC issuer) are test seams."""
+    """The package as an ASGI app.
+
+    `model_factory`, `auth_transport` (an OIDC issuer) and `mail_transport`
+    (Google, for `gmail_oauth`) are test seams.
+    """
     authenticate = build_authenticator(
         package.config.auth, secrets=package.secrets, base=package.base, transport=auth_transport
     )
+    # The bundle's `gmail.send_email` leaves through the company's channel (DS-16); the approval in front stays.
+    invokers: dict[str, ToolInvoker] = {
+        GMAIL: mail_invoker(
+            build_mail_sender(package.config.mail, secrets=package.secrets, base=package.base, transport=mail_transport)
+        )
+    }
     llm_key = package.secrets.get(package.config.llm.api_key_secret or "")
     factory = model_factory or openai_compatible_factory(package.config.llm, llm_key)
 
@@ -158,7 +175,7 @@ def create_app(
             caller=_caller(who),
         )
         identity = RunIdentity.for_run(thread, ids.version_id)
-        return _stream(package, factory, identity, payload.message, asker=who)
+        return _stream(package, factory, invokers, identity, payload.message, asker=who)
 
     @app.get("/approvals")
     def my_pending_approvals(who: Asker, ids: Ids) -> list[dict[str, Any]]:
@@ -204,7 +221,9 @@ def create_app(
             carried_seconds=leg.carried_seconds,
             carried_usage=leg.carried_usage,
         )
-        return _stream(package, factory, leg.identity, leg.input_message, asker=leg.run_as or who, resume=resumption)
+        return _stream(
+            package, factory, invokers, leg.identity, leg.input_message, asker=leg.run_as or who, resume=resumption
+        )
 
     return app
 
@@ -222,6 +241,7 @@ def _caller(asker: str) -> str:
 def _stream(
     package: Package,
     factory: ChatModelFactory,
+    invokers: Mapping[str, ToolInvoker],
     identity: RunIdentity,
     message: str,
     *,
@@ -249,6 +269,7 @@ def _stream(
                 sandbox=False,
                 identity=identity,
                 resume=resume,
+                invokers=invokers,
             ):
                 yield _sse(event["event"], event["data"])
         except Exception:  # noqa: BLE001 — the response has started; an event is the only way left to say so

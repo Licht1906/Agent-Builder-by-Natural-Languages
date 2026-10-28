@@ -53,7 +53,8 @@ from src.models.solution_spec import AgentSolutionSpecification
 from src.models.workflow import WorkflowJSON
 from src.services.secret_store import SecretNotFoundError
 from src.standalone.config import RuntimeConfig, RuntimeConfigError
-from src.workflow.runtime import ensure_runnable
+from src.workflow.runtime import ensure_runnable, mcp_action_names, wire_name
+from src.workflow.tools import GMAIL
 
 #: The account the package's agent belongs to. Not a person: nobody signs in as it.
 PACKAGE_OWNER_EMAIL = "package-owner@agent.local"
@@ -70,6 +71,9 @@ _PACKAGE_TABLES = (
     "audit_chain_head",
 )
 
+
+#: The bundle's one action that leaves through the package's mail channel (DS-16).
+MAIL_SEND = wire_name(GMAIL, "send_email")
 
 #: `{source_id: {view: columns}}` — the views each Hệ CSDL had when the agent was built, as the bundle carries them.
 DatabaseSchema = dict[str, dict[str, list[str]]]
@@ -163,6 +167,12 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
         raise RuntimeConfigError(
             "Workflow đọc Hệ CSDL chưa khai trong runtime.yaml (data_sources[].id): " + ", ".join(unknown)
         )
+    actions = mcp_action_names(workflow)
+    if MAIL_SEND in actions and config.mail is None:
+        raise RuntimeConfigError(
+            f"Workflow gửi mail ({MAIL_SEND}) nhưng runtime.yaml chưa có mail — khai mail.mode: smtp | gmail_oauth | custom"
+        )
+    unreachable = [name for name in actions if name != MAIL_SEND]
     sources: dict[str, DatabaseSource] = {}
     problems: list[str] = []
     warnings: list[str] = []
@@ -200,6 +210,10 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
     if any(node.type is NodeType.KNOWLEDGE_SEARCH for node in workflow.nodes):
         warnings.append(
             "Workflow có node knowledge_search — gói chưa mang tài liệu theo (DS-18), node đó sẽ không tìm thấy gì"
+        )
+    if unreachable:
+        warnings.append(
+            "Gói chỉ có kênh gửi mail; các action sau sẽ báo lỗi nếu workflow gọi tới: " + ", ".join(unreachable)
         )
     return Package(
         config=config,

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.services.vault_secret_store import VaultKvStore, VaultSecretNotFoundError, VaultUnavailableError
 
@@ -147,6 +147,57 @@ class AuthConfig(BaseModel):
     custom: CustomAuthSettings | None = None
 
 
+class SmtpSettings(BaseModel):
+    """The company's SMTP relay. STARTTLS unless switched off — and a password never goes over a plain line."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    host: str = Field(..., min_length=1)
+    port: int = Field(default=587, ge=1, le=65535)
+    #: The address every mail is sent from — the package's, not the model's to choose.
+    sender: str = Field(..., alias="from", min_length=3)
+    user: str | None = None
+    password_secret: str | None = None
+    starttls: bool = True
+    timeout_seconds: int = Field(default=10, ge=1, le=120)
+
+    @model_validator(mode="after")
+    def _no_password_in_clear(self) -> "SmtpSettings":
+        if self.password_secret and not self.starttls:
+            raise ValueError("mail.smtp: có password_secret thì phải bật starttls — mật khẩu không đi dạng rõ")
+        return self
+
+
+class GmailOauthSettings(BaseModel):
+    """A Gmail account the company owns, reached with a refresh token — the platform creator's account never is."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(..., min_length=1)
+    client_secret_secret: str = Field(..., min_length=1)
+    refresh_token_secret: str = Field(..., min_length=1)
+    token_url: str = "https://oauth2.googleapis.com/token"
+
+
+class CustomMailSettings(BaseModel):
+    """A file the company writes, with exactly one function: `send_email(to, subject, body) -> str`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    module: str = "mail_adapter.py"
+
+
+class MailConfig(BaseModel):
+    """Where the bundle's `gmail.send_email` goes in this company (DS-16). Changing it never touches the bundle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["smtp", "gmail_oauth", "custom"]
+    smtp: SmtpSettings | None = None
+    gmail_oauth: GmailOauthSettings | None = None
+    custom: CustomMailSettings | None = None
+
+
 class RuntimeConfig(BaseModel):
     """`runtime.yaml`, as written by the company. Relative paths are relative to the file."""
 
@@ -158,6 +209,8 @@ class RuntimeConfig(BaseModel):
     llm: LlmConfig
     embedding: EmbeddingConfig | None = None
     auth: AuthConfig = Field(default_factory=AuthConfig)
+    #: Required once the bundle can send mail; absent, a send is refused by name.
+    mail: MailConfig | None = None
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     #: Database hosts on a private network the package may dial (`database_source_trusted_hosts`).
     trusted_hosts: list[str] = Field(default_factory=list)
@@ -268,6 +321,11 @@ def required_secrets(config: RuntimeConfig) -> list[str]:
         names.append(config.embedding.api_key_secret)
     if config.auth.mode == "jwt" and config.auth.jwt is not None:
         names.append(config.auth.jwt.key_secret)
+    mail = config.mail
+    if mail is not None and mail.mode == "smtp" and mail.smtp is not None and mail.smtp.password_secret:
+        names.append(mail.smtp.password_secret)
+    if mail is not None and mail.mode == "gmail_oauth" and mail.gmail_oauth is not None:
+        names.extend([mail.gmail_oauth.client_secret_secret, mail.gmail_oauth.refresh_token_secret])
     return list(dict.fromkeys(names))
 
 
@@ -291,4 +349,4 @@ def resolve_secrets(config: RuntimeConfig, source: SecretSource) -> dict[str, st
 
 def as_document(config: RuntimeConfig) -> dict[str, Any]:
     """`config` as YAML would hold it — for the template an export writes."""
-    return config.model_dump(mode="json", exclude_none=True)
+    return config.model_dump(mode="json", exclude_none=True, by_alias=True)

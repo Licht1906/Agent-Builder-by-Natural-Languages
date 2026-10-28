@@ -402,7 +402,7 @@ async def test_rejecting_routes_the_run_away_from_the_action_and_says_why(
     conversation = "\n".join(str(message.content) for message in models[0].received_message_batches[0])
     assert "Quá hạn đổi trả" in conversation
 
-    row = db_session.scalars(select(RunApproval)).one()
+    row = db_session.scalars(select(RunApproval).where(RunApproval.version_id == version.id)).one()
     assert row.status is RunApprovalStatus.REJECTED
     assert row.reason == "Quá hạn đổi trả"
 
