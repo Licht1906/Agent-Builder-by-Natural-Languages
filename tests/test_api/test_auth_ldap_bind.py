@@ -135,7 +135,7 @@ async def test_a_pending_account_is_still_refused_through_ldap_bind(
         json={
             "email": _PENDING_EMAIL,
             "password": _PENDING_PASSWORD,
-            "role": "sales_rep",
+            "role": "creator",
             "job_title": "Nhân viên kinh doanh",
             "department": "SALES",
         },

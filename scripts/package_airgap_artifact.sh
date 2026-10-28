@@ -11,9 +11,6 @@
 #   - images.tar        `docker save` of every image docker-compose.airgap.yml
 #                        names, so the target machine never runs `docker pull`.
 #   - docker-compose.airgap.yml, .env.example
-#   - docs/usecase_spec/platform/   (the `policy` service's own bind mount —
-#                                    baked into no image, so it has to travel
-#                                    as files)
 #   - scripts/lib/env_secrets.sh, scripts/lib/shell_common.sh,
 #     scripts/import_airgap_artifact.sh
 #
@@ -67,7 +64,6 @@ docker build -t "agent-builder/reranker:${TAG}" ./reranker
 UPSTREAM_IMAGES=(
     "postgres:16-alpine"
     "qdrant/qdrant:v1.12.4"
-    "openpolicyagent/opa:1.19.0"
     "mailhog/mailhog:v1.0.1"
 )
 for image in "${UPSTREAM_IMAGES[@]}"; do
@@ -80,12 +76,11 @@ done
 # --------------------------------------------------------------------------- #
 
 log "Đóng gói vào ${STAGE_DIR}"
-mkdir -p "${STAGE_DIR}/docs/usecase_spec" "${STAGE_DIR}/scripts/lib"
+mkdir -p "${STAGE_DIR}/scripts/lib"
 cp docker-compose.airgap.yml "$STAGE_DIR/"
 cp .env.example "$STAGE_DIR/"
 cp scripts/lib/env_secrets.sh scripts/lib/shell_common.sh "${STAGE_DIR}/scripts/lib/"
 cp scripts/import_airgap_artifact.sh "$STAGE_DIR/"
-cp -r docs/usecase_spec/platform "$STAGE_DIR/docs/usecase_spec/platform"
 
 log "docker save toàn bộ image vào images.tar (có thể mất vài phút)"
 docker save \

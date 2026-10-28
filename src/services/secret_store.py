@@ -22,15 +22,14 @@ re-register a connection for its secret to change, which is the whole of what
 "rotate without touching the connection" means.
 
 **The platform's only store** (DS-20 / ADR-0059 §9). Every credential the
-platform holds — BYODB, a registered tool, a Hệ CSDL's DSN, a UC-1
-connection — is read through `SecretStore`. Vault is no longer a service the
+platform holds — BYODB, a registered tool, a Hệ CSDL's DSN — is read
+through `SecretStore`. Vault is no longer a service the
 platform runs; `src.services.vault_secret_store` remains only as the exported
 package's `secrets.backend: vault` (DS-13), for a company that has its own.
 """
 
 import hashlib
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Protocol
@@ -195,31 +194,3 @@ def get_secret_store(db: Annotated[Session, Depends(get_db)]) -> SecretStore:
     the production wiring is the default rather than a branch on a flag.
     """
     return EncryptedDbSecretStore(db=db)
-
-
-SecretStoreDep = Annotated[SecretStore, Depends(get_secret_store)]
-
-#: `(key) -> secret`. What `src.compiler.tools.default_tool_implementations` takes as its `resolve_credential`.
-ResolveCredential = Callable[[str], str]
-
-
-def resolve_credential_via(store: SecretStore) -> ResolveCredential:
-    """A `ResolveCredential` over `store`, degrading a *missing* secret to `""` — and never an unreadable one.
-
-    Moved here from the Vault client with its contract intact (DS-20): a tool
-    only has to prove its pointer resolves at call time, and a connection
-    nobody has wired up yet (a fresh sandbox run, most tests) must not fail
-    the whole turn — that covers `SecretNotFoundError`, and only it.
-    `SecretUnreadableError` propagates: a secret that exists but no longer
-    decrypts is an incident, and reporting it as "no connection configured"
-    is how an agent once told a user there were no overdue receivables. A
-    caller that must not fail its turn catches it and says which happened.
-    """
-
-    def _resolve(key: str) -> str:
-        try:
-            return store.get(key)
-        except SecretNotFoundError:
-            return ""
-
-    return _resolve

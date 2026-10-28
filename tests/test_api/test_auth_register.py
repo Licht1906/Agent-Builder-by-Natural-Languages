@@ -34,7 +34,7 @@ def _payload(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "email": _EMAIL,
         "password": _PASSWORD,
-        "role": "sales_rep",
+        "role": "creator",
         "job_title": _JOB_TITLE,
         "department": _DEPARTMENT,
     }
@@ -60,7 +60,7 @@ async def test_registering_creates_a_pending_account_and_returns_no_token(client
 
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["role"] == "sales_rep"
+    assert body["role"] == "creator"
     assert body["status"] == "pending"
     assert body["job_title"] == _JOB_TITLE
     assert body["department"] == _DEPARTMENT

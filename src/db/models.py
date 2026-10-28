@@ -19,7 +19,6 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
-    CheckConstraint,
     Column,
     ForeignKey,
     Index,
@@ -32,7 +31,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.agents.threads import ThreadNamespace
-from src.agentspec.spec import ConnectionType
 from src.db.base import Base
 from src.models.model_catalog import SEEDED_MODEL_ALLOWLIST
 from src.models.solution_spec import SuccessCriterionCategory
@@ -43,20 +41,18 @@ from src.workflow.tools import CredentialKind, ToolStatus, UsageScope
 class UserRole(StrEnum):
     """Every role the platform knows about.
 
-    `CREATOR`/`ADMIN` are the V2 platform's two roles (issue #4). UC1-01
-    (#117, spec.md §3) adds three more for the UC-1 build target: `AGENT_ADMIN`
-    is UC-1's admin-equivalent role (IT staff — creates/approves/deploys
-    agents), `SALES_MANAGER` and `SALES_REP` are the two audience roles the
-    accounts-receivable assistant serves. `require_admin` (`src.auth.dependencies`)
-    treats `ADMIN` and `AGENT_ADMIN` as the same admin-equivalent gate so the V2
-    admin surface keeps working for both generations of admin account.
+    `CREATOR`/`ADMIN` are the V2 platform's two roles (issue #4). `AGENT_ADMIN`
+    came with UC-1 (UC1-01) and stays as an admin-equivalent: `require_admin`
+    (`src.auth.dependencies`) treats it and `ADMIN` as the same gate, so either
+    generation of admin account keeps working. UC-1's two audience roles,
+    `sales_manager`/`sales_rep`, went with the UC-1 pipeline (DS-21): who may
+    see which rows is a Hệ CSDL's quy tắc truy cập now, not a platform role, and
+    every such account was migrated to `creator`.
     """
 
     CREATOR = "creator"
     ADMIN = "admin"
     AGENT_ADMIN = "agent_admin"
-    SALES_MANAGER = "sales_manager"
-    SALES_REP = "sales_rep"
     #: ADR-0051 — the person `docs/PM-PLAYBOOK.md` is written for. Reads the
     #: control room and pulls its levers (pause a deployment, decide a waiting
     #: run, thumbs, run the gate, promote a run to a case) but is **not** an
@@ -681,7 +677,11 @@ class RunOutcome(StrEnum):
 
 
 class RunPipeline(StrEnum):
-    """Which runtime produced an `AgentRun` — the two vocabularies ADR-0049 names."""
+    """Which runtime produced an `AgentRun` — the two vocabularies ADR-0049 names.
+
+    `UC1` is history only: the UC-1 pipeline is gone (DS-21), nothing writes it
+    any more, and it stays so the ledger rows it wrote still load.
+    """
 
     V2 = "v2"
     UC1 = "uc1"
@@ -979,24 +979,14 @@ class EvalSuite(Base):
     on first case (`src.evals.cases.get_or_create_suite`). ADR-0054 §7 notes
     the column to drop when a second suite (smoke vs full) is ever needed.
 
-    `uc1_agent_id` (ADR-0054 §6, EVAL-7) is a second, disjoint identity: a
-    UC-1 agent's id (`AgentSpec.metadata.id`, e.g. `agt_ar_assistant`) is a
-    string with no row in `agents` at all (ADR-0046), so it cannot go in
-    `agent_id`. Exactly one of `agent_id`/`uc1_agent_id` is set per row
-    (`ck_eval_suites_exactly_one_agent`) — see
-    `src.evals.uc1_suite.get_or_create_uc1_suite`.
+    UC-1's suites, keyed by a string agent id beside `agent_id`
+    (ADR-0054 §6), were dropped with the UC-1 pipeline (DS-21).
     """
 
     __tablename__ = "eval_suites"
-    __table_args__ = (
-        CheckConstraint(
-            "(agent_id IS NOT NULL) <> (uc1_agent_id IS NOT NULL)", name="ck_eval_suites_exactly_one_agent"
-        ),
-    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), unique=True)
-    uc1_agent_id: Mapped[str | None] = mapped_column(unique=True, doc="UC-1's own agent id — ADR-0054 §6, EVAL-7")
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), unique=True)
     name: Mapped[str]
     #: The retired grid's vocabulary overlay (ADR-0055 §2, retired by ADR-0065).
     #: Nothing reads or writes it any more; three suites on the dev database
@@ -1799,243 +1789,6 @@ class DatabaseSource(Base):
         doc="Quy tắc truy cập (access.yaml: identity + rules, DS-03) — null khi chưa khai, tức cấm hết",
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-
-class UC1ConnectionProbeStatus(StrEnum):
-    """Where one UC-1 connection's last dry-run probe (FR-23) landed. Not `ExternalConnectionStatus`
-    on purpose — same three shapes, unrelated concern (a connection into a
-    customer's own ERP, not a BYODB vector database), and reusing the V2 enum
-    would couple UC-1 to a table it has nothing to do with. `UNTESTED` is a
-    fresh row nobody has probed yet.
-    """
-
-    UNTESTED = "untested"
-    CONNECTED = "connected"
-    FAILED = "failed"
-
-
-class UC1Connection(Base):
-    """UC-1's own connection registry — UC1-08 (#122), spec.md §4.3/§6.2/§19.
-
-    Distinct from `ExternalConnection` (BYODB vector databases, RAG-20): this
-    row is what `AgentSpec.connections[].credential_ref` points at — a name
-    like `erp_readonly` that resolves, through `vault_path`, to a secret this
-    table never stores a byte of. `credential_ref` is kept as a column (rather
-    than derived on every read) because it is the exact string a spec's
-    `connections[].credential_ref` must equal — computing it twice in two
-    modules would be two chances for the `vault://` prefix to drift.
-
-    `allowed_objects`/`allowed_hosts`/`read_only` mirror the spec's own
-    `Connection` fields (`src.agentspec.spec.Connection`) rather than being
-    read out of a spec at probe time: a connection is wired up and probed
-    *before* any spec references it (§8's step 5 precedes step 6), so there is
-    no spec yet to read them from.
-    """
-
-    __tablename__ = "uc1_connections"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(unique=True, doc="Cũng là đoạn cuối của credential_ref, ví dụ erp_readonly")
-    type: Mapped[ConnectionType]
-    allowed_objects: Mapped[list[str]] = mapped_column(JSON, default=list)
-    allowed_hosts: Mapped[list[str]] = mapped_column(JSON, default=list)
-    read_only: Mapped[bool] = mapped_column(default=True)
-    vault_path: Mapped[str] = mapped_column(
-        doc="Đường dẫn KV v2 trong Vault, không gồm mount — ví dụ conn/erp_readonly"
-    )
-    credential_ref: Mapped[str] = mapped_column(
-        doc="vault://<vault_path> — giá trị spec.connections[].credential_ref phải khớp"
-    )
-    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    last_probe_status: Mapped[UC1ConnectionProbeStatus] = mapped_column(default=UC1ConnectionProbeStatus.UNTESTED)
-    last_probe_detail: Mapped[str | None] = mapped_column(default=None)
-    last_probe_objects: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON, default=list, doc="[{'object': 'v_ar_open', 'row_count': 1284}, ...] của lần probe gần nhất"
-    )
-    last_probed_at: Mapped[datetime | None] = mapped_column(default=None)
-
-
-class UC1AgentSpecVersion(Base):
-    """One immutable `AgentSpec` snapshot — UC1-38 (#126) is the first thing
-    that needs to address a UC-1 spec by `(agent_id, version)` over HTTP
-    (`POST /agents/{id}/versions/{v}/sandbox/chat`), so this is where that
-    persistence starts.
-
-    Deliberately not `AgentVersion` (V2's table): that row's `spec` column,
-    `status` enum (`VersionStatus`), and `agent_id` (an int FK to V2's
-    `agents`) all belong to a different pipeline — `src.agentspec.spec`'s own
-    module docstring already draws this line ("This is *not*
-    `src/models/agent_spec.py`"). `agent_id` here is `AgentSpec.metadata.id`
-    (a string like `agt_ar_assistant`), not a foreign key, for the same
-    reason: UC-1 has no `agents` table of its own yet, and `metadata.id` is
-    already the stable identifier the spec, the Postgres role (FR-34), and
-    the container name all key off.
-    """
-
-    __tablename__ = "uc1_agent_spec_versions"
-    __table_args__ = (UniqueConstraint("agent_id", "version", name="uq_uc1_agent_spec_versions_agent_version"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[str] = mapped_column(index=True, doc="AgentSpec.metadata.id, ví dụ agt_ar_assistant")
-    version: Mapped[int]
-    spec: Mapped[dict[str, Any]] = mapped_column(JSON, doc="AgentSpec.model_dump(mode='json', by_alias=True)")
-    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-
-class UC1SandboxRunStatus(StrEnum):
-    """How one sandbox turn (FR-36) ended. `BUDGET_EXCEEDED` is FR-39's own
-    outcome, kept distinct from `COMPLETED` because the approval dossier
-    (UC1-16, a later ticket) needs to tell "the agent answered" from "the
-    agent hit its ceiling mid-turn" at a glance, not by parsing the transcript.
-    """
-
-    COMPLETED = "completed"
-    BUDGET_EXCEEDED = "budget_exceeded"
-
-
-class UC1SandboxRun(Base):
-    """One sandbox chat turn's transcript — UC1-38 (#126), FR-36/FR-37/FR-38.
-
-    `thread_id` carries the `sandbox:` namespace prefix
-    (`src.compiler.sandbox.sandbox_thread_id`) so a row here is visibly never
-    a production conversation, even read straight out of the table. FR-38
-    ("không xin duyệt nếu chưa có ít nhất một lượt chat thử") is answered by
-    *this table having any row at all* for `(agent_id, version)` — UC1-39
-    (#127, not this ticket) is what wires that count into
-    `submit-for-approval`.
-    """
-
-    __tablename__ = "uc1_sandbox_runs"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[str] = mapped_column(index=True)
-    version: Mapped[int]
-    principal_employee_id: Mapped[str]
-    thread_id: Mapped[str]
-    message: Mapped[str] = mapped_column(doc="Câu người tạo gõ vào ô chat thử")
-    status: Mapped[UC1SandboxRunStatus]
-    transcript: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON, doc="[{'node','tool','args','result','tokens','latency_ms','cost_usd'}, ...] theo đúng thứ tự chạy"
-    )
-    total_cost_usd: Mapped[float]
-    final_answer: Mapped[str | None] = mapped_column(default=None, doc="None nếu lượt này dừng vì budget_exceeded")
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-
-class UC1EvalRun(Base):
-    """One golden-set smoke test run — UC1-17 (#133), FR-33, §11.2.
-
-    One row per `POST /agents/{id}/versions/{v}/golden-set/run` call: the
-    aggregate `pass_rate` `submit-for-approval` reads (replacing UC1-39's own
-    stand-in), and `case_results` — one entry per one of the 23 cases
-    (`{case_id, group, judge, passed, detail}`) — is what UC1-17's own "log kết
-    quả từng case vào hồ sơ duyệt" means: the dossier (UC1-16) renders this
-    column rather than re-deriving it from a transcript nobody kept.
-
-    Never updated in place. A version resubmitted after a fix runs the golden
-    set again and gets a new row, so `submit-for-approval`'s history shows every
-    attempt rather than only the last.
-    """
-
-    __tablename__ = "uc1_eval_runs"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[str] = mapped_column(index=True)
-    version: Mapped[int]
-    passed_count: Mapped[int]
-    total_count: Mapped[int]
-    pass_rate: Mapped[float]
-    case_results: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON, doc="[{'case_id','group','judge','passed','detail'}, ...] — one entry per golden-set case"
-    )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-
-class UC1VersionApproval(Base):
-    """One admin's `approve` decision on one version — UC1-17 (#133), FR-30/FR-32.
-
-    `lifecycle.approve` is a pure function that needs every signer's id *at
-    once* (`approver_ids: list[str]`), but HITL #2 arrives one admin, one HTTP
-    call, at a time — this table is what accumulates them between calls, so
-    the version transitions to `approved` the moment the count reaches
-    `authority.approval_quorum`, not before.
-
-    `UniqueConstraint(agent_id, version, admin_id)` is what makes "cùng một
-    người duyệt hai lần không đủ quorum" true by construction rather than by a
-    query remembering to `DISTINCT`: a second approve call from the same admin
-    on the same version simply has nothing new to insert.
-    """
-
-    __tablename__ = "uc1_version_approvals"
-    __table_args__ = (UniqueConstraint("agent_id", "version", "admin_id", name="uq_uc1_version_approvals_admin"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[str] = mapped_column(index=True)
-    version: Mapped[int]
-    admin_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
-
-class UC1PendingActionStatus(StrEnum):
-    """Where one write-tool call's `require_approval` decision sits — UC1-21
-    (#137)/UC1-23 (#139), FR-42/43/45/46. `APPROVED` is only ever reached
-    together with a real, PEP-reverified execution
-    (`src.api.uc1_action_approval_routes.decide_action`) in the same call
-    that sets it — there is no separate "approved but not yet executed"
-    state, because nothing in this batch's tickets needs one and a row that
-    could sit `approved` with no `result` yet would be a state a caller could
-    mistake for "the email was sent".
-    """
-
-    PENDING = "pending"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-
-
-class UC1PendingAction(Base):
-    """One `scope: write` tool call the PEP answered `require_approval` for —
-    UC1-21 (#137), FR-42/FR-43 — plus UC1-23's (#139) own two integrity rules
-    on the same row: `action_hash` is fixed at creation (FR-45, from
-    `src.compiler.tools.hash_action` over the *exact* `args` the model called
-    with) and never recomputed here, so a later edit to `args` (were one ever
-    made) stops matching it; `requested_by_*` is where FR-46's "approver ≠
-    requester" check on the decision endpoint reads the original asker's
-    identity from, since that identity has to survive past the graph turn
-    that created this row to be compared against whoever clicks approve,
-    possibly in a later request entirely.
-
-    Deliberately not keyed to `UC1AgentSpecVersion` by a foreign key:
-    `agent_id`/`version` name a spec the same string-keyed way every other
-    UC-1 table does (`UC1SandboxRun`'s own docstring gives the same reason).
-    """
-
-    __tablename__ = "uc1_pending_actions"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    agent_id: Mapped[str] = mapped_column(index=True)
-    version: Mapped[int]
-    tool: Mapped[str]
-    args: Mapped[dict[str, Any]] = mapped_column(JSON)
-    action_hash: Mapped[str] = mapped_column(index=True, doc="FR-45 — hash_action(tool, args) at creation time, fixed")
-    connection_id: Mapped[str]
-    approver_roles: Mapped[list[str]] = mapped_column(
-        JSON, default=list, doc="authz.rego's effective_approver_roles at request time"
-    )
-    requested_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    requested_by_sub: Mapped[str] = mapped_column(doc="Principal.sub of whoever asked — FR-46's own comparison target")
-    requested_by_employee_id: Mapped[str]
-    requested_by_department: Mapped[str]
-    requested_by_roles: Mapped[list[str]] = mapped_column(JSON, default=list)
-    status: Mapped[UC1PendingActionStatus] = mapped_column(default=UC1PendingActionStatus.PENDING)
-    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
-    decision_reason: Mapped[str | None] = mapped_column(default=None)
-    result: Mapped[dict[str, Any] | None] = mapped_column(
-        JSON, default=None, doc="The real implementation's own return value, once executed"
-    )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-    decided_at: Mapped[datetime | None] = mapped_column(default=None)
 
 
 class KnowledgeBaseMode(StrEnum):

@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 
 from src.db.models import AgentRun, AgentVersion, QualityScore, RunCost, VersionStatus
 from src.models.schemas import SandboxTranscriptEntry
-from src.pm.ledger import layer_one_scores, uc1_transcript
 from src.pm.taxonomy import classify_error, summarize_transcript
 from tests.conftest import ScriptedRun, auth_header, parse_sse, parse_sse_stream
 
@@ -145,18 +144,3 @@ def test_the_summary_reads_v2_tool_lines_that_arrive_before_their_node() -> None
     # V1: every step speaks.
     v1 = summarize_transcript([{"kind": "step", "step_id": "s1", "title": "Bước", "content": "Xong."}])
     assert v1.node_count == 1 and v1.answer == "Xong."
-
-
-def test_uc1_rows_unfold_into_the_flat_shape_and_layer_one_reads_them() -> None:
-    steps = [
-        {"node": "agent", "tool": None, "args": None, "result": "Để tôi tra.", "tokens": 30, "latency_ms": 200.0, "cost_usd": 0.001, "row_filter": None},
-        {"node": "tools", "tool": "erp.overdue_invoices", "args": {"days": 30}, "result": '[{"customer": "A"}]', "tokens": 0, "latency_ms": 50.0, "cost_usd": 0.0, "row_filter": {}},
-        {"node": "tools", "tool": "erp.send_reminder", "args": {"to": "a@x"}, "result": "denied: requires approval", "tokens": 0, "latency_ms": 5.0, "cost_usd": 0.0, "row_filter": {}},
-    ]
-    lines = uc1_transcript(steps)
-    assert [line.kind for line in lines] == ["step", "tool", "tool_result", "tool", "tool_result"]
-    assert lines[2].ok is True and lines[4].ok is False
-    summary = summarize_transcript([line.model_dump(mode="json") for line in lines])
-    assert summary.tool_calls == 2 and summary.tool_failures == 1 and summary.failure_node_type == "agent_llm"
-    scores = {s.name: s.value for s in layer_one_scores(lines, "Khách A quá hạn.", input_message="Ai quá hạn?")}
-    assert scores == {"tool_groundedness": 1.0, "tools_ok": 0.0}

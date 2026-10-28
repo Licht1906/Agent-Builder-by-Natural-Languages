@@ -12,12 +12,12 @@ tầng chúng cần.
 | `reranker` | Cloud Run (`min-instances=1` **trong giờ**, **8 vCPU / 4 GiB / concurrency 4**) | Model 2.2 GB tải lúc start — giữ ấm để khỏi tải lại mỗi cold start. Kích thước không tuỳ ý: xem §Sizing |
 | `db` (Postgres+pgvector) | Cloud SQL for PostgreSQL, private IP, **zonal** | Managed, có backup; `CREATE EXTENSION vector` chạy một lần sau khi tạo |
 | `qdrant` | Compute Engine VM (`internal-services`), không public IP | Cần persistent disk, Cloud Run không mount volume được |
-| `policy` (OPA) | Cùng VM `internal-services` | Stateless nhưng cần policy file cố định — gộp chung VM cho đỡ phức tạp thay vì tách Cloud Run riêng |
+| `policy` (OPA) | **Bỏ** (DS-21) | Là PEP của pipeline UC-1 song song; V2 tự áp phạm vi đọc, duyệt và ràng buộc payload trong runtime (`data_query`, `human_approval`, DS-08) |
 | `vault` | **Bỏ** (DS-20) | Mọi credential nằm trong SecretStore của nền tảng — bảng `secret_store_entries` trong Cloud SQL, mã hoá bằng `SECRET_STORE_KEY`. Gói xuất ra vẫn đọc được Vault *của công ty* (`secrets.backend: vault`) |
 | `mailhog` | **Bỏ** | Dev-only. Cần SMTP relay thật, cấu hình qua `SMTP_HOST`/`SMTP_USERNAME`/`SMTP_PASSWORD` |
 | `frontend/` | Firebase Hosting | SPA tĩnh; Hosting đồng thời reverse-proxy `/api/**` sang Cloud Run `backend` |
 
-Cloud Run (`backend`) nối vào `qdrant`/`policy` trên VM qua **Direct
+Cloud Run (`backend`) nối vào `qdrant` trên VM qua **Direct
 VPC egress** (`--network=app-vpc --subnet=app-subnet`), egress
 `private-ranges-only` — traffic ra Internet thật (OpenAI/OpenRouter/Tavily/SMTP
 relay) đi thẳng, không vòng qua VPC. Không dùng Serverless VPC Access
@@ -34,8 +34,7 @@ GitHub Actions ──build/push──> Artifact Registry
                 ├─ Cloud Run Job: alembic upgrade head + verify_uc1_data_surface.py
                 │        │
                 └─ Cloud Run: backend  ──Direct VPC egress──>  VM internal-services
-                   Cloud Run: reranker                            ├─ qdrant  (persistent disk)
-                                  │                                ├─ policy (OPA)
+                   Cloud Run: reranker                            └─ qdrant  (persistent disk)
                                   └── Cloud SQL (Postgres+pgvector, unix socket)
 
 Trình duyệt ──> Firebase Hosting ──/api/** rewrite──> Cloud Run: backend
@@ -182,7 +181,7 @@ trên — chúng đổi tiền lấy thời gian sẵn sàng, cái này đổi t
   chỗ khác) và lúc ấy `CORS_ORIGINS` mới thật sự có việc để làm.
 - **VM không có external IP, nên phải có Cloud NAT.** Không phải tuỳ chọn:
   `vm-startup.sh` cần `apt-get` và `download.docker.com` để cài Docker, còn
-  `docker compose up` cần kéo image qdrant/opa từ Docker Hub. Thiếu NAT
+  `docker compose up` cần kéo image qdrant từ Docker Hub. Thiếu NAT
   thì startup script chết câm lúc boot, và triệu chứng chỉ lộ ra ở lần SSH kế
   tiếp dưới dạng `sudo: docker: command not found` — không liên quan gì tới
   Docker. Private Google Access không thay được: nó chỉ mở API của Google.
@@ -203,26 +202,30 @@ trên — chúng đổi tiền lấy thời gian sẵn sàng, cái này đổi t
   gcloud compute ssh internal-services --zone=$ZONE --tunnel-through-iap \
     --command="cd /opt/app && sudo docker compose up -d --remove-orphans"
   gcloud secrets delete app-vault-token          # không còn ai đọc
-  gcloud compute firewall-rules update allow-connector-to-internal --rules=tcp:6333,tcp:6334,tcp:8181
+  gcloud compute firewall-rules update allow-connector-to-internal --rules=tcp:6333,tcp:6334
   gcloud run jobs delete backend-vault-seed --region=$REGION
   PROJECT_ID=<gcp-project-id> bash infra/gcp/schedule.sh   # function không còn VAULT_RESEED_JOB
   ```
 
-  Credential từng chỉ nằm trong Vault dev-mode không chuyển được (nó in-memory):
-  credential UC-1 do `backend-seed-credentials` ghi lại ở lần deploy kế tiếp; kết
-  nối nào tạo tay qua `POST /connections` thì nhập lại.
+  Credential từng chỉ nằm trong Vault dev-mode không chuyển được (nó in-memory) —
+  và từ DS-21 không còn gì cần chúng: chúng thuộc pipeline UC-1 đã gỡ.
+
+  Từ DS-21 (gỡ pipeline UC-1, ADR-0059 §11) VM cũng không còn chạy `policy`
+  (OPA). `docker compose up -d --remove-orphans` ở trên gỡ luôn container đó, và
+  lệnh firewall ở trên đã bỏ cổng 8181. Thêm một lần:
+
+  ```bash
+  gcloud run jobs delete backend-seed-credentials --region=$REGION   # job seed credential UC-1
+  ```
+
+  `alembic upgrade head` (bước migrate của deploy) xoá các bảng `uc1_*` và đổi
+  tài khoản `sales_rep`/`sales_manager` thành `creator` — một chiều, sao lưu
+  trước nếu cần giữ dữ liệu UC-1.
 - **Reranker không yêu cầu xác thực** trên Cloud Run — giữ đúng mô hình tin
   cậy hiện có của `docker-compose.yml` (gọi được qua tên service, không auth).
   Muốn siết lại (Cloud Run IAM + ID token) cần sửa
   `src/services/reranker.py` để đính token vào request — chưa nằm trong đợt
   hạ tầng này.
-- **`NETWORK_POLICY_HOST_ALIASES`** (UC1-35, per-agent network policy) map
-  hostname → tên service docker-compose cục bộ (`smtp.internal.corp: mailhog`
-  trong `.env.example`). Với `mailhog` bị bỏ và mô hình chạy trên Cloud Run,
-  mapping này không còn ý nghĩa như cũ — để trống, không đoán giá trị thay
-  thế. Bản thân module (`src/agentspec/network_policy.py`) đã tự ghi nó chỉ
-  *sinh ra artifact* compose override, chưa có `runtime`-per-agent container
-  thật sự áp dụng nó, nên để trống không phá tính năng nào đang chạy.
 
 ## Setup một lần
 
@@ -248,9 +251,8 @@ Script này (idempotent, chạy lại an toàn nếu lỗi giữa chừng):
    `SQL_AVAILABILITY=REGIONAL`, `VM_MACHINE_TYPE`, `VM_DISK_SIZE`.
 3. Tạo VM `internal-services` (không public IP) + persistent disk, chờ
    `vm-startup.sh` cài xong Docker, push
-   `infra/gcp/docker-compose.internal.yml` và
-   `docs/usecase_spec/platform/authz.rego` vào VM qua `gcloud compute scp`,
-   khởi động `qdrant`/`policy`.
+   `infra/gcp/docker-compose.internal.yml` vào VM qua `gcloud compute scp`,
+   khởi động `qdrant`.
 4. Tạo service account cho Cloud Run runtime và cho GitHub Actions deployer,
    gán IAM roles tối thiểu cần thiết.
 5. Dựng Workload Identity Federation — GitHub Actions xác thực bằng OIDC
@@ -315,7 +317,7 @@ Sau đó khai báo secret thật (API key, mật khẩu):
 cp .env.example infra/gcp/.env.production
 # điền OPENAI_API_KEY, OPENROUTER_API_KEY, JWT_SECRET, SECRET_STORE_KEY,
 # SEED_*_PASSWORD, SMTP_USERNAME/PASSWORD, v.v.
-# ĐỂ TRỐNG: DATABASE_URL, QDRANT_URL, OPA_URL,
+# ĐỂ TRỐNG: DATABASE_URL, QDRANT_URL,
 # SMTP_HOST, APP_ENV, CORS_ORIGINS, FRONTEND_URL — deploy.yml tự set những
 # cái này từ hạ tầng vừa dựng.
 
@@ -332,7 +334,7 @@ workflow mỗi khi thêm một biến môi trường mới — chỉ cần thêm
 ## Từ đây về sau: CI/CD tự động
 
 `git push` (hoặc merge PR) vào `main` → `.github/workflows/ci.yml` chạy
-lint/test/`opa test`/frontend build như hiện tại → nếu xanh,
+lint/test/smoke test gói/frontend build → nếu xanh,
 `.github/workflows/deploy.yml` tự chạy tiếp:
 
 1. Build + push image `backend` và `reranker` lên Artifact Registry (tag =
@@ -343,11 +345,8 @@ lint/test/`opa test`/frontend build như hiện tại → nếu xanh,
 3. Deploy `backend` (nối Cloud SQL qua unix socket, nối VM qua Direct VPC egress)
    và `reranker`, trỏ `RERANKER_URL` của `backend` vào URL Cloud Run thật của
    `reranker`.
-4. Chạy Cloud Run Job `backend-seed-credentials` (`scripts/seed_uc1_credentials.py`):
-   ghi credential của các tool UC-1 vào SecretStore. Idempotent; chạy mỗi lần
-   deploy cho chắc, không cần chạy lại mỗi sáng vì store nằm trong Cloud SQL.
-5. Smoke test `GET /health`.
-6. Gọi `app-scheduler?action=reconcile` — trả hạ tầng về đúng trạng thái theo
+4. Smoke test `GET /health`.
+5. Gọi `app-scheduler?action=reconcile` — trả hạ tầng về đúng trạng thái theo
    giờ. Deploy trong giờ làm việc thì để nguyên; deploy lúc nửa đêm thì tắt
    lại thứ mà bước 2 vừa đánh thức.
 
@@ -403,28 +402,13 @@ gcloud run jobs deploy backend-oneoff --image=<backend-image-vừa-deploy> \
   --command=python --args="scripts/init_qdrant.py"
 gcloud run jobs execute backend-oneoff --region=$REGION --wait
 # tương tự cho scripts/seed_kb.py, scripts/seed_uc1_demo_data.py — đổi --args mỗi lần
-# (credential UC-1 thì deploy.yml đã seed: job backend-seed-credentials)
-```
-
-## Cập nhật `authz.rego`
-
-Không nằm trong CI/CD tự động (đúng tinh thần comment sẵn có trong
-`docker-compose.yml`: đổi version OPA "là một quyết định, không phải một bản
-cập nhật thường quy" — thay đổi Rego semantics ở đây thay đổi quyền của mọi
-tool call). Cập nhật thủ công:
-
-```bash
-gcloud compute scp docs/usecase_spec/platform/authz.rego internal-services:/opt/app/policy/authz.rego \
-  --zone=$ZONE --tunnel-through-iap
-gcloud compute ssh internal-services --zone=$ZONE --tunnel-through-iap \
-  --command="cd /opt/app && sudo docker compose restart policy"
 ```
 
 ## File liên quan
 
 - `infra/gcp/setup.sh` — provision hạ tầng một lần.
 - `infra/gcp/vm-startup.sh` — startup script của VM `internal-services`.
-- `infra/gcp/docker-compose.internal.yml` — subset `qdrant`/`policy`
+- `infra/gcp/docker-compose.internal.yml` — `qdrant`
   chạy trên VM đó, cùng image/version pin với `docker-compose.yml` gốc.
 - `infra/gcp/sync-secrets.sh` — đồng bộ `infra/gcp/.env.production` vào
   Secret Manager.

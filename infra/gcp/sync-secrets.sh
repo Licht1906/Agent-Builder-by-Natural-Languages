@@ -23,7 +23,7 @@ ENV_FILE="${1:-infra/gcp/.env.production}"
 # NETWORK_POLICY_HOST_ALIASES bị bỏ theo đúng phần "Known gaps" của
 # DEPLOYMENT.md: giá trị trong .env.example map `smtp.internal.corp` sang
 # `mailhog`, một service dev-only không tồn tại trên GCP.
-SKIP_KEYS=" DATABASE_URL QDRANT_URL OPA_URL SMTP_HOST APP_ENV CORS_ORIGINS FRONTEND_URL RERANKER_URL NETWORK_POLICY_HOST_ALIASES "
+SKIP_KEYS=" DATABASE_URL QDRANT_URL SMTP_HOST APP_ENV CORS_ORIGINS FRONTEND_URL RERANKER_URL "
 
 while IFS='=' read -r key value; do
   case "$key" in

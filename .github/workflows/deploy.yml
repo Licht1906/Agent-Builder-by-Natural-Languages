@@ -1,7 +1,7 @@
 # Deploys `backend` + `reranker` to Cloud Run after CI (.github/workflows/ci.yml)
-# passes on main. Does NOT touch `qdrant`/`policy` (the internal-services
+# passes on main. Does NOT touch `qdrant` (the internal-services
 # VM) or Cloud SQL — those are provisioned once by infra/gcp/setup.sh and change
-# rarely; see DEPLOYMENT.md for how to update them (e.g. authz.rego edits).
+# rarely; see DEPLOYMENT.md for how to update them.
 # `frontend/` deploy lên Firebase Hosting ở job `deploy-frontend` cuối file.
 #
 # Auth is via Workload Identity Federation (infra/gcp/setup.sh sets this up) —
@@ -163,7 +163,7 @@ jobs:
           echo "set_secrets=${list%,}" >> "$GITHUB_OUTPUT"
 
       # backend needs Cloud SQL (unix socket) + the internal-services VM
-      # (qdrant/policy). Direct VPC egress thay cho Serverless VPC Access
+      # (qdrant). Direct VPC egress thay cho Serverless VPC Access
       # connector: connector chạy tối thiểu hai e2-micro tính tiền 24/24 và
       # không scale-to-zero, tức đúng thứ chi phí mà lịch bật/tắt sinh ra để
       # loại bỏ. private-ranges-only vẫn giữ nguyên ý nghĩa cũ — gọi
@@ -187,7 +187,7 @@ jobs:
             --port=8000 \
             --min-instances=${{ vars.GCP_SCHEDULER_URL != '' && '0' || '1' }} --memory=1Gi --cpu=1 \
             --set-secrets="${{ steps.secrets.outputs.set_secrets }}" \
-            --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:6333@OPA_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:8181@CORS_ORIGINS=${{ vars.CORS_ORIGINS || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}@SMTP_HOST=${{ vars.SMTP_HOST }}@FRONTEND_URL=${{ vars.FRONTEND_URL || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}" \
+            --set-env-vars="^@^APP_ENV=production@QDRANT_URL=http://${{ vars.GCP_INTERNAL_VM_IP }}:6333@CORS_ORIGINS=${{ vars.CORS_ORIGINS || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}@SMTP_HOST=${{ vars.SMTP_HOST }}@FRONTEND_URL=${{ vars.FRONTEND_URL || format('https://{0}.web.app', vars.GCP_PROJECT_ID) }}" \
             --allow-unauthenticated
 
       # No VPC connector: the reranker is a standalone model server, same
@@ -237,23 +237,6 @@ jobs:
           RERANKER_URL=$(gcloud run services describe reranker --region="$REGION" --format='value(status.url)')
           gcloud run services update backend --region="$REGION" \
             --update-env-vars="RERANKER_URL=$RERANKER_URL"
-
-      # Credential của các tool UC-1 vào SecretStore của nền tảng (DS-20) — một
-      # bảng trong Cloud SQL, nên sống qua mọi lần tắt/bật, khác Vault dev-mode
-      # trước đây (mất sạch mỗi đêm, phải re-seed mỗi sáng). Chạy lại mỗi lần
-      # deploy cho chắc: script idempotent, và không cần VPC — chỉ Cloud SQL.
-      - name: Seed credential UC-1 vào SecretStore
-        run: |
-          gcloud run jobs deploy backend-seed-credentials \
-            --image="$AR_HOST/$PROJECT_ID/app/backend:${{ needs.build-and-push.outputs.tag }}" \
-            --region="$REGION" \
-            --service-account="${{ vars.GCP_RUN_SA }}" \
-            --set-cloudsql-instances="${{ vars.GCP_SQL_CONNECTION_NAME }}" \
-            --set-secrets="${{ steps.secrets.outputs.set_secrets }}" \
-            --set-env-vars="APP_ENV=production" \
-            --command=python --args="scripts/seed_uc1_credentials.py" \
-            --max-retries=1 \
-            --execute-now --wait
 
       - name: Smoke test
         run: |

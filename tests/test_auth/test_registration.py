@@ -32,7 +32,7 @@ def _registration(**overrides: Any) -> Registration:
     defaults: dict[str, Any] = {
         "email": "newcomer@example.com",
         "password": _PASSWORD,
-        "role": UserRole.SALES_REP,
+        "role": UserRole.CREATOR,
         "job_title": "Nhân viên kinh doanh",
         "department": "SALES",
     }
@@ -69,8 +69,8 @@ def _clean_up_registered_accounts(db_session: Session) -> Generator[None, None, 
 
 def test_a_normal_signup_is_always_pending_with_the_requested_role(db_session: Session) -> None:
     """No exceptions, including a request for `agent_admin` itself — see the module docstring."""
-    user = register_user(db_session, _registration(role=UserRole.SALES_MANAGER))
-    assert user.role is UserRole.SALES_MANAGER
+    user = register_user(db_session, _registration(role=UserRole.PM))
+    assert user.role is UserRole.PM
     assert user.status is UserStatus.PENDING
 
     admin_request = register_user(

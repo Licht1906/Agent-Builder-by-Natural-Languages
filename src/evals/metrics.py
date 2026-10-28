@@ -24,9 +24,9 @@ platform, which is what a threshold and a calibration set need it to be. Read
 "this is X".
 
 Nothing here calls the `ragas`/`deepeval` packages, and nothing here ever will —
-`src.evals.uc1_deepeval_runner`'s module docstring already gives the reason
-(a second network path, air-gap, a second seam nobody can keep in step with the
-first), and this ADR keeps it: nothing is a `ragas`/`deepeval` import away from a
+UC-1's deepeval runner (removed with the UC-1 pipeline, DS-21) gave the reason
+— a second network path, air-gap, a second seam nobody can keep in step with
+the first — and this ADR keeps it: nothing is a `ragas`/`deepeval` import away from a
 metric that already exists.
 """
 

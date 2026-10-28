@@ -66,7 +66,7 @@ Nên bật hết bằng một lệnh:
 ```bash
 make up
 # tương đương:
-# docker compose up -d --wait db qdrant reranker policy mailhog
+# docker compose up -d --wait db qdrant reranker mailhog
 ```
 
 `--wait` đợi tới khi mọi healthcheck xanh chứ không chỉ tới khi Docker đã tạo
@@ -79,7 +79,6 @@ sau model đã nằm trong volume `hf_cache`, chỉ còn vài chục giây).
 | `db` | 5432 | Không có gì chạy. `/health` trả `"database": "error"` |
 | `qdrant` | 6333 | **Upload vẫn 201, ingest chết ngầm.** Tài liệu ở trạng thái `failed`, và dấu hiệu đầu tiên là agent trả lời "tài liệu không đề cập" về đúng cái tài liệu bạn vừa tải lên |
 | `reranker` | 8001 | Không sập, nhưng tìm kiếm **tệ đi thấy rõ**: `src/services/reranker.py` lùi về thứ tự RRF thô, bỏ luôn ngưỡng điểm, và chỉ để lại một dòng log |
-| `policy` | 8181 | Fail **closed** ngay lời gọi tool đầu tiên — đúng thiết kế, không phải bug |
 | `mailhog` | 1025/8025 | Không gửi/xem được mail thử |
 
 Tắt cho nhẹ máy khi nghỉ: `make stop` (đỗ container lại; **không** dùng
@@ -94,13 +93,7 @@ alembic upgrade head          # hoặc: make migrate
 # 2. Tạo collection trong Qdrant — idempotent, chạy lại không sao
 make init-qdrant
 
-# 3. (UC-1) Nạp golden set vào suite của agent UC-1 — chỉ cần một lần mỗi DB
-# (ADR-0054 §6, EVAL-7). Idempotent: chạy lại chỉ báo "skipped". Nếu bỏ qua
-# bước này, lần chạy "golden-set/run" đầu tiên tự nạp từ file, nên đây chỉ
-# là cách làm trước cho chủ động, không bắt buộc.
-python scripts/import_golden_set.py --agent agt_ar_assistant --file golden/uc1_ar_v3.jsonl
-
-# 4. (tuỳ chọn) Nạp sẵn hai tủ tài liệu demo từ seed_corpus/
+# 3. (tuỳ chọn) Nạp sẵn hai tủ tài liệu demo từ seed_corpus/
 make seed-kb
 ```
 
@@ -537,9 +530,9 @@ nhớ luôn (`@lru_cache`).
 Mỗi ngày khi bật máy lên code tiếp, ba lệnh ở ba tab terminal:
 
 - **Tab 1 (dịch vụ nền):** `make up`
-  → bật `db` `qdrant` `reranker` `policy` `mailhog` và đợi tới khi tất
+  → bật `db` `qdrant` `reranker` `mailhog` và đợi tới khi tất
   cả xanh. Không có `make` trên Windows thì:
-  `docker compose up -d --wait db qdrant reranker policy mailhog`
+  `docker compose up -d --wait db qdrant reranker mailhog`
 - **Tab 2 (Backend):** `.\.venv\Scriptsctivate` rồi
   `uvicorn src.main:app --reload --host 0.0.0.0 --port 8000 --loop src.server_loop:new_event_loop`
   → http://localhost:8000/docs

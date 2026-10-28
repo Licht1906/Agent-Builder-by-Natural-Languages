@@ -114,7 +114,7 @@ def sql_wait_runnable(timeout_s: int = 420) -> None:
 
 # --- Compute Engine VM ----------------------------------------------------
 # vm-startup.sh chạy lại mỗi lần boot và kết thúc bằng `docker compose up -d`,
-# nên qdrant/policy tự lên lại — không cần SSH vào làm gì thêm.
+# nên qdrant tự lên lại — không cần SSH vào làm gì thêm.
 
 
 def vm_set(running: bool) -> None:

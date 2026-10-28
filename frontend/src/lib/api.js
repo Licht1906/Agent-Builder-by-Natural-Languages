@@ -178,51 +178,6 @@ export const auth = {
   me: () => request("/auth/me"),
 };
 
-/* UC1-05/06 (#119, #120) — the UC-1 meta-agent's one door. Separate from
-   `designer` on purpose: that is V2's multi-turn interview, this is a single
-   natural-language description that comes back as a spec plus `clarifications`
-   the field-level form (`pages/MetaAgentDraft.jsx`) renders beside each field. */
-export const metaagent = {
-  draftSpec: (description) => request("/metaagent/draft-spec", { method: "POST", body: { description } }),
-};
-
-/* UC-1 spec versions (`src.api.uc1_agent_routes`). Its own object, not part of
- * `agents` above: that one is V2's `/agents/{int}` surface — a different table,
- * keyed by an integer id, sharing only the URL prefix. `agentId` here is the
- * spec's `metadata.id` (`agt_...`), which is also its Postgres role and
- * container name, so it is chosen once and never changes. */
-export const uc1Agents = {
-  /** Every UC-1 agent with at least one spec version. The way into everything
-   *  below, all of which is addressed by `(agentId, version)`. */
-  catalog: () => request("/uc1-agents"),
-  /** Confirm a drafted spec as version 1. The platform pins version, status and
-   *  id — whatever the meta-agent wrote for those does not survive the trip. */
-  confirmDraft: (agentId, spec) => request(`/agents/${agentId}/spec-versions`, { method: "POST", body: spec }),
-  specVersions: (agentId) => request(`/agents/${agentId}/spec-versions`),
-  /** FR-13: edit any field except the guardrail baseline and the identity/
-   *  lifecycle ones. Never writes `version` — it always inserts `version + 1`
-   *  as a fresh draft, which is what makes an old version's content immutable
-   *  by construction rather than by the caller being careful. */
-  patchVersion: (agentId, version, payload) =>
-    request(`/agents/${agentId}/versions/${version}`, { method: "PATCH", body: payload }),
-};
-
-/* UC-1 sandbox (`src.api.sandbox_routes`) — FR-36/37. Distinct from `chat`'s
- * `sandbox` above, which streams V2's `workflow-sandbox-runs`: a different
- * table, a different graph, and no bearing on whether a UC-1 version may be
- * submitted for approval. */
-export const uc1Sandbox = {
-  /** One rehearsal turn, SSE. Frames: `thread`, then a `step` per transcript
-   *  entry, then `done` (or `error` when the budget ran out mid-turn). The
-   *  backend decides everything it can — 404, an uncompilable spec — before
-   *  opening the stream, so those arrive as a thrown `ApiError`, not a frame. */
-  chat: (agentId, version, body, onEvent, options) =>
-    stream(`/agents/${agentId}/versions/${version}/sandbox/chat`, body, onEvent, options),
-  /** FR-37: every recorded turn for this version, newest first. Also the
-   *  evidence FR-38's gate counts — one run here is what unblocks submitting. */
-  runs: (agentId, version) => request(`/agents/${agentId}/versions/${version}/sandbox/runs`),
-};
-
 export const agents = {
   mine: () => request("/agents"),
   running: () => request("/agents/running"),
@@ -548,69 +503,6 @@ export const approvals = {
     request(`/admin/approvals/${versionId}/reject`, { method: "POST", body: { reason } }),
   overrideEval: (versionId, reason) =>
     request(`/admin/approvals/${versionId}/eval-override`, { method: "POST", body: { reason } }),
-};
-
-/* UC1-16 (#132) — the UC-1 approval surface (`src.api.uc1_approval_routes`).
- * A separate object from `approvals` above: that one is V2's own pipeline
- * (`/admin/approvals`), a different set of documents entirely (see that
- * module's own docstring for why the two do not share a queue). */
-export const uc1Approvals = {
-  queue: () => request("/approvals/queue"),
-  dossier: (agentId, version) => request(`/agents/${agentId}/versions/${version}/dossier`),
-  diff: (agentId, version, against) =>
-    request(`/agents/${agentId}/versions/${version}/diff${against == null ? "" : `?against=${against}`}`),
-  approve: (agentId, version) => request(`/agents/${agentId}/versions/${version}/approve`, { method: "POST" }),
-  runGoldenSet: (agentId, version) =>
-    request(`/agents/${agentId}/versions/${version}/golden-set/run`, { method: "POST" }),
-  submitForApproval: (agentId, version) =>
-    request(`/agents/${agentId}/versions/${version}/submit-for-approval`, { method: "POST" }),
-  deploy: (agentId, version) => request(`/agents/${agentId}/versions/${version}/deploy`, { method: "POST" }),
-  /** FR-35's kill switch. Targets whichever version is *currently* deployed —
-   *  no version in the path, because "stop whatever is live" is a fact about
-   *  status, not something a caller names. */
-  suspend: (agentId) => request(`/agents/${agentId}/suspend`, { method: "POST" }),
-  /** FR-51: point the deployed pointer back at an older `approved`/`suspended`
-   *  version. Never creates a version and never asks for a fresh signature. */
-  rollback: (agentId, version) => request(`/agents/${agentId}/rollback`, { method: "POST", body: { version } }),
-};
-
-/* UC1-21 (#137) — the action approval queue. A *different* queue from
- * `uc1Approvals` above: that one approves a spec version once, this one
- * approves a single write-tool call the runtime paused mid-turn (FR-42/FR-43),
- * and it is keyed by `action_hash`, not by `(agent_id, version)`. Open to any
- * signed-in caller (`CurrentUser`), because the approver is whoever holds the
- * role the policy named, not necessarily an admin. */
-export const uc1Actions = {
-  queue: () => request("/approvals/actions/queue"),
-  decide: (actionHash, decision, reason) =>
-    request(`/approvals/actions/${actionHash}/decision`, { method: "POST", body: { decision, reason } }),
-};
-
-/* UC1-19 (#135) — talking to the version that is actually deployed. The
- * sandbox's counterpart, and deliberately not the same call: this one resolves
- * the agent's `deployed` version itself (there is at most one) instead of
- * taking a version number, so a caller cannot chat with an unapproved spec. */
-export const uc1Chat = {
-  /** The deployed agents *this* caller may use. Deliberately not
-   *  `uc1Agents.catalog()`: that one is `agent_admin`-only and lists every
-   *  agent at any status, which is the builder's question. This lists only
-   *  what is running and only what the caller is inside the `audience` of —
-   *  the end user's question, and until it existed the chat call below was
-   *  open to everyone while nothing told anyone an agent existed to call. */
-  available: () => request("/uc1-agents/available"),
-  deployed: (agentId, body, onEvent, options) =>
-    stream(`/agents/${agentId}/deployed/chat`, body, onEvent, options),
-};
-
-/* UC1-08 (#122) — connections. `credential` goes in once and is never read
- * back: every response carries `credential_ref` (`vault://conn/<name>`) and
- * never the secret itself (FR-22). */
-export const uc1Connections = {
-  list: () => request("/connections"),
-  create: (payload) => request("/connections", { method: "POST", body: payload }),
-  /** FR-23's dry run: proves the credential works and that every
-   *  `allowed_objects` entry really exists, before a spec depends on it. */
-  probe: (connectionId) => request(`/connections/${connectionId}/probe`, { method: "POST" }),
 };
 
 /* Per-user OAuth — the person links their own Google account, and every agent

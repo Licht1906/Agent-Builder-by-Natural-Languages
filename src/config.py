@@ -104,25 +104,6 @@ class Settings(BaseSettings):
     seed_agent_admin_email: str = "agent-admin@example.com"
     seed_agent_admin_password: str = "agent-admin-dev-password"
 
-    # The two *business* personas UC-1 is demonstrated with, seeded for the same
-    # reason the three above are: an agent whose `audience.roles` names
-    # `sales_rep`/`sales_manager` cannot be exercised by any account this
-    # platform ships with, because `agent_admin` is an IT role and the PEP
-    # refuses it by design ("caller holds no role listed in audience.roles").
-    # Without these two, the only way to see a UC-1 agent actually answer is to
-    # register a user by hand and wait for activation — or to run the test
-    # suite against the dev database, which is where they used to come from.
-    #
-    # `employee_id` is the load-bearing half, not the email: E102 is the rep
-    # spec.md §8's own row-filter example follows ("7 dòng"), and E201 is the
-    # manager persona `scripts/seed_uc1_demo_data.py` gives 23 overdue invoices
-    # to. Changing these two ids silently detaches every demo number from the
-    # account that is supposed to see it.
-    seed_sales_rep_email: str = "sales.rep@demo.local"
-    seed_sales_rep_password: str = "sales-rep-dev-password"
-    seed_sales_manager_email: str = "sales.manager@demo.local"
-    seed_sales_manager_password: str = "sales-manager-dev-password"
-
     # ADR-0051: the PM control room's own account, role `pm` — seeded by
     # migration `b3c8e47a9d15` the way the others are. Not an admin: the
     # platform admin and the PM are different people with different powers,
@@ -222,8 +203,8 @@ class Settings(BaseSettings):
     # FastAPI service — see reranker/app.py for why it is a service of its own.
     reranker_url: str = "http://localhost:8001"
     #: The reranker gets a timeout of its own rather than borrowing
-    #: `tool_http_timeout_seconds` (15s), for the reason `opa_http_timeout_seconds`
-    #: has one — except in the opposite direction. 15s is sized for a slow
+    #: `tool_http_timeout_seconds` (15s), because the right number is a different
+    #: one — and here a larger one, not a smaller. 15s is sized for a slow
     #: *external* API; a cross-encoder scoring 40 candidates is slow **local**
     #: work whose duration is a known function of how much CPU it was given:
     #:
@@ -336,31 +317,6 @@ class Settings(BaseSettings):
     # No Vault settings (DS-20 / ADR-0059 §9): every platform credential is read
     # through `src.services.secret_store.SecretStore`. An old `.env` still
     # naming VAULT_URL/VAULT_TOKEN is ignored (`extra="ignore"` above).
-
-    # Policy sidecar (UC1-12 / #113, §6.2). OPA reached over its own REST API
-    # (`POST /v1/data/agentbuilder/authz/decision`), evaluating
-    # `docs/usecase_spec/platform/authz.rego` — the PEP every tool call must
-    # clear. A short timeout on purpose: this gates every tool call the runtime
-    # makes, so a hung sidecar has to fail closed in about a second, not wait
-    # out `tool_http_timeout_seconds` (15s), which is sized for slow external
-    # tools, not a local policy check.
-    opa_url: str = "http://localhost:8181"
-    opa_http_timeout_seconds: float = Field(default=2.0, gt=0)
-
-    # NetworkPolicy (UC1-35 / #147, §10.4/T5). Where `src.agentspec.
-    # network_policy.write_network_policy` writes each deployed agent's
-    # `docker-compose.<id>.network.yml` override — an extra `-f` for
-    # `docker compose up`, not merged into the checked-in `docker-compose.yml`.
-    network_policy_dir: str = "./deploy/network-policies"
-
-    # `{hostname: compose_service_name}` — which real, already-running
-    # compose service answers for each `connections[].allowed_hosts` entry
-    # this deployment actually has one for (e.g. `{"smtp.internal.corp":
-    # "mailhog"}` for this demo profile). An `allowed_hosts` entry with no
-    # key here gets no network membership at all — `src.agentspec.
-    # network_policy`'s own module docstring on why that is the fail-closed,
-    # never-fabricated default rather than a startup error.
-    network_policy_host_aliases: dict[str, str] = Field(default_factory=dict)
 
     # Control plane (UC1-26 / #142, §4.7/§12.4, FR-52). The *one* pull-only door
     # to the vendor: `src.services.control_plane.pull_template` is the only

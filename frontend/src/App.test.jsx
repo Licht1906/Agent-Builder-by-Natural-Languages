@@ -15,10 +15,6 @@ vi.mock("./lib/api", async () => {
     auth: { me: vi.fn() },
     approvals: { queue: vi.fn().mockResolvedValue([]) },
     agents: { mine: vi.fn().mockResolvedValue([]), running: vi.fn().mockResolvedValue([]) },
-    uc1Agents: { catalog: vi.fn().mockResolvedValue([]) },
-    uc1Connections: { list: vi.fn().mockResolvedValue([]) },
-    uc1Actions: { queue: vi.fn().mockResolvedValue([]) },
-    uc1Approvals: { queue: vi.fn().mockResolvedValue([]) },
     adminUsers: { list: vi.fn().mockResolvedValue([]), activate: vi.fn() },
     knowledgeBases: { list: vi.fn().mockResolvedValue([]) },
   };
@@ -36,7 +32,6 @@ beforeEach(() => {
   api.approvals.queue.mockResolvedValue([]);
   api.agents.mine.mockResolvedValue([]);
   api.agents.running.mockResolvedValue([]);
-  api.uc1Agents.catalog.mockResolvedValue([]);
 });
 
 /* The shell is `height:100vh; overflow:hidden` and owns no scroll of its own —
@@ -76,10 +71,9 @@ describe("the Data sources tab", () => {
   });
 });
 
-/* The Enterprise (UC-1) feature area is no longer surfaced in the sidebar —
-   see `AppLayout.jsx`. Its routes still exist in `App.jsx`, but nothing in the
-   nav points at them, so there is nothing here to click. */
-describe("the Enterprise feature area is hidden from the nav", () => {
+/* The Enterprise (UC-1) feature area went with the UC-1 pipeline (DS-21):
+   no route, no nav entry, nothing here to click. */
+describe("the Enterprise feature area is gone from the nav", () => {
   it("shows no Enterprise section or review queue", async () => {
     draw();
     await waitFor(() => expect(screen.getByText("Agentlab")).toBeInTheDocument());

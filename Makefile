@@ -1,4 +1,4 @@
-.PHONY: up stop run migrate init-qdrant reconcile-qdrant seed-kb seed-uc1-credentials seed-demo seed-uc1 verify-uc1 \
+.PHONY: up stop run migrate init-qdrant reconcile-qdrant seed-kb seed-demo seed-uc1 verify-uc1 \
         test lint format typecheck check clean \
         frontend-install frontend-run frontend-build frontend-test frontend-check \
         check-all
@@ -10,20 +10,19 @@
 # with `make run` starts nothing, so before this target the honest instruction
 # was six service names a person had to remember and would not.
 #
-# All six, not just `db`. Missing `qdrant` is the one that bites hardest and
+# All five, not just `db`. Missing `qdrant` is the one that bites hardest and
 # latest: upload succeeds, the ingest job fails in the background, and the
 # first sign of it is an agent answering "tài liệu không đề cập" about a
 # document sitting right there. `reranker` down is quieter but not harmless —
 # search degrades to the unthresholded RRF order (`src.services.reranker`), so
-# results come back visibly worse with only a log line to say why. `policy`
-# fails *closed* on the first tool call.
+# results come back visibly worse with only a log line to say why.
 #
 # `--wait` blocks until every healthcheck is green rather than until Docker
 # has merely started the containers: `reranker` loads a 2.2 GB cross-encoder
 # before it answers, so "started" and "usable" are about two minutes apart on
 # a cold cache and this target would otherwise hand back a prompt that lies.
 up:
-	docker compose up -d --wait db qdrant reranker policy mailhog
+	docker compose up -d --wait db qdrant reranker mailhog
 
 # `stop`, never `down`: `down` removes the containers, and with them anything
 # not on a named volume. This just parks them.
@@ -57,18 +56,6 @@ reconcile-qdrant:
 seed-kb: init-qdrant
 	python scripts/seed_kb.py
 
-# The credentials UC-1's tools resolve, into the platform's SecretStore (DS-20).
-#
-# Skipping it now fails *visibly*: the ERP tools return `{"source": ...,
-# "error": "chưa có kết nối ERP nào được cấu hình"}` with no `rows` key, so the
-# agent reports that it could not read rather than reporting zero of them.
-# It used to be silent — `resolve_credential_via` flattened both a missing and
-# an unreadable credential to `""` and the tools dressed that up as `rows: []` —
-# and the symptom was an agent confidently answering "không có dữ liệu" over a
-# `v_ar_open` holding 231 rows. See `_unreadable` in `src.compiler.tools`.
-seed-uc1-credentials:
-	python scripts/seed_uc1_credentials.py
-
 # UC1-15 (#116): the Olist-shaped AR rows `v_ar_open`/`v_customer_safe` read.
 # Without `--reset` this fails loudly on a conflict rather than duplicating the
 # dataset — pass it by hand (`python scripts/seed_uc1_demo_data.py --reset`) to
@@ -80,15 +67,9 @@ seed-demo:
 # The one command after `pytest` has run: the suite resets the schema on this
 # same database (`tests/conftest.py::_fresh_postgres_schema`, no SQLite
 # fallback per issue #3), which empties `fin_invoice`/`customers`/`orders`/
-# `crm_sales_assignment` and the credentials in the secret store. Both halves have to be back before the agent can read a single
-# receivable.
-#
-# Only the `seed-demo` half is still silent when skipped, and unavoidably so:
-# empty base tables are a real, readable `rows: []`, indistinguishable from a
-# scope that legitimately matched nothing. The `seed-uc1-credentials` half
-# announces itself — see that target. So an agent answering "không có dữ liệu"
-# with no `error` in its transcript points here, not at the credentials.
-seed-uc1: seed-demo seed-uc1-credentials
+# `crm_sales_assignment`. Kept as an alias of `seed-demo` since the UC-1
+# pipeline's credentials went with it (DS-21).
+seed-uc1: seed-demo
 
 # UC1-14 (#115): proves the grants and row-level security the seeded data is
 # read through. Rolls everything it writes back, so it is safe to run after

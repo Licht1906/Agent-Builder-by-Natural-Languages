@@ -11,21 +11,14 @@ import LoginPage from "./pages/Login";
 import RegisterPage from "./pages/Register";
 import Dashboard, { screenForVersion } from "./pages/Dashboard";
 import DesignerPage from "./pages/Designer";
-import MetaAgentDraftPage from "./pages/MetaAgentDraft";
 import SpecPage from "./pages/Spec";
 import BuilderPage from "./pages/Builder";
 import ChatPage from "./pages/Chat";
 import { AdminQueue, AdminDossier } from "./pages/AdminApprovals";
-import { UC1ApprovalQueue, UC1ApprovalDossier } from "./pages/UC1Approvals";
 import AdminSettings from "./pages/AdminSettings";
 import AdminUsers from "./pages/AdminUsers";
 import PMDashboard from "./pages/PMDashboard";
 import { PM_TABS, PM_VIEWS, pmTabOf } from "./pages/pm/tabs";
-import UC1Agents from "./pages/UC1Agents";
-import UC1MyAgents from "./pages/UC1MyAgents";
-import UC1Workbench from "./pages/UC1Workbench";
-import UC1Connections from "./pages/UC1Connections";
-import UC1ActionQueue from "./pages/UC1ActionQueue";
 import KnowledgeBasesPage from "./pages/KnowledgeBases";
 
 /* ============================================================
@@ -67,8 +60,6 @@ export default function App() {
      that opening a settled dossier and coming back lands on the list it was
      opened from; state inside the page would be remounted away. */
   const [reviewTab, setReviewTab] = useState("pending");
-  const [uc1Review, setUc1Review] = useState(null); // { agentId, version }
-  const [uc1AgentId, setUc1AgentId] = useState(null); // the UC-1 workbench's subject
   const [toast, setToast] = useState(null);
   const [queueSize, setQueueSize] = useState(null);
   const [pendingAgentId, setPendingAgentId] = useState(linkedAgentId);
@@ -226,30 +217,6 @@ export default function App() {
   } else if (view === "admin-dossier") {
     crumb = t("ADMIN");
     pageTitle = t("Approval dossier");
-  } else if (view === "metaagent-draft") {
-    crumb = t("ENTERPRISE");
-    pageTitle = t("New Enterprise agent");
-  } else if (view === "uc1-my-agents") {
-    crumb = t("ENTERPRISE");
-    pageTitle = t("Agents you can use");
-  } else if (view === "uc1-agents") {
-    crumb = t("ENTERPRISE");
-    pageTitle = t("Enterprise agents");
-  } else if (view === "uc1-workbench") {
-    crumb = t("ENTERPRISE");
-    pageTitle = t("Agent workbench");
-  } else if (view === "uc1-connections") {
-    crumb = t("ENTERPRISE");
-    pageTitle = t("Connections");
-  } else if (view === "uc1-actions") {
-    crumb = t("ENTERPRISE");
-    pageTitle = t("Action queue");
-  } else if (view === "uc1-queue") {
-    crumb = t("ADMIN");
-    pageTitle = t("Enterprise review queue");
-  } else if (view === "uc1-dossier") {
-    crumb = t("ADMIN");
-    pageTitle = t("Approval dossier");
   } else if (view === "knowledge-bases") {
     crumb = t("WORKSPACE");
     pageTitle = t("Data sources");
@@ -303,15 +270,9 @@ export default function App() {
           goDashboard={goDashboard}
           startDesigner={() => setView("designer")}
           openBuilder={handleOpenBuilder}
-          startMetaAgentDraft={() => setView("metaagent-draft")}
           openApprovals={() => setView("admin-queue")}
-          openUc1Approvals={() => setView("uc1-queue")}
           openUsers={() => setView("admin-users")}
           openPm={openPm}
-          openUc1Agents={() => setView("uc1-agents")}
-          openUc1MyAgents={() => setView("uc1-my-agents")}
-          openUc1Connections={() => setView("uc1-connections")}
-          openUc1Actions={() => setView("uc1-actions")}
           openSettings={() => setView("admin-settings")}
           openKnowledgeBases={() => setView("knowledge-bases")}
           onLogout={logout}
@@ -327,50 +288,6 @@ export default function App() {
           )}
 
           {view === "designer" && <DesignerPage onSpecReady={specProposed} />}
-
-          {/* ── Enterprise ── The same shell as everything above it: these
-              screens were standalone until the CSS sync, which is why they read
-              as a different product. Their `back` is now a within-section move
-              (workbench → catalog), not a way out of a page that had no nav. */}
-          {view === "metaagent-draft" && (
-            <MetaAgentDraftPage
-              notify={notify}
-              openWorkbench={(agentId) => { setUc1AgentId(agentId); setView("uc1-workbench"); }}
-            />
-          )}
-
-          {view === "uc1-agents" && (
-            <UC1Agents openAgent={(agentId) => { setUc1AgentId(agentId); setView("uc1-workbench"); }} />
-          )}
-
-          {view === "uc1-my-agents" && <UC1MyAgents session={session} notify={notify} />}
-
-          {view === "uc1-connections" && <UC1Connections notify={notify} />}
-
-          {view === "uc1-actions" && <UC1ActionQueue notify={notify} />}
-
-          {view === "uc1-workbench" && uc1AgentId && (
-            <UC1Workbench
-              agentId={uc1AgentId}
-              back={() => setView("uc1-agents")}
-              notify={notify}
-            />
-          )}
-
-          {view === "uc1-queue" && (
-            <UC1ApprovalQueue
-              openVersion={(agentId, version) => { setUc1Review({ agentId, version }); setView("uc1-dossier"); }}
-            />
-          )}
-
-          {view === "uc1-dossier" && uc1Review && (
-            <UC1ApprovalDossier
-              agentId={uc1Review.agentId}
-              version={uc1Review.version}
-              back={() => setView("uc1-queue")}
-              notify={notify}
-            />
-          )}
 
           {view === "knowledge-bases" && <KnowledgeBasesPage notify={notify} />}
 

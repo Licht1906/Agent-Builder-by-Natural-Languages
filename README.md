@@ -63,7 +63,7 @@ lập của chính tài liệu mình thì không chứng minh được gì.
 | Thứ | Phiên bản | Ghi chú |
 |---|---|---|
 | Python | ≥ 3.11 | `pyproject.toml` yêu cầu 3.11+ |
-| Docker Desktop | bất kỳ | Chạy năm dịch vụ nền: Postgres, Qdrant, reranker, OPA, MailHog |
+| Docker Desktop | bất kỳ | Chạy bốn dịch vụ nền: Postgres, Qdrant, reranker, MailHog |
 | Node.js | ≥ 18 | Cho frontend |
 | OpenAI API key | — | Bắt buộc: nếu không có thì Solution Designer, Workflow Generator và mọi node `agent_llm` đều không chạy được |
 
@@ -109,13 +109,13 @@ Mọi biến còn lại đã có mặc định chạy được ở máy cá nhâ
 ### 3. Dịch vụ nền + database
 
 ```bash
-make up                     # db, qdrant, reranker, policy, mailhog — đợi tới khi tất cả healthy
+make up                     # db, qdrant, reranker, mailhog — đợi tới khi tất cả healthy
 alembic upgrade head        # hoặc: make migrate
 make init-qdrant            # tạo collection, idempotent
 ```
 
 Không có `make` (Windows):
-`docker compose up -d --wait db qdrant reranker policy mailhog`
+`docker compose up -d --wait db qdrant reranker mailhog`
 
 Kiểm tra:
 
@@ -167,19 +167,18 @@ cứng vào bundle.
 
 Đăng nhập bằng tài khoản seed ở bảng trên.
 
-### Cài đặt đóng gói (UC1, single-node)
+### Cài đặt đóng gói (single-node)
 
-Thay cho Bước 2–4 ở trên (dev loop từ source) — dành cho việc đóng gói/demo UC-1
-theo `docs/usecase_spec/uc1-ar-assistant/spec.md` §12.1/§12.2:
+Thay cho Bước 2–4 ở trên (dev loop từ source) — dựng cả nền tảng trên một máy:
 
 ```bash
 git clone <repo> && cd <repo>
 ./install.sh            # sinh .env + secret, migrate DB (seed agent_admin luôn trong bước này)
 ```
 
-`install.sh` tự gọi `docker compose up -d` ở bước cuối. UC-1 giờ có màn hình
-web riêng trong `frontend/` (mục "UC-1" ở thanh điều hướng) bên cạnh Swagger UI
-(`/docs`) để đăng ký/đăng nhập trực tiếp qua API khi cần.
+`install.sh` tự gọi `docker compose up -d` ở bước cuối. Pipeline UC-1 song song
+và các màn hình "Enterprise" đã được gỡ (DS-21, ADR-0059 §11); năng lực của nó
+nằm trong V2 dưới tên "Nguồn dữ liệu".
 
 Chế độ ngoại tuyến hoàn toàn (§12.3): đóng gói trên máy có mạng bằng
 `scripts/package_airgap_artifact.sh` (ký bằng cosign hoặc minisign), rồi

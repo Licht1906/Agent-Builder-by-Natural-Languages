@@ -4,9 +4,9 @@ plane (spec.md §4.7/§12.4, FR-52).
 `pull_template` is the *only* function in this codebase allowed to reach the
 control plane, and the only thing this module exports that ever opens an
 outbound connection. Nothing on the request path an ordinary user's action
-goes through — creating an agent (`src.metaagent.draft_spec`), editing one
-(`src.api.uc1_agent_routes`), a chat turn (`src.compiler.tools`) — calls this
-module at all. §12.4's own table names exactly two events that may: "tạo
+goes through — creating an agent, editing one, a chat turn — calls this module
+at all: `src.api.control_plane_routes` is its one importer
+(`tests/test_services/test_control_plane.py` holds that). §12.4's own table names exactly two events that may: "tạo
 version mới cho agent, nếu cần template mới" and "cập nhật phiên bản phần
 mềm" — both explicit, admin-initiated actions, never something a request
 triggers as a side effect. `src.api.control_plane_routes` is the one HTTP

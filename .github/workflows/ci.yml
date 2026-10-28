@@ -95,26 +95,6 @@ jobs:
       - name: Run tests
         run: pytest tests/ -v --tb=short
 
-  # UC1-13 (#114), §20: `opa test` is a seam of its own, independent of the
-  # HTTP stack — the PEP is a decision service, not app code, so its ~15-case
-  # matrix (role × data_scope × autonomy × prohibitions) runs here in a few
-  # hundred milliseconds without a Postgres/OPA sidecar/backend container.
-  policy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # Pinned to the same build `docker-compose.yml`'s `policy` sidecar runs,
-      # so a green CI run and a green sidecar mean the same Rego semantics.
-      - name: Set up OPA
-        uses: open-policy-agent/setup-opa@v2
-        with:
-          version: "1.19.0"
-
-      - name: opa test
-        run: opa test docs/usecase_spec/platform/ -v
-
   # DS-19: the exported package, run the way a company runs it — unzip, fill in
   # the secrets .env.example names, `docker compose up` — and the agent answers.
   package-smoke:

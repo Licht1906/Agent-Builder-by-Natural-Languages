@@ -4,7 +4,7 @@ set -euo pipefail
 # Metadata startup-script for the `internal-services` VM (see setup.sh and
 # ../../DEPLOYMENT.md). Runs on every boot. Installs Docker once, mounts the
 # attached persistent disk at /mnt/data once, and (re)starts the
-# qdrant/policy containers if the compose file has already been pushed
+# qdrant container if the compose file has already been pushed
 # — it hasn't yet on the VM's first boot, setup.sh pushes it right after
 # creating the instance and starts the containers itself over SSH.
 

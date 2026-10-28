@@ -1,12 +1,11 @@
 """Writing a run into the shared ledger — `agent_runs` — from any pipeline. ADR-0053 §1, §3.
 
-One writer, three doors. A V2 production leg arrives through
+One writer, two doors. A V2 production leg arrives through
 `src.api.agent_routes.RunLedgerEntry.bank`, a V2 trial through
-`src.agents.sandbox.store_sandbox_run`, a UC-1 turn through
-`src.api.uc1_agent_chat_routes._chat_stream`; each builds an `AgentRunRecord`
-with the helper that knows its vocabulary (`v2_record`, `uc1_record`) and
-hands it to `record_agent_run`, which is the only function that knows what
-the row looks like.
+`src.agents.sandbox.store_sandbox_run`; each builds an `AgentRunRecord` with
+`v2_record` and hands it to `record_agent_run`, which is the only function
+that knows what the row looks like. (A third door, UC-1's chat, went with the
+UC-1 pipeline — DS-21; the rows it wrote stay readable as `pipeline='uc1'`.)
 
 Three things happen at write time and nowhere else:
 
@@ -30,7 +29,7 @@ that fails to run is a missing score, not a missing run.
 """
 
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -225,104 +224,6 @@ def v2_record(
         agent_id=thread.agent_id,
         version_id=identity.version_id,
         run_cost_id=run_cost_id,
-    )
-
-
-def uc1_transcript(steps: Iterable[Mapping[str, Any]]) -> list[SandboxTranscriptEntry]:
-    """UC-1's `TranscriptStep` rows as the flat transcript shape the ledger keeps.
-
-    UC-1 emits one row per node run, with the tool call folded in (`tool`,
-    `args`, `result`). Unfolded here into the V1-style `step` / `tool` /
-    `tool_result` lines — keyed by `step_id` because a UC-1 spec has no graph
-    of node ids — so the same summariser, the same checks and the same screen
-    read both pipelines. An agent-node row with no tool is a spoken step whose
-    `content` is the node's result text.
-    """
-    lines: list[SandboxTranscriptEntry] = []
-    for index, step in enumerate(steps, start=1):
-        step_id = f"{step.get('node') or 'step'}-{index}"
-        tool = step.get("tool")
-        if tool:
-            lines.append(
-                SandboxTranscriptEntry(
-                    kind="tool", step_id=step_id, tool=str(tool), args=dict(step.get("args") or {}), simulated=False
-                )
-            )
-            result = step.get("result")
-            ok = _uc1_tool_ok(result)
-            lines.append(
-                SandboxTranscriptEntry(
-                    kind="tool_result",
-                    step_id=step_id,
-                    tool=str(tool),
-                    ok=ok,
-                    simulated=False,
-                    content=str(result or ""),
-                )
-            )
-        else:
-            lines.append(
-                SandboxTranscriptEntry(
-                    kind="step",
-                    step_id=step_id,
-                    title=str(step.get("node") or ""),
-                    content=str(step.get("result") or ""),
-                )
-            )
-    return lines
-
-
-#: What a UC-1 tool result starts with when the PEP refused or the call broke —
-#: `src.compiler.tools` renders denials and errors as text, not exceptions.
-_UC1_FAILURE_MARKS = ("error", "denied", "lỗi", "từ chối", "budget", "không được phép", "pep")
-
-
-def _uc1_tool_ok(result: object) -> bool | None:
-    if result is None:
-        return None
-    head = str(result).strip().lower()[:80]
-    return not any(head.startswith(mark) or f'"{mark}"' in head for mark in _UC1_FAILURE_MARKS)
-
-
-def uc1_record(
-    *,
-    request_id: str,
-    agent_key: str,
-    version: int,
-    agent_name: str,
-    thread_id: str,
-    caller: str | None,
-    input_message: str,
-    steps: Sequence[Mapping[str, Any]],
-    final_answer: str | None,
-    total_cost_usd: float,
-    budget_exceeded: bool,
-    budget_detail: str | None = None,
-) -> AgentRunRecord:
-    """A UC-1 production turn as a ledger record. Always `manual`: UC-1's sandbox has its own route and table."""
-    transcript = uc1_transcript(steps)
-    tokens = sum(int(step.get("tokens") or 0) for step in steps)
-    latency = sum(float(step.get("latency_ms") or 0.0) for step in steps) / 1000.0
-    return AgentRunRecord(
-        pipeline=RunPipeline.UC1.value,
-        trace_id=request_id,
-        agent_key=agent_key,
-        version_key=str(version),
-        agent_name=agent_name,
-        conversation_id=thread_id,
-        caller=caller,
-        trigger=RunTrigger.MANUAL.value,
-        input_message=input_message,
-        transcript=transcript,
-        error=budget_detail if budget_exceeded else None,
-        ending=RunOutcome.BUDGET_STOPPED if budget_exceeded else None,
-        cost_usd=total_cost_usd,
-        latency_seconds=latency,
-        # UC-1 reports one token figure per step, not an in/out split.
-        input_tokens=tokens,
-        output_tokens=0,
-        usage_by_model={},
-        answer=final_answer,
     )
 
 

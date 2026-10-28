@@ -69,46 +69,6 @@ def seed_agent_admin_row() -> dict[str, object]:
     }
 
 
-def seed_sales_demo_rows() -> list[dict[str, object]]:
-    """The two business personas a UC-1 agent is actually demonstrated to.
-
-    `seed_agent_admin_row` above gives every install someone who can *build* and
-    approve an agent; neither it nor the V2 pair gives it anyone who can *use*
-    one. A UC-1 spec's `audience.roles` names `sales_rep`/`sales_manager`, and
-    the PEP refuses any caller outside it — so on a fresh database the finished,
-    deployed agent answers "caller holds no role listed in audience.roles" to
-    every account that exists, which reads as a broken agent rather than as a
-    missing account.
-
-    `department` is `SALES` on both because `authz.rego`'s audience check reads
-    it, and `employee_id` is E102/E201 because the demo *data* is keyed to those
-    two — see `Settings.seed_sales_rep_email`'s own note. Both are `ACTIVE`: an
-    account seeded as `pending` would need the agent_admin to activate it before
-    it could log in, which is a manual step this exists to remove.
-    """
-    settings = get_settings()
-    return [
-        {
-            "email": settings.seed_sales_rep_email,
-            "password_hash": hash_password(settings.seed_sales_rep_password),
-            "role": UserRole.SALES_REP,
-            "status": UserStatus.ACTIVE,
-            "employee_id": "E102",
-            "job_title": "Nhân viên kinh doanh",
-            "department": "SALES",
-        },
-        {
-            "email": settings.seed_sales_manager_email,
-            "password_hash": hash_password(settings.seed_sales_manager_password),
-            "role": UserRole.SALES_MANAGER,
-            "status": UserStatus.ACTIVE,
-            "employee_id": "E201",
-            "job_title": "Trưởng nhóm kinh doanh",
-            "department": "SALES",
-        },
-    ]
-
-
 def seed_pm_row() -> dict[str, object]:
     """The PM control room's own account (ADR-0051), role `pm`, already `active`.
 

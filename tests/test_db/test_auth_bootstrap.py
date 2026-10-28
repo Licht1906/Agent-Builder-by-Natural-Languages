@@ -44,13 +44,13 @@ def test_the_very_first_self_registration_after_migrating_is_still_pending(empty
             Registration(
                 email="first-signup@example.com",
                 password="a-perfectly-fine-password",
-                role=UserRole.SALES_REP,
+                role=UserRole.CREATOR,
                 job_title="Nhân viên kinh doanh",
                 department="SALES",
             ),
         )
 
         assert first_ever_signup.status is UserStatus.PENDING
-        assert first_ever_signup.role is UserRole.SALES_REP
+        assert first_ever_signup.role is UserRole.CREATOR
 
     engine.dispose()

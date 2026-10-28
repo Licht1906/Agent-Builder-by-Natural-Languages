@@ -15,7 +15,7 @@ def _user(**overrides: object) -> User:
         "id": 42,
         "email": "e102@example.com",
         "password_hash": "irrelevant-here",
-        "role": UserRole.SALES_REP,
+        "role": UserRole.CREATOR,
         "status": UserStatus.ACTIVE,
         "employee_id": "E102",
         "job_title": "Nhân viên kinh doanh",
@@ -32,7 +32,7 @@ def test_decoded_token_carries_all_four_fr04_claims() -> None:
 
     assert payload["sub"] == "42"
     assert payload["employee_id"] == "E102"
-    assert payload["roles"] == ["sales_rep"]
+    assert payload["roles"] == ["creator"]
     assert payload["department"] == "SALES"
 
 
@@ -40,7 +40,7 @@ def test_decode_access_token_exposes_employee_id_and_department() -> None:
     claims = decode_access_token(create_access_token(_user()))
 
     assert claims.user_id == 42
-    assert claims.role is UserRole.SALES_REP
+    assert claims.role is UserRole.CREATOR
     assert claims.employee_id == "E102"
     assert claims.department == "SALES"
 
@@ -50,8 +50,8 @@ def test_an_expired_token_is_rejected() -> None:
     issued_at = datetime.now(UTC) - timedelta(hours=2)
     payload = {
         "sub": "42",
-        "role": UserRole.SALES_REP.value,
-        "roles": [UserRole.SALES_REP.value],
+        "role": UserRole.CREATOR.value,
+        "roles": [UserRole.CREATOR.value],
         "employee_id": "E102",
         "department": "SALES",
         "iat": issued_at,
@@ -67,7 +67,7 @@ def test_a_token_signed_with_the_wrong_secret_is_rejected() -> None:
     forged = jwt.encode(
         {
             "sub": "42",
-            "role": UserRole.SALES_REP.value,
+            "role": UserRole.CREATOR.value,
             "iat": datetime.now(UTC),
             "exp": datetime.now(UTC) + timedelta(minutes=5),
         },

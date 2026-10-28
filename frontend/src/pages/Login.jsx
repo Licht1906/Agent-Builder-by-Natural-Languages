@@ -35,9 +35,7 @@ const DEV_ACCOUNTS = import.meta.env.DEV
       { email: "creator@example.com", password: "creator-dev-password", role: "creator", what: "Builds agents" },
       { email: "creator2@example.com", password: "creator2-dev-password", role: "creator", what: "Owns the Drive agent" },
       { email: "admin@example.com", password: "admin-dev-password", role: "admin", what: "Platform settings, review queue" },
-      { email: "agent-admin@example.com", password: "agent-admin-dev-password", role: "agent_admin", what: "Enterprise review queue" },
-      { email: "sales.rep@demo.local", password: "sales-rep-dev-password", role: "sales_rep", what: "Uses agents — own rows only" },
-      { email: "sales.manager@demo.local", password: "sales-manager-dev-password", role: "sales_manager", what: "Uses agents — team rows" },
+      { email: "agent-admin@example.com", password: "agent-admin-dev-password", role: "agent_admin", what: "Platform settings, review queue" },
     ]
   : [];
 

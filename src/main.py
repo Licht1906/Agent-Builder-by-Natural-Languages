@@ -17,7 +17,6 @@ from src.api.approval_routes import creator_router as approval_creator_router
 from src.api.approval_routes import router as approval_router
 from src.api.audit_routes import router as audit_router
 from src.api.auth_routes import router as auth_router
-from src.api.connection_routes import router as connection_router
 from src.api.control_plane_routes import router as control_plane_router
 from src.api.database_source_routes import router as database_source_router
 from src.api.deployment_routes import router as deployment_router
@@ -27,19 +26,10 @@ from src.api.external_connection_routes import router as external_connection_rou
 from src.api.interview_routes import router as interview_router
 from src.api.knowledge_base_routes import agent_links_router as knowledge_base_agent_links_router
 from src.api.knowledge_base_routes import router as knowledge_base_router
-from src.api.metaagent_routes import router as metaagent_router
 from src.api.pm_routes import router as pm_router
 from src.api.run_feedback_routes import router as run_feedback_router
-from src.api.sandbox_routes import router as sandbox_router
 from src.api.solution_routes import router as solution_router
 from src.api.solution_routes import spec_router as solution_spec_router
-from src.api.uc1_action_approval_routes import router as uc1_action_approval_router
-from src.api.uc1_agent_chat_routes import available_router as uc1_agent_available_router
-from src.api.uc1_agent_chat_routes import router as uc1_agent_chat_router
-from src.api.uc1_agent_routes import catalog_router as uc1_agent_catalog_router
-from src.api.uc1_agent_routes import router as uc1_agent_router
-from src.api.uc1_approval_routes import queue_router as uc1_approval_queue_router
-from src.api.uc1_approval_routes import router as uc1_approval_router
 from src.api.user_connection_routes import router as user_connection_router
 from src.api.workflow_routes import registry_router as node_type_router
 from src.api.workflow_routes import router as workflow_router
@@ -179,17 +169,7 @@ app.include_router(knowledge_base_router, prefix="/api/v1")
 app.include_router(knowledge_base_agent_links_router, prefix="/api/v1")
 app.include_router(external_connection_router, prefix="/api/v1")
 app.include_router(database_source_router, prefix="/api/v1")
-app.include_router(connection_router, prefix="/api/v1")
 app.include_router(user_connection_router, prefix="/api/v1")
-app.include_router(metaagent_router, prefix="/api/v1")
-app.include_router(sandbox_router, prefix="/api/v1")
-app.include_router(uc1_approval_router, prefix="/api/v1")
-app.include_router(uc1_approval_queue_router, prefix="/api/v1")
-app.include_router(uc1_action_approval_router, prefix="/api/v1")
-app.include_router(uc1_agent_router, prefix="/api/v1")
-app.include_router(uc1_agent_catalog_router, prefix="/api/v1")
-app.include_router(uc1_agent_available_router, prefix="/api/v1")
-app.include_router(uc1_agent_chat_router, prefix="/api/v1")
 app.include_router(control_plane_router, prefix="/api/v1")
 app.include_router(solution_router, prefix="/api/v1")
 app.include_router(solution_spec_router, prefix="/api/v1")

@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 from src.agents.runtime import get_clock
 from src.agents.versions import create_draft, mark_sandbox_passed
 from src.auth.passwords import hash_password
-from src.auth.seed import seed_agent_admin_row, seed_pm_row, seed_sales_demo_rows, seed_user_rows
+from src.auth.seed import seed_agent_admin_row, seed_pm_row, seed_user_rows
 from src.config import get_settings
 from src.db.base import Base, SessionLocal, engine
 from src.db.models import (
@@ -86,9 +86,17 @@ from src.workflow.tools import GMAIL
 #: suite before that change does not fail every test at teardown: the table is
 #: still standing in that developer's own test database, it holds a foreign key
 #: onto `users`, and `drop_all` no longer knows it exists to drop it. Safe to
-#: delete from this tuple once no working copy predates ADR-0065.
+#: delete from this tuple once no working copy predates ADR-0065. The `uc1_*`
+#: tables are former for the same reason since DS-21 dropped the UC-1 pipeline:
+#: each holds a foreign key onto `users` in a test database that predates it.
 _FOREIGN_TABLES = (
     "document_chunks",
+    "uc1_pending_actions",
+    "uc1_version_approvals",
+    "uc1_eval_runs",
+    "uc1_sandbox_runs",
+    "uc1_agent_spec_versions",
+    "uc1_connections",
     "studio_messages",
     "checkpoint_writes",
     "checkpoint_blobs",
@@ -100,10 +108,8 @@ _FOREIGN_TABLES = (
 #: lives here, not in `src.db.models`/`Base.metadata` (it is a schema.sql-owned
 #: object, applied for real only by migration `a4c2c2363959_uc1_ar_data_surface`,
 #: same as `crm_sales_assignment`/`fin_invoice`/the two least-privilege views).
-#: `execute_tool_call` (`src.compiler.tools`) now writes to `audit_log`
-#: unconditionally after every PEP decision, so any API test that reaches it —
-#: sandbox chat, action approval — needs the table to actually exist, not only
-#: the `tests/test_db` package's own `migrated_database_url` fixture.
+#: The UC-1 pipeline that wrote to it is gone (DS-21); the demo ERP surface it
+#: read stays, so the suite still builds it the way the migration does.
 _SCHEMA_SQL_PATH = Path(__file__).resolve().parent.parent / "docs" / "usecase_spec" / "uc1-ar-assistant" / "schema.sql"
 
 #: schema.sql's own FKs (`fin_invoice.order_id`, `crm_sales_assignment.customer_id`)
@@ -182,7 +188,6 @@ def _fresh_postgres_schema() -> None:
         # in with the same accounts a freshly migrated database has.
         connection.execute(insert(User), seed_user_rows())
         connection.execute(insert(User).values(**seed_agent_admin_row()))
-        connection.execute(insert(User), seed_sales_demo_rows())
         connection.execute(insert(User).values(**seed_pm_row()))
     # The checkpoint tables were dropped above, so their migrations run again —
     # here, while nothing else holds a transaction, and not lazily in the first

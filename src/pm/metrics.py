@@ -44,7 +44,6 @@ from src.db.models import (
     RunOutcome,
     RunTrigger,
     ScoreSource,
-    UC1EvalRun,
     User,
 )
 from src.pm.judge import JUDGE_PASS
@@ -280,7 +279,7 @@ class VersionQuality:
     agent_id: int | None
     version_id: int | None
     deployed: bool
-    #: Offline — the reference set, before release (eval_runs / uc1_eval_runs, latest run).
+    #: Offline — the reference set, before release (eval_runs, latest run).
     offline: Rate
     offline_threshold: float | None
     offline_previous: Rate | None
@@ -413,7 +412,10 @@ def _int_or(value: str) -> int:
 def _offline_rates(
     db: Session, rows: dict[tuple[str, str], dict[str, Any]]
 ) -> dict[tuple[str, str], tuple[Rate, float | None]]:
-    """Latest offline eval per version — V2 from `eval_runs`, UC-1 from `uc1_eval_runs` — plus every other version of the same agents, for the previous-version comparison."""
+    """Latest offline eval per version from `eval_runs` — plus every other version of the same agents, for the previous-version comparison.
+
+    UC-1 versions had theirs in `uc1_eval_runs`, dropped with the pipeline (DS-21): their old ledger rows show no offline rate.
+    """
     out: dict[tuple[str, str], tuple[Rate, float | None]] = {}
     v2_agents = {int(r["agent_id"]) for r in rows.values() if r.get("agent_id") is not None}
     if v2_agents:
@@ -432,20 +434,6 @@ def _offline_rates(
             .join(AgentVersion, AgentVersion.id == EvalRun.version_id)
         ):
             out[(str(agent_id), str(version_id))] = (Rate(int(total), int(passed)), float(threshold))
-    uc1_agents = {r_key[0] for r_key, r in rows.items() if (r.get("pipeline") or "") == "uc1"}
-    if uc1_agents:
-        latest_uc1 = (
-            select(UC1EvalRun.agent_id, UC1EvalRun.version, func.max(UC1EvalRun.id).label("id"))
-            .where(UC1EvalRun.agent_id.in_(uc1_agents))
-            .group_by(UC1EvalRun.agent_id, UC1EvalRun.version)
-            .subquery()
-        )
-        for agent_id, version, passed, total in db.execute(
-            select(UC1EvalRun.agent_id, UC1EvalRun.version, UC1EvalRun.passed_count, UC1EvalRun.total_count).join(
-                latest_uc1, latest_uc1.c.id == UC1EvalRun.id
-            )
-        ):
-            out[(str(agent_id), str(version))] = (Rate(int(total), int(passed)), None)
     return out
 
 

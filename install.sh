@@ -19,13 +19,8 @@
 # itself idempotent (`CREATE TABLE IF NOT EXISTS`, `docker compose up` on an
 # already-running stack).
 #
-# NOTE on "màn hình đăng ký" (§12.2's own last line): the UC1 web UI
-# (§6.2's `web`/Next.js row) is a separate, still-unbuilt ticket (E2,
-# `src.api.uc1_approval_routes`'s own docstring on `_FORM_CONFIRMED_STAND_IN`
-# names the same gap) — `frontend/` in this repo is a different, V2 app, not
-# wired into docker-compose.yml at all. Until UC1's own web UI ships, the
-# honest browser-visible landing point this script prints is FastAPI's own
-# `/docs` — where `POST /auth/register` can be exercised directly.
+# The browser-visible landing point this script prints is the platform's own
+# web app (`frontend/`), with FastAPI's `/docs` beside it for the API.
 
 set -euo pipefail
 

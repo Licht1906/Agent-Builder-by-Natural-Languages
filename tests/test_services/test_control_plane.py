@@ -100,7 +100,7 @@ def test_the_pull_logs_only_the_identifiers_never_the_content(monkeypatch: pytes
 
 
 def test_a_denied_pull_is_logged_too(monkeypatch: pytest.MonkeyPatch, _configured) -> None:
-    """"Log mỗi lần gọi" — every call, not only the ones that end up accepted.
+    """ "Log mỗi lần gọi" — every call, not only the ones that end up accepted.
     A tampered/mismatched signature must still leave a trace of the attempt.
     """
     wrong_key = Ed25519PrivateKey.generate()
@@ -117,3 +117,24 @@ def test_a_denied_pull_is_logged_too(monkeypatch: pytest.MonkeyPatch, _configure
     logged = " ".join(str(arg) for call in calls for arg in call)
     assert "uc1-ar-assistant" in logged
     assert "denied" in logged
+
+
+def test_only_the_admin_route_imports_the_control_plane() -> None:
+    """No request path an ordinary user's action goes through can reach the vendor — FR-52.
+
+    Replaces UC-1's own proof (a chat turn, an agent created, both with the
+    pull wired to fail), which went with the UC-1 pipeline (DS-21): what is left
+    to hold is that the one door stays the one door.
+    """
+    import re
+    from pathlib import Path
+
+    imports = re.compile(r"^\s*(from src\.services\.control_plane import|import src\.services\.control_plane)", re.M)
+    src = Path(__file__).resolve().parents[2] / "src"
+    importers = sorted(
+        path.relative_to(src).as_posix()
+        for path in src.rglob("*.py")
+        if imports.search(path.read_text(encoding="utf-8"))
+    )
+
+    assert importers == ["api/control_plane_routes.py"]

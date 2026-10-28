@@ -15,10 +15,11 @@
 #                `frontend/` in this repo is a different, V2 app and is not
 #                wired in here. Until UC1's UI ships, `/docs` (FastAPI's own
 #                Swagger UI) is the honest browser-visible entry point.
-#   api       -> `backend`, below (also runs metaagent/compiler/runtime/policy
-#                client in-process — none of those four are separate
-#                deployable services in this codebase today).
-#   policy    -> `policy` (OPA), below.
+#   api       -> `backend`, below (also runs the meta-agent and the runtime
+#                in-process — neither is a separate deployable service).
+#   policy    -> not present since DS-21 (ADR-0059 §11): the OPA sidecar was
+#                UC-1's PEP; V2 enforces scope, approval and payload binding
+#                in its own runtime (`data_query`, `human_approval`, DS-08).
 #   vault     -> not present since DS-20 (ADR-0059 §9): every credential the
 #                platform holds is in its SecretStore, a Postgres table
 #                (`src.services.secret_store`) — durable, nothing to unseal.
@@ -111,29 +112,10 @@ services:
       retries: 3
       start_period: 120s
 
-  # UC1-12 (#113), §6.2: the PEP sidecar. Evaluates `authz.rego` over its own
-  # REST API — `src.policy.pep` is the only code allowed to call it. Pinned to
-  # the exact version `authz.rego` was verified against (`opa check` +
-  # `opa eval` against the sample input in the file's header); bumping this
-  # is a decision, not a routine update, since a Rego semantics change here
-  # changes what every tool call is allowed to do.
-  policy:
-    image: openpolicyagent/opa:1.19.0
-    command: ["run", "--server", "--addr=:8181", "/policy/authz.rego"]
-    ports:
-      - "8181:8181"
-    volumes:
-      - ./docs/usecase_spec/platform:/policy:ro
-    # No healthcheck: the `openpolicyagent/opa` image ships only the `opa`
-    # binary, no shell/curl to probe its own HTTP server with. `backend`
-    # depends on `service_started` below, the same accommodation already made
-    # for `reranker`.
-
-  # UC1-21 (#137), §16.2: "SMTP | MailHog | xem được email mà không gửi ra
-  # ngoài thật". `mail.send_reminder`'s real send (`src.compiler.tools`) is
-  # plain SMTP against whatever `SMTP_HOST`/`SMTP_PORT` name — this service is
-  # what they name inside the compose network, so a reminder approved in the
-  # demo shows up at `:8025`, never a real inbox.
+  # "SMTP | MailHog | xem được email mà không gửi ra ngoài thật". Whatever
+  # SMTP_HOST/SMTP_PORT name inside the compose network — this service — so a
+  # mail sent in a demo shows up at `:8025`, never a real inbox. The exported
+  # package's smoke tests send to it too (DS-16).
   mailhog:
     image: mailhog/mailhog:v1.0.1
     ports:
@@ -149,13 +131,12 @@ services:
     env_file:
       - .env
     environment:
-      # Overrides .env's DATABASE_URL/QDRANT_URL/RERANKER_URL/OPA_URL:
+      # Overrides .env's DATABASE_URL/QDRANT_URL/RERANKER_URL:
       # inside the compose network these are reachable by service name, not
       # `localhost`.
       DATABASE_URL: postgresql://postgres:postgres@db:5432/app_dev
       QDRANT_URL: http://qdrant:6333
       RERANKER_URL: http://reranker:8001
-      OPA_URL: http://policy:8181
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
     depends_on:
@@ -168,13 +149,6 @@ services:
       # — "chạy được khi reranker chết"). `src.services.reranker` degrades to
       # an unranked result rather than failing a request.
       reranker:
-        condition: service_started
-      # Also `service_started`, not `service_healthy` — `policy` has no
-      # healthcheck to wait on (see above). Unlike the reranker, `src.policy.pep`
-      # does not degrade gracefully if the sidecar isn't up yet: it fails
-      # closed on the first tool call, which is the correct behaviour, not a
-      # bug to route around with a slower dependency wait.
-      policy:
         condition: service_started
       mailhog:
         condition: service_started

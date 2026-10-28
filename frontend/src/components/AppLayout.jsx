@@ -112,9 +112,8 @@ export default function AppLayout({
      the one thing the person clicking it never means. */
   /* Data sources (Knowledge Bases + Hệ CSDL, ADR-0059 §2) lives here, in the
      Workspace section directly under the Workflow builder, rather than in a
-     section of its own. The Enterprise
-     (UC-1) feature area it used to sit in is no longer surfaced in the nav —
-     the routes still exist in `App.jsx`, they just have no door here. */
+     section of its own. The Enterprise (UC-1) area it used to sit in was
+     removed with the UC-1 pipeline (DS-21). */
   const navMain = [
     { id: "designer", label: t("Home"), icon: <Home size={17} />, go: startDesigner, active: view === "designer" },
     { id: "dashboard", label: t("Agents"), icon: <Bot size={17} />, go: goDashboard, active: view === "dashboard" || view === "chat" },

@@ -42,7 +42,7 @@ async def _register_pending(client: AsyncClient) -> int:
         json={
             "email": _EMAIL,
             "password": _PASSWORD,
-            "role": "sales_rep",
+            "role": "creator",
             "job_title": "Nhân viên kinh doanh",
             "department": "SALES",
         },
@@ -161,7 +161,7 @@ async def test_the_queue_is_oldest_first(client: AsyncClient, admin_token: str) 
         json={
             "email": _SECOND_EMAIL,
             "password": _PASSWORD,
-            "role": "sales_rep",
+            "role": "creator",
             "job_title": "Nhân viên kinh doanh",
             "department": "SALES",
         },

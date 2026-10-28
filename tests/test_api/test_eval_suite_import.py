@@ -225,9 +225,9 @@ async def test_the_uc1_golden_set_imports_through_the_general_importer_with_extr
     criterion)` (ADR-0054 §2), and none of these rows carries a `criterion`,
     so two of the three collide under that key and land as `skipped` rather
     than `error` — no data lost, just not distinct under this key. Giving
-    UC-1's golden set its own identity (`extra.id`/`principal`-aware dedup) is
-    EVAL-7 (#157)'s dedicated `scripts/import_golden_set.py`, not this
-    general-purpose endpoint.
+    UC-1's golden set its own identity (`extra.id`/`principal`-aware dedup) was
+    EVAL-7 (#157)'s dedicated importer, removed with the UC-1 pipeline (DS-21);
+    this general-purpose endpoint never did.
     """
     agent, version = drafted_agent_of(seeded_creator, eval_spec())
     content = _GOLDEN_UC1.read_bytes()

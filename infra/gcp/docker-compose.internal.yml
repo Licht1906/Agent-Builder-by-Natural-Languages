@@ -1,15 +1,13 @@
 # Runs on the `internal-services` VM only (see ../../DEPLOYMENT.md). Same
-# images/versions as the root docker-compose.yml's `qdrant`/`policy`
-# services on purpose — this is that subset, pointed at a persistent disk
-# instead of a docker-managed volume so data survives VM recreation, and at
-# `/opt/app/policy` (pushed by setup.sh from docs/usecase_spec/platform/)
-# instead of a bind mount into the repo, since this VM never checks out the
-# repo itself.
+# image/version as the root docker-compose.yml's `qdrant` on purpose — pointed
+# at a persistent disk instead of a docker-managed volume so data survives VM
+# recreation.
 #
 # `db`, `backend`, `reranker`, `mailhog` are NOT here: `db` is Cloud SQL,
 # `backend`/`reranker` are Cloud Run, `mailhog` is dev-only and dropped for
-# production (real SMTP relay instead — see DEPLOYMENT.md). No `vault` either
-# since DS-20: credentials live in the platform's SecretStore, in Cloud SQL.
+# production (real SMTP relay instead — see DEPLOYMENT.md). No `vault` since
+# DS-20 (credentials live in the SecretStore, in Cloud SQL) and no `policy`
+# since DS-21 (the OPA sidecar was UC-1's PEP).
 services:
   qdrant:
     image: qdrant/qdrant:v1.12.4
@@ -24,12 +22,3 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  policy:
-    image: openpolicyagent/opa:1.19.0
-    restart: unless-stopped
-    command: ["run", "--server", "--addr=:8181", "/policy/authz.rego"]
-    ports:
-      - "8181:8181"
-    volumes:
-      - /opt/app/policy:/policy:ro

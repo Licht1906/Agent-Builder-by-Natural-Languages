@@ -18,12 +18,11 @@ Extra data: line 1 column 23 (char 22)`, raised from inside whichever graph node
 made the call. To a creator that reads as "the deployed agent is broken", not
 "one turn parsed badly".
 
-Lives in `src.services` because the two runtimes that need it cannot reach each
-other: `src.compiler.graph` compiles UC-1 specs, `src.agents.runtime` runs V1
-steps (and, through `charged_model_call`, V2's nodes), and neither imports the
-other. A leaf module both already depend on the package of is the only place one
-copy of this can live — and one copy is the point, since two would eventually
-disagree about what "recoverable" means.
+Lives in `src.services`, a leaf every runtime already depends on the package of:
+`src.agents.runtime` runs V1 steps and, through `charged_model_call`, V2's nodes.
+(UC-1's compiler was the second runtime that needed it, until DS-21 removed it.)
+One copy is the point, since two would eventually disagree about what
+"recoverable" means.
 """
 
 import json

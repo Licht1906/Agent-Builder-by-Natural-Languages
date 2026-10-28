@@ -64,17 +64,6 @@ services:
       retries: 3
       start_period: 120s
 
-  # UC1-12 (#113), §6.2: same image `docker-compose.yml`'s own `policy`
-  # service pins — an OPA release, not something this repo builds, so it is
-  # already exactly as air-gap-friendly as any other pinned base image here.
-  policy:
-    image: openpolicyagent/opa:1.19.0
-    command: ["run", "--server", "--addr=:8181", "/policy/authz.rego"]
-    ports:
-      - "8181:8181"
-    volumes:
-      - ./docs/usecase_spec/platform:/policy:ro
-
   mailhog:
     image: mailhog/mailhog:v1.0.1
     ports:
@@ -91,7 +80,6 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/app_dev
       QDRANT_URL: http://qdrant:6333
       RERANKER_URL: http://reranker:8001
-      OPA_URL: http://policy:8181
       SMTP_HOST: mailhog
       SMTP_PORT: "1025"
       # §12.4: no event on this list ever calls the control plane — an
@@ -105,8 +93,6 @@ services:
       qdrant:
         condition: service_healthy
       reranker:
-        condition: service_started
-      policy:
         condition: service_started
       mailhog:
         condition: service_started

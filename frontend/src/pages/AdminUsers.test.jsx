@@ -15,7 +15,7 @@ const props = { notify: vi.fn() };
 const user = (overrides) => ({
   id: 7,
   email: "pending-hire@example.com",
-  role: "sales_rep",
+  role: "creator",
   status: "pending",
   created_at: new Date().toISOString(),
   employee_id: "E007",

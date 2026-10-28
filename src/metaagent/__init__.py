@@ -1,6 +1,6 @@
-"""The `metaagent` service (spec.md §6.2): turns a natural-language description
-into a draft `AgentSpec` plus `clarifications` (UC1-05, FR-10/FR-11)."""
+"""The meta-agent's workbench loop and the creator's action catalogue it reads (`loop`, `catalog`).
 
-from src.metaagent.draft_spec import DraftSpecError, draft_spec, render_system_prompt
-
-__all__ = ["DraftSpecError", "draft_spec", "render_system_prompt"]
+UC-1's `draft_spec` (a description in, an `AgentSpec` out) was removed with the
+parallel UC-1 pipeline (DS-21 / ADR-0059 §11); V2's Solution Designer and
+Workflow Generator are the one way an agent is drafted.
+"""

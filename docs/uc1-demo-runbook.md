@@ -1,5 +1,10 @@
 # UC-1 — Runbook dựng một agent chạy được từ đầu
 
+> **Lỗi thời (DS-21, 2026-10-28).** Pipeline UC-1 mà runbook này đi qua — workbench, compiler, OPA,
+> các route `uc1_*`, tài khoản `sales.rep`/`sales.manager` — đã gỡ khỏi repo (ADR-0059 §11). Giữ lại như
+> tài liệu lịch sử. Kịch bản demo hiện hành là của V2: Hệ CSDL + `data_query` + duyệt mail + xuất gói
+> (`docs/specs/data-source-agent.md`, DS-24).
+
 Từ database trống đến `sales.rep` hỏi *"Khách nào quá hạn trên 30 ngày?"* và nhận đúng **7 dòng**
 (beat 4:45 của `spec.md` §15).
 

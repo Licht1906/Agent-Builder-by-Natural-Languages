@@ -13,7 +13,6 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_valida
 from src.agents.budget import BudgetLimit
 from src.agents.threads import CONVERSATION_ID_PATTERN, ThreadNamespace
 from src.agents.tools.registry import ToolRisk
-from src.agentspec.spec import ConnectionType
 from src.approvals.states import QueueState
 from src.datasources.access import AccessRules, Identity
 from src.datasources.dialects.base import ProbeFailure
@@ -31,7 +30,6 @@ from src.db.models import (
     ExternalConnectionStatus,
     KnowledgeBaseMode,
     SandboxRunStatus,
-    UC1ConnectionProbeStatus,
     UserRole,
     UserStatus,
     VectorDistanceMetric,
@@ -405,48 +403,6 @@ class DistinctValuesResponse(BaseModel):
 
     values: list[Any]
 
-
-class UC1ConnectionCreateRequest(BaseModel):
-    """UC1-08 (#122), FR-20/FR-21: a credential typed into the connection form, headed straight for Vault.
-
-    `credential` is the one field this whole endpoint exists to keep away
-    from the meta-agent — a full connection string for `postgres`
-    (`postgresql://user:pass@host:5432/erp`), an API key or password for
-    `rest`/`smtp`. It is written to Vault and never stored, echoed, or logged
-    by this platform past the one call that writes it.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(..., pattern=r"^[a-z0-9_]{2,40}$", description="Đoạn cuối của credential_ref, ví dụ erp_readonly")
-    type: ConnectionType
-    credential: str = Field(..., min_length=1, description="Đi thẳng vào Vault — không bao giờ được lưu lại ở đây")
-    allowed_objects: list[str] = Field(
-        default_factory=list, description="Với kết nối SQL: các view agent được đọc — compiler từ chối bảng gốc (FR-24)"
-    )
-    allowed_hosts: list[str] = Field(default_factory=list, description="Với rest/smtp: hostname thêm vào allow-list")
-    read_only: bool = Field(default=True)
-
-
-class UC1ConnectionResponse(BaseModel):
-    """One UC-1 connection — never the credential, only `credential_ref` (FR-22)."""
-
-    id: int
-    name: str
-    type: ConnectionType
-    credential_ref: str = Field(
-        ..., description="vault://conn/<name> — giá trị dán vào connections[].credential_ref của spec"
-    )
-    allowed_objects: list[str]
-    allowed_hosts: list[str]
-    read_only: bool
-    last_probe_status: UC1ConnectionProbeStatus
-    last_probe_detail: str | None
-    last_probe_objects: list[dict[str, Any]] = Field(
-        default_factory=list, description="[{'object': 'v_ar_open', 'row_count': 1284}, ...] của lần probe gần nhất"
-    )
-    last_probed_at: UtcTimestamp | None
-    created_at: UtcTimestamp
 
     model_config = ConfigDict(from_attributes=True)
 

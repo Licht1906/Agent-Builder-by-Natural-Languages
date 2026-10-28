@@ -20,6 +20,11 @@ Insert-if-missing rather than a bare `bulk_insert`: unlike `d13a1d1e5b78`, these
 emails may already exist on exactly the databases that motivated this migration.
 Re-running against one of those must not raise on the unique index, and must not
 silently rewrite a password somebody has already changed.
+
+The rows are frozen here (DS-21): they used to come from
+`src.auth.seed.seed_sales_demo_rows`, which went with the UC-1 pipeline, and a
+migration must keep running on a fresh database whatever the app code says
+today. `a7d2c4e9f1b3` later turns both accounts into `creator`s.
 """
 
 from collections.abc import Sequence
@@ -27,8 +32,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 
 from alembic import op
-from src.auth.seed import seed_sales_demo_rows
-from src.db.models import UserRole, UserStatus
+from src.auth.passwords import hash_password
 
 # revision identifiers, used by Alembic.
 revision: str = "3f9c7a2e6b18"
@@ -50,14 +54,31 @@ def _users_table() -> sa.TableClause:
     )
 
 
-def _wire_row(row: dict[str, object]) -> dict[str, object]:
-    """Native enum columns store the member *name* (`SALES_REP`, `ACTIVE`), not its
-    value — the same conversion `d13a1d1e5b78` and `1135e617defc` both make.
+def seed_sales_demo_rows() -> list[dict[str, object]]:
+    """The two accounts as this revision wrote them. Native enum columns store the
+    member *name* (`SALES_REP`, `ACTIVE`), not its value — the same conversion
+    `d13a1d1e5b78` and `1135e617defc` both make.
     """
-    role, status = row["role"], row["status"]
-    assert isinstance(role, UserRole)
-    assert isinstance(status, UserStatus)
-    return {**row, "role": role.name, "status": status.name}
+    return [
+        {
+            "email": "sales.rep@demo.local",
+            "password_hash": hash_password("sales-rep-dev-password"),
+            "role": "SALES_REP",
+            "status": "ACTIVE",
+            "employee_id": "E102",
+            "job_title": "Nhân viên kinh doanh",
+            "department": "SALES",
+        },
+        {
+            "email": "sales.manager@demo.local",
+            "password_hash": hash_password("sales-manager-dev-password"),
+            "role": "SALES_MANAGER",
+            "status": "ACTIVE",
+            "employee_id": "E201",
+            "job_title": "Trưởng nhóm kinh doanh",
+            "department": "SALES",
+        },
+    ]
 
 
 def upgrade() -> None:
@@ -68,7 +89,7 @@ def upgrade() -> None:
             sa.select(users.c.email).where(users.c.email == row["email"])
         ).scalar_one_or_none()
         if already_there is None:
-            op.bulk_insert(users, [_wire_row(row)])
+            op.bulk_insert(users, [row])
 
 
 def downgrade() -> None:

@@ -8,8 +8,9 @@ workflow, rehearsed in a sandbox, evaluated, approved, and published.
 > are being folded into it as capabilities of a described agent, not kept as a
 > parallel pipeline — [ADR-0059](docs/adr/0059-hop-nhat-uc1-vao-v2-thanh-nang-luc-data-source.md),
 > spec [`docs/specs/data-source-agent.md`](docs/specs/data-source-agent.md).
-> UC-1's own words (`AgentSpec`, `capability`, `connection`, `data_scope`) are
-> on their way out of `src/`; don't introduce new uses of them.
+> UC-1's parallel pipeline was removed from `src/` (DS-21); its words
+> (`AgentSpec`, `capability`, `connection`, `data_scope`, `PEP`) survive only in
+> history — don't introduce new uses of them.
 
 ## Language
 
@@ -111,7 +112,7 @@ _Avoid_: trace, log, transcript (that is the whole run; evidence is its tool lin
 
 ### Run ledger
 **Run record**:
-One `agent_runs` row per leg of one run, in either pipeline (V2 or UC-1),
+One `agent_runs` row per leg of one run (V2; older rows from the removed UC-1 pipeline stay readable),
 carrying the question, the answer, the transcript and the attributes a PM
 groups by (`trigger`, `outcome`, `failure_node_type`, `actions`). The PM's
 ledger; `run_costs` stays V2's bill —
