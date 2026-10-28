@@ -73,7 +73,9 @@ class ImportedAgent:
     remapped_models: dict[str, tuple[str, str]] = field(default_factory=dict)
 
 
-def export_bundle(agent: Agent, version: AgentVersion) -> dict[str, object]:
+def export_bundle(
+    agent: Agent, version: AgentVersion, *, database_schema: dict[str, dict[str, list[str]]] | None = None
+) -> dict[str, object]:
     """`version` as a portable JSON document.
 
     Refuses a version that has no graph rather than exporting half a bundle. A
@@ -85,6 +87,11 @@ def export_bundle(agent: Agent, version: AgentVersion) -> dict[str, object]:
     depth ADR-0003 §7 asks of every reader — so a row that predates a schema
     change fails here, loudly, rather than becoming a file that fails on import
     somewhere else with no way to trace where it came from.
+
+    `database_schema` is the columns of each view the `data_query` nodes read,
+    as the creator's Hệ CSDL had them (`src.datasources.sources.views_built_on`):
+    names, never data or a DSN. An import reads past it; the exported package
+    checks the company's database against it at start-up (DS-15).
     """
     if version.solution_spec is None or version.workflow is None:
         raise BundleError(
@@ -96,6 +103,7 @@ def export_bundle(agent: Agent, version: AgentVersion) -> dict[str, object]:
         "source_version_id": version.id,
         "solution_spec": AgentSolutionSpecification.model_validate(version.solution_spec).model_dump(mode="json"),
         "workflow": WorkflowJSON.model_validate(version.workflow).model_dump(mode="json"),
+        "database_schema": database_schema or {},
     }
 
 

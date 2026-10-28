@@ -11,6 +11,8 @@ database:
   url_secret: runtime_db        # the package's OWN Postgres — checkpoints, approvals, audit chain
 
 data_sources:                   # one entry per Hệ CSDL the workflow's data_query nodes read
+                                # checked at start-up: a view or column the agent or access.yaml uses that is missing
+                                # stops the package, naming each; a column added since the export is logged and left unread
   - id: "1"                     # the source_id the bundle's data_query nodes name
     name: ERP
     dialect: postgresql         # postgresql | sqlserver | mysql

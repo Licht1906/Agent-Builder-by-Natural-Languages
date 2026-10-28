@@ -263,6 +263,35 @@ def unowned_database_refs(db: Session, owner_id: int, spec: AgentSolutionSpecifi
 _NO_DSN = frozenset({ProbeFailure.DSN_MISSING, ProbeFailure.DSN_UNREADABLE})
 
 
+def views_built_on(db: Session, owner_id: int, workflow: dict[str, Any] | None) -> dict[str, dict[str, list[str]]]:
+    """`{source_id: {view: columns}}` for every view a `data_query` node reads — the bundle's `database_schema`.
+
+    The columns are the owner's Hệ CSDL as last probed, i.e. what the agent
+    was built and tried against; the exported package refuses to start on a
+    database missing any of them, and leaves unread a column added since
+    (DS-15). A node naming a source the owner does not hold, or a view the
+    probe never saw, contributes nothing — the package then says it cannot
+    check that view rather than checking it against a guess.
+    """
+    wanted: dict[str, set[str]] = {}
+    for node in (workflow or {}).get("nodes", []):
+        config = node.get("config") if isinstance(node, dict) else None
+        if node.get("type") == NodeType.DATA_QUERY and isinstance(config, dict):
+            wanted.setdefault(str(config.get("source_id", "")), set()).update(config.get("views") or [])
+    ids = [int(source_id) for source_id in wanted if source_id.isdigit()]
+    rows = db.scalars(select(DatabaseSource).where(DatabaseSource.owner_id == owner_id, DatabaseSource.id.in_(ids)))
+    schema: dict[str, dict[str, list[str]]] = {}
+    for source in rows:
+        views = {
+            view: list(source.view_columns[view])
+            for view in sorted(wanted[str(source.id)])
+            if view in source.view_columns
+        }
+        if views:
+            schema[str(source.id)] = views
+    return schema
+
+
 def _problems_with(source: DatabaseSource, rules: AccessRules) -> list[str]:
     """`access_problems` against this row's ticked views and last probe — the one way the check is asked."""
     return access_problems(rules, allowed_views=source.allowed_views, snapshot=snapshot_of(source))

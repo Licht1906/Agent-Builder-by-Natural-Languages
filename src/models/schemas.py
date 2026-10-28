@@ -525,6 +525,11 @@ class AgentBundleRequest(BaseModel):
     source_version_id: int | None = Field(
         default=None, description="Version gốc ở deployment đã xuất file — chỉ để tra ngược, không dùng khi nhập"
     )
+    database_schema: dict[str, dict[str, list[str]]] = Field(
+        default_factory=dict,
+        description="Cột của các view mà node data_query đọc, lúc xuất — gói chạy độc lập kiểm DB thật theo đây; "
+        "không dùng khi nhập",
+    )
 
 
 class ImportedAgentResponse(BaseModel):

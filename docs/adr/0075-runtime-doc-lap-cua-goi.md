@@ -31,5 +31,5 @@ ADR-0059 §10: gói xuất ra là một runtime cố định cộng cấu hình 
 
 - `knowledge_search` trong gói chưa tìm thấy gì cho tới DS-18 (tài liệu cùng Qdrant đi theo gói); gói ghi cảnh báo lúc khởi động.
 - Hành động gửi mail trong gói chưa có kênh, vì Gmail OAuth là của người tạo trên nền tảng; DS-16 thêm kênh mail dạng điểm cắm. Cho tới đó, node `mcp` báo lỗi một cách có kiểm soát.
-- Thiếu view trên DB thật thì gói chỉ cảnh báo và lượt đọc bị từ chối kèm tên view. DS-15 biến chuyện này thành từ chối khởi động.
+- Thiếu view trên DB thật thì gói chỉ cảnh báo và lượt đọc bị từ chối kèm tên view. DS-15 biến chuyện này thành từ chối khởi động. (Đã có từ DS-15 — xem ADR-0077.)
 - Chi phí trong gói là ước tính theo giá tham chiếu của nền tảng, không phải chi phí thật của LLM nội bộ.

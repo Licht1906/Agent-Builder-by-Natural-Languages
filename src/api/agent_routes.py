@@ -67,6 +67,7 @@ from src.agents.versions import (
 from src.api.deployment_access import AddressableAgent, Caller, MeteredAgent, MeteredByAnyChannel
 from src.approvals.dossier import RequestedTool, requested_tools
 from src.auth.dependencies import CurrentUser
+from src.datasources.sources import views_built_on
 from src.db.base import get_db
 from src.db.models import Agent, AgentVersion, Deployment, RunApproval, RunApprovalStatus, RunOutcome, SandboxRun, User
 from src.deployments.publication import visible_to
@@ -601,7 +602,9 @@ def requested_tool_responses(tools: Sequence[RequestedTool]) -> list[RequestedTo
 
 
 @router.get("/{agent_id}/versions/{version_id}/export")
-def export_my_agents_version(agent: OwnedAgent, version: OwnedVersion) -> dict[str, object]:
+def export_my_agents_version(
+    agent: OwnedAgent, version: OwnedVersion, db: Annotated[Session, Depends(get_db)]
+) -> dict[str, object]:
     """This version as a portable JSON bundle — the file `POST /agents/import` reads.
 
     `OwnedAgent`, so this is the creator's own agent and nobody else's. An
@@ -620,7 +623,7 @@ def export_my_agents_version(agent: OwnedAgent, version: OwnedVersion) -> dict[s
     see `export_bundle`.
     """
     try:
-        return export_bundle(agent, version)
+        return export_bundle(agent, version, database_schema=views_built_on(db, agent.owner_id, version.workflow))
     except BundleError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
 

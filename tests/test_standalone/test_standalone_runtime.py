@@ -140,12 +140,15 @@ def _runtime(**overrides: Any) -> dict[str, Any]:
 def package_dir(tmp_path: Path) -> Callable[..., Path]:
     """Write a package into `tmp_path` — the three files a company receives."""
 
-    def _write(*, workflow: dict[str, Any] | None = None, **runtime: Any) -> Path:
+    def _write(
+        *, workflow: dict[str, Any] | None = None, database_schema: dict[str, Any] | None = None, **runtime: Any
+    ) -> Path:
         bundle = {
             "format": BUNDLE_FORMAT,
             "name": "Trợ lý công nợ",
             "solution_spec": SPEC,
             "workflow": workflow or _workflow(),
+            "database_schema": database_schema or {},
         }
         (tmp_path / "bundle.json").write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
         (tmp_path / "access.yaml").write_text(yaml.safe_dump(ACCESS, allow_unicode=True), encoding="utf-8")

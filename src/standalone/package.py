@@ -10,6 +10,11 @@
   `access.yaml`, its views and columns from probing the real database at
   start-up — read through the platform's own `PlatformDatabaseReader`, so
   scope, deny-by-default and citations are the platform's, not a copy;
+- the real database checked against what the agent uses (DS-15): every view
+  a `data_query` node reads, with the columns it had when the agent was built
+  (the bundle's `database_schema`), and every view and column `access.yaml`
+  names. Anything missing refuses the start, every gap named at once; a column
+  the agent was not built with is a warning, and stays unread;
 - the package's own Postgres prepared: only the tables a run writes
   (approvals, audit) and what their keys point at, and one agent and one
   version standing for the bundle, so those rows have something to belong to.
@@ -19,18 +24,18 @@ package's Postgres — see `__main__`.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import Engine, Table, select, text
 from sqlalchemy.orm import Session
 
 from src.agents.portability import BUNDLE_FORMAT
-from src.datasources.access import AccessRules, from_yaml
-from src.datasources.dialects import DatabaseProbeError, dialect_for
+from src.datasources.access import AccessRules, WhereGrant, from_yaml
+from src.datasources.dialects import DatabaseProbeError, Introspection, dialect_for, schema_problems
 from src.datasources.reader import PlatformDatabaseReader
 from src.db.base import Base, SessionLocal, engine
 from src.db.models import (
@@ -64,6 +69,26 @@ _PACKAGE_TABLES = (
     "audit_events",
     "audit_chain_head",
 )
+
+
+#: `{source_id: {view: columns}}` — the views each Hệ CSDL had when the agent was built, as the bundle carries them.
+DatabaseSchema = dict[str, dict[str, list[str]]]
+
+_DATABASE_SCHEMA = TypeAdapter(DatabaseSchema)
+
+
+@dataclass(frozen=True, slots=True)
+class SchemaCheck:
+    """One Hệ CSDL's real database against the agent: what it lacks, what it has beyond, what the agent may read.
+
+    `missing` refuses the start; `warnings` are logged; `view_columns` is every
+    view the package opens, cut down to what the agent was built with (plus
+    what the rules filter on) wherever the bundle says what that was.
+    """
+
+    missing: list[str]
+    warnings: list[str]
+    view_columns: dict[str, list[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +154,7 @@ class PackageDatabaseReader(PlatformDatabaseReader):
 
 def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Path) -> Package:
     """The bundle, its Hệ CSDL and its rules, checked — `RuntimeConfigError` naming every problem otherwise."""
-    name, spec, workflow = _bundle(_path(config.bundle, base))
+    name, spec, workflow, built_on = _bundle(_path(config.bundle, base))
     trusted = frozenset(config.trusted_hosts)
     declared = {source.id: source for source in config.data_sources}
     read_by = _data_query_views(workflow)
@@ -139,6 +164,7 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
             "Workflow đọc Hệ CSDL chưa khai trong runtime.yaml (data_sources[].id): " + ", ".join(unknown)
         )
     sources: dict[str, DatabaseSource] = {}
+    problems: list[str] = []
     warnings: list[str] = []
     for source_id, declared_source in declared.items():
         rules = _access_rules(_path(declared_source.access, base))
@@ -147,26 +173,29 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
         try:
             found = dialect_for(dialect).introspect(dsn, trusted_hosts=trusted)
         except DatabaseProbeError as exc:
-            raise RuntimeConfigError(f"Không đọc được Hệ CSDL {declared_source.name}: {exc}") from None
-        wanted = {*read_by.get(source_id, ()), rules.identity.view}
-        present = {view.name: list(view.columns) for view in found.views}
-        missing = sorted(wanted - set(present))
-        if missing:
-            # DS-15 turns this into a refusal to start; until then the read is refused, by name.
-            warnings.append(f"Hệ CSDL {declared_source.name} không có view: {', '.join(missing)}")
-        allowed = sorted(view for view in wanted if view in present)
+            problems.append(f"Không đọc được Hệ CSDL {declared_source.name}: {exc}")
+            continue
+        check = check_schema(found, rules=rules, read=read_by.get(source_id, ()), built_on=built_on.get(source_id, {}))
+        problems.extend(f"Hệ CSDL {declared_source.name}: {problem}" for problem in check.missing)
+        warnings.extend(f"Hệ CSDL {declared_source.name}: {warning}" for warning in check.warnings)
         sources[source_id] = DatabaseSource(
             id=int(source_id) if source_id.isdigit() else 0,
             owner_id=0,
             name=declared_source.name,
             dialect=dialect,
             dsn_secret_ref=declared_source.dsn_secret,
-            allowed_views=allowed,
-            view_columns={view: present[view] for view in allowed},
+            allowed_views=list(check.view_columns),
+            view_columns=check.view_columns,
             view_row_counts={},
             base_tables=list(found.base_tables),
             last_probe_status=DatabaseSourceStatus.CONNECTED,
             access_rules=rules.model_dump(mode="json"),
+        )
+    if problems:
+        # Every gap at once, for the reason `resolve_secrets` names every missing secret: one fix, not one per restart.
+        raise RuntimeConfigError(
+            "DB thật thiếu thứ agent dùng — sửa DB hoặc access.yaml rồi khởi động lại:\n"
+            + "\n".join(f"- {problem}" for problem in problems)
         )
     if any(node.type is NodeType.KNOWLEDGE_SEARCH for node in workflow.nodes):
         warnings.append(
@@ -183,6 +212,59 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
         warnings=warnings,
         base=base,
     )
+
+
+def check_schema(
+    found: Introspection, *, rules: AccessRules, read: Iterable[str], built_on: Mapping[str, Sequence[str]]
+) -> SchemaCheck:
+    """One Hệ CSDL's real database against what the agent uses — DS-15 / ADR-0059 §4.
+
+    Expected: each view in `read` (what the `data_query` nodes read) with the
+    columns `built_on` says it had when the agent was built; the employee view
+    with its match and attribute columns; each view a rule grants with the
+    columns its `where` filters on. `schema_problems` names every one missing.
+
+    A column the database has beyond that, on a view `built_on` describes, is
+    a warning and is left out of `view_columns`: the agent was evaluated
+    without it, and a column added to an ERP view is as likely to be a salary
+    as a convenience. A view `built_on` does not describe (a hand-written
+    bundle; the employee view) is opened whole — said so for a node's view.
+    """
+    read = sorted(set(read))
+    expected: dict[str, list[str]] = {}
+
+    def expect(view: str, columns: Iterable[str]) -> None:
+        wanted = expected.setdefault(view, [])
+        wanted.extend(column for column in columns if column not in wanted)
+
+    for view in read:
+        expect(view, built_on.get(view, ()))
+    identity = rules.identity
+    expect(identity.view, [identity.match_by, *identity.attributes.values()])
+    for rule in rules.rules:
+        for view, grant in rule.views.items():
+            expect(view, grant.where if isinstance(grant, WhereGrant) else ())
+
+    present = {view.name: list(view.columns) for view in found.views}
+    warnings = [
+        f"bundle không ghi cột của view {view} lúc dựng agent — không kiểm được cột, agent đọc mọi cột của view"
+        for view in read
+        if view not in built_on
+    ]
+    view_columns: dict[str, list[str]] = {}
+    for view, wanted in expected.items():
+        if view not in present:
+            continue
+        if view not in built_on:
+            view_columns[view] = present[view]
+            continue
+        added = [column for column in present[view] if column not in wanted]
+        if added:
+            warnings.append(
+                f"view {view} có cột mới so với lúc dựng agent: {', '.join(added)} — agent không đọc các cột này"
+            )
+        view_columns[view] = [column for column in present[view] if column in wanted]
+    return SchemaCheck(missing=schema_problems(found, expected), warnings=warnings, view_columns=view_columns)
 
 
 def reader_for(package: Package, asker: str | None) -> PackageDatabaseReader:
@@ -264,7 +346,7 @@ def database_ready() -> bool:
         return False
 
 
-def _bundle(path: Path) -> tuple[str, AgentSolutionSpecification, WorkflowJSON]:
+def _bundle(path: Path) -> tuple[str, AgentSolutionSpecification, WorkflowJSON, DatabaseSchema]:
     try:
         document: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -274,13 +356,14 @@ def _bundle(path: Path) -> tuple[str, AgentSolutionSpecification, WorkflowJSON]:
     try:
         spec = AgentSolutionSpecification.model_validate(document.get("solution_spec"))
         workflow = WorkflowJSON.model_validate(document.get("workflow"))
+        built_on = _DATABASE_SCHEMA.validate_python(document.get("database_schema") or {})
     except ValidationError as exc:
         raise RuntimeConfigError(f"Bundle {path} sai định dạng: {exc}") from None
     try:
         ensure_runnable(workflow)
     except ValueError as exc:
         raise RuntimeConfigError(f"Workflow trong bundle chưa chạy được: {exc}") from None
-    return str(document.get("name") or "Agent"), spec, workflow
+    return str(document.get("name") or "Agent"), spec, workflow, built_on
 
 
 def _access_rules(path: Path) -> AccessRules:
