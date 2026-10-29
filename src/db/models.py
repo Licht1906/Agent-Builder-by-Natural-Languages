@@ -961,6 +961,10 @@ class EvalCaseOrigin(StrEnum):
     UPLOADED = "uploaded"
     PROMOTED = "promoted"
     GRID = "grid"
+    #: EV-03 / ADR-0069 §1: filled from the platform's shared template library
+    #: (`eval/library/`). The filled copy is the case — `extra.template_id`
+    #: says which template it came from, and nothing reads the library back.
+    LIBRARY = "library"
 
 
 class EvalSuite(Base):

@@ -34,6 +34,7 @@ vi.mock("../../lib/api", async () => {
       run: vi.fn(),
       latest: vi.fn(),
       runById: vi.fn(),
+      buildSuite: vi.fn(),
       updateCase: vi.fn(),
       removeCase: vi.fn(),
       importSuite: vi.fn(),
@@ -201,6 +202,21 @@ describe("EvaluationTab", () => {
     expect(screen.getByText(/Evidence: 2 tool call/)).toBeInTheDocument();
     // A failing case is never folded: it is the case d81dfe4 opened up.
     expect(screen.queryByText(/what it did and answered/)).not.toBeInTheDocument();
+  });
+
+  /* EV-03: one button fills the suite towards 100 live cases and says where they came from. */
+  it("builds the suite and reports how many cases came from the library, the data and the model", async () => {
+    api.evaluation.buildSuite.mockResolvedValue({
+      library_added: 16, data_added: 88, generated_added: 0, dropped: 2, live_count: 104, target: 100,
+    });
+    const notify = draw();
+    await userEvent.click(await screen.findByRole("button", { name: /Build the suite/ }));
+
+    await waitFor(() => expect(api.evaluation.buildSuite).toHaveBeenCalledWith(7, 13));
+    expect(notify).toHaveBeenCalledWith(
+      "104/100 live cases · 16 from the library, 88 from the data, 0 written by the model", undefined
+    );
+    await waitFor(() => expect(api.evaluation.cases).toHaveBeenCalledTimes(2));
   });
 
   /* EV-01: the POST answers `running`; the screen polls the run, shows how far

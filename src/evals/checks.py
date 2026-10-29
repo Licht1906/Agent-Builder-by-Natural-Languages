@@ -55,6 +55,7 @@ from src.models.eval_check import (
     ApprovalCompliance,
     AsksBack,
     CallsAction,
+    CitesKnowledge,
     ExpectedCheck,
     ForbidsAction,
     ReachesEnd,
@@ -96,6 +97,8 @@ def grade_check(
     """
     if isinstance(check, AnswersFromQuery):
         return _answered_from_query(check, transcript, answer_key)
+    if isinstance(check, CitesKnowledge):
+        return _cited_knowledge(transcript)
     if isinstance(check, ReachesEnd):
         return _reached_end(transcript)
     if isinstance(check, CallsAction):
@@ -488,6 +491,18 @@ _CITATION_LINE = re.compile(r"^\[(.+?)\]$", re.MULTILINE)
 #: sentence, not alone on its line, so this looks for the brackets themselves
 #: rather than for a line they fill.
 _ANSWER_CITATION = re.compile(r"\[([^\[\]\n]+)\]")
+
+
+def _cited_knowledge(transcript: Sequence[SandboxTranscriptEntry]) -> CheckVerdict:
+    """`CitesKnowledge`: searched, cited at least once, and cited only what was found."""
+    answer = final_answer(transcript)
+    if _citations_available(transcript) is None:
+        return CheckVerdict(passed=False, reason="Agent không tra cứu tài liệu ở lượt này nên không có gì để trích dẫn")
+    if not _ANSWER_CITATION.findall(answer):
+        return CheckVerdict(passed=False, reason="Câu trả lời không trích dẫn đoạn tài liệu nào")
+    verdict = grade_citation_groundedness(transcript, answer)
+    assert verdict is not None  # `_citations_available` already found a search
+    return verdict
 
 
 def grade_citation_groundedness(transcript: Sequence[SandboxTranscriptEntry], answer: str) -> CheckVerdict | None:

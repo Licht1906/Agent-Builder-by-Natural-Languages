@@ -519,6 +519,13 @@ export const VI = {
   "The evaluation stopped: {reason}": "Lần chấm điểm đã dừng: {reason}",
   /* EV-02 — dữ liệu đóng băng cho eval. */
   "Re-record frozen data": "Ghi lại dữ liệu đóng băng",
+  /* EV-03 — dựng bộ đề từ thư viện template. */
+  "from the library": "từ thư viện",
+  "Build the suite": "Dựng bộ đề",
+  "Fill the suite to 100 live cases: the shared library's templates that fit this agent, questions answered from its data, then the model.":
+    "Bổ sung bộ đề tới 100 case live: template trong thư viện dùng chung hợp với agent này, câu hỏi có đáp án tính từ dữ liệu, rồi tới case do model viết.",
+  "{live}/{target} live cases · {library} from the library, {data} from the data, {generated} written by the model":
+    "{live}/{target} case live · {library} từ thư viện, {data} từ dữ liệu, {generated} do model viết",
   "Eval reads the database as each case's asker saw it when the case was written. Record it again after the views changed — the next run is then measured on today's rows.":
     "Chấm điểm đọc dữ liệu đúng như người hỏi của từng case thấy lúc case được viết. Ghi lại khi view đã đổi — lần chạy sau sẽ đo trên dữ liệu hôm nay.",
   "Frozen data re-recorded for {n} case(s)": "Đã ghi lại dữ liệu đóng băng cho {n} case",

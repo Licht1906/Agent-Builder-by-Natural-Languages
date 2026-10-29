@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ListChecks, CheckCircle2, XCircle, Wand2, ShieldAlert, Trash2, Upload, Download,
-  AlertTriangle, X, ChevronDown, Filter, Ruler, Gavel, Unplug, BookOpenCheck, Database,
+  AlertTriangle, X, ChevronDown, Filter, Ruler, Gavel, Unplug, BookOpenCheck, Database, Layers,
 } from "lucide-react";
 import * as api from "../../lib/api";
 import { ErrorNote, Note, PageShell, Section, Spinner } from "../../components/ui";
@@ -50,10 +50,12 @@ const ORIGIN_LABELS = {
      and a chip that refused to name them would leave a row with no provenance
      at all. It is a filter like the other four. */
   grid: "from the old grid",
+  /* EV-03: filled from the platform's shared template library. */
+  library: "from the library",
 };
 
 /* Every provenance a row can carry, in the order a creator meets them. */
-const CASE_ORIGINS = ["generated", "manual", "uploaded", "promoted", "grid"];
+const CASE_ORIGINS = ["library", "generated", "manual", "uploaded", "promoted", "grid"];
 
 const muted = "color-mix(in srgb, var(--color-text) 58%, transparent)";
 const faint = "color-mix(in srgb, var(--color-text) 45%, transparent)";
@@ -135,6 +137,29 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
         report.problems.length
           ? t("Frozen data re-recorded for {n} case(s) · {p} could not be", { n: report.recorded, p: report.problems.length })
           : t("Frozen data re-recorded for {n} case(s)", { n: report.recorded })
+      );
+    } catch (err) {
+      setError(err.message);
+      notify(err.message, "error");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  /* EV-03: library templates that fit this agent, data questions, then the
+     model — until the suite has ≥100 live cases. */
+  async function buildSuite() {
+    setBusy("build");
+    setError("");
+    try {
+      const report = await api.evaluation.buildSuite(agentId, versionId);
+      await load();
+      notify(
+        t("{live}/{target} live cases · {library} from the library, {data} from the data, {generated} written by the model", {
+          live: report.live_count, target: report.target, library: report.library_added,
+          data: report.data_added, generated: report.generated_added,
+        }),
+        report.live_count >= report.target ? undefined : "error"
       );
     } catch (err) {
       setError(err.message);
@@ -392,6 +417,15 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
         <div>
             {/* Every verb in this toolbar adds to, or scores, the one set. */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+              <button
+                className="btn btn-secondary"
+                onClick={buildSuite}
+                disabled={!!busy || running}
+                style={{ height: 38 }}
+                title={t("Fill the suite to 100 live cases: the shared library's templates that fit this agent, questions answered from its data, then the model.")}
+              >
+                {busy === "build" ? <Spinner size={13} /> : <Layers size={13} />}{t("Build the suite")}
+              </button>
               <button className="btn btn-secondary" onClick={generate} disabled={!!busy} style={{ height: 38 }}>
                 {busy === "generate" ? <Spinner size={13} /> : <Wand2 size={13} />}{t("Generate cases")}
               </button>

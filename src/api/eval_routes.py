@@ -57,6 +57,7 @@ from src.evals.gate import score_for, version_blocker
 from src.evals.results import newest_run, results_of, skipped_of
 from src.evals.runner import EvalRunError, EvalServices, run_eval
 from src.evals.sample_suites import case_count, sample_suite_of_agent
+from src.evals.suite_builder import build_suite
 from src.evals.suite_io import SuiteImportError, export_suite, import_suite, latest_workflow, template_csv
 from src.evals.workflow_cases import generate_workflow_cases
 from src.evals.workflow_runner import execute_workflow_eval, plan_workflow_eval
@@ -69,6 +70,7 @@ from src.models.schemas import (
     EvalGenerationResponse,
     EvalRunRequest,
     EvalRunResponse,
+    EvalSuiteBuildResponse,
     SampleSuiteResponse,
     SuiteImportResponse,
     SuiteImportRowResponse,
@@ -363,6 +365,36 @@ def delete_my_versions_eval_case(case: OwnedCase, db: Annotated[Session, Depends
     what they ran (`eval_runs.results`), so deleting a case rewrites no history.
     """
     delete_case(db, case)
+
+
+@router.post(f"{_VERSION}/eval-suite/build", response_model=EvalSuiteBuildResponse)
+async def build_my_versions_eval_suite(
+    version: OwnedVersion,
+    db: Annotated[Session, Depends(get_db)],
+    databases: Databases,
+    model_factory: Annotated[ChatModelFactory, Depends(get_chat_model_factory)],
+) -> EvalSuiteBuildResponse:
+    """Bring the suite up to ≥100 live cases — library templates, data questions, then the model (EV-03).
+
+    The library is pulled once per version: pressing this again on the same
+    version only tops the suite up. Every case it writes is ordinary afterwards
+    — listed, edited and deleted like any other — and carries where it came
+    from (`origin`, `extra.template_id` / `extra.generator`).
+    """
+    workflow = runnable_workflow(version)
+    try:
+        spec = solution_spec_of(version)
+    except SpecStageError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    report = await build_suite(db, version, workflow=workflow, spec=spec, reader=databases, model_factory=model_factory)
+    return EvalSuiteBuildResponse(
+        library_added=report.library_added,
+        data_added=report.data_added,
+        generated_added=report.generated_added,
+        dropped=report.dropped,
+        live_count=report.live_count,
+        target=report.target,
+    )
 
 
 @router.post(f"{_VERSION}/eval-cassettes/record", response_model=CassetteRecordResponse)

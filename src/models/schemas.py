@@ -1312,6 +1312,17 @@ class EvalRunRequest(BaseModel):
     case_ids: list[int] | None = Field(default=None, description="null = mọi case của suite")
 
 
+class EvalSuiteBuildResponse(BaseModel):
+    """What "Dựng bộ đề" added, from where, and how far the suite is from ADR-0069's ≥100 live cases (EV-03)."""
+
+    library_added: int = Field(..., description="Case đổ từ thư viện template dùng chung")
+    data_added: int = Field(..., description="Case nghiệp vụ sinh từ dữ liệu, đáp án tính bằng truy vấn")
+    generated_added: int = Field(..., description="Case do model sinh từ tiêu chí của spec")
+    dropped: int = Field(..., description="Case dữ liệu bị loại ngay vì đáp án rỗng, toàn số 0 hoặc không đọc được")
+    live_count: int = Field(..., description="Số case live của suite sau khi dựng")
+    target: int
+
+
 class CassetteProblemResponse(BaseModel):
     """One case whose views could not be frozen, and why."""
 

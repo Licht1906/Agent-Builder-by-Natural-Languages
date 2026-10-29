@@ -41,6 +41,7 @@ from src.models.eval_check import (
     ApprovalCompliance,
     AsksBack,
     CallsAction,
+    CitesKnowledge,
     ExpectedCheck,
     ForbidsAction,
     ReachesEnd,
@@ -166,6 +167,8 @@ def _grounded(check: ExpectedCheck, workflow: WorkflowJSON | None) -> bool:
         return check.node_id in {node.id for node in workflow.nodes_of_type(NodeType.HUMAN_APPROVAL)}
     if isinstance(check, AnswersFromQuery):
         return check.query.view in _views_read(workflow)
+    if isinstance(check, CitesKnowledge):
+        return bool(workflow.nodes_of_type(NodeType.KNOWLEDGE_SEARCH))
     return False
 
 
@@ -198,6 +201,8 @@ def ungrounded_reason(case: EvalCase) -> str:
         )
     if isinstance(check, ApprovalCompliance):
         return f"Node duyệt '{check.node_id}' không có trong graph của version này"
+    if isinstance(check, CitesKnowledge):
+        return "Graph của version này không tra cứu tài liệu nên không có gì để trích dẫn (không phải chấm trượt)"
     if isinstance(check, AnswersFromQuery):
         return f"Không node data_query nào của version này đọc view '{check.query.view}' mà truy vấn của case hỏi"
     if check is None and case.category is not None:

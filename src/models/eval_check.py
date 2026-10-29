@@ -86,6 +86,7 @@ class CheckKind(StrEnum):
     ASKS_BACK = "asks_back"
     TAKES_NO_ACTION = "takes_no_action"
     ANSWERS_FROM_QUERY = "answers_from_query"
+    CITES_KNOWLEDGE = "cites_knowledge"
 
 
 class ReachesEnd(BaseModel):
@@ -252,9 +253,31 @@ class AnswersFromQuery(BaseModel):
     expects_no_rows: bool = False
 
 
-#: One case's rule-based expectation, whichever of the seven it is.
+class CitesKnowledge(BaseModel):
+    """The answer cites what this turn's knowledge search found, and nothing it did not — EV-03.
+
+    The rule a `knowledge_grounding` library case is graded by. Read off the
+    transcript like `src.evals.checks.grade_citation_groundedness`: the run
+    searched, the answer names at least one `[...]` label, and every label it
+    names is one the search handed it. Whether the cited passage really says
+    what the answer claims is a judge's question, and not this rule's.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal[CheckKind.CITES_KNOWLEDGE] = CheckKind.CITES_KNOWLEDGE
+
+
+#: One case's rule-based expectation, whichever of the eight it is.
 ExpectedCheck = Annotated[
-    ReachesEnd | CallsAction | ForbidsAction | ApprovalCompliance | AsksBack | TakesNoAction | AnswersFromQuery,
+    ReachesEnd
+    | CallsAction
+    | ForbidsAction
+    | ApprovalCompliance
+    | AsksBack
+    | TakesNoAction
+    | AnswersFromQuery
+    | CitesKnowledge,
     Field(discriminator="kind"),
 ]
 
@@ -301,6 +324,8 @@ def describe_check(check: ExpectedCheck) -> str:
         return "Agent phải hỏi lại người dùng thứ còn thiếu, và chưa được làm gì có tác dụng phụ"
     if isinstance(check, TakesNoAction):
         return "Workflow không được thực hiện hành động nào có tác dụng phụ"
+    if isinstance(check, CitesKnowledge):
+        return "Câu trả lời phải trích dẫn đúng đoạn tài liệu tìm được ở lượt này"
     if isinstance(check, AnswersFromQuery):
         if check.expects_no_rows:
             return f"Agent phải tra {check.query.view} và nói rõ là không có dữ liệu khớp"

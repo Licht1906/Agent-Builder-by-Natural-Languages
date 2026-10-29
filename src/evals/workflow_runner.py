@@ -210,6 +210,26 @@ def plan_workflow_eval(
             "Chưa có test case nào để chạy — hãy sinh bộ test case từ tiêu chí thành công và điều cấm "
             "của spec, hoặc tự thêm case, rồi chạy lại"
         )
+    runnable, skipped = runnable_cases(db, cases, workflow=workflow, success_criteria=success_criteria)
+    run = open_run(
+        db,
+        version_id,
+        threshold=read_config(db).eval_pass_threshold,
+        total=len(runnable),
+        skipped=skipped,
+        judge_model=get_settings().judge_model,
+    )
+    return PlannedEval(run_id=run.id, case_ids=tuple(runnable), applicability=runnable)
+
+
+def runnable_cases(
+    db: Session, cases: Sequence[EvalCase], *, workflow: WorkflowJSON, success_criteria: frozenset[str]
+) -> tuple[dict[int, Applicability], list[SkippedCase]]:
+    """Which of `cases` a run of `workflow` would execute, and why each of the others would be skipped.
+
+    The classification `plan_workflow_eval` writes into a run, kept apart so
+    the suite builder (EV-03) counts "live" by the same rules a run applies.
+    """
     runnable: dict[int, Applicability] = {}
     skipped: list[SkippedCase] = []
     frozen = cassettes_for(db, [case.id for case in cases]) if data_reads(workflow) else {}
@@ -226,15 +246,7 @@ def plan_workflow_eval(
             skipped.append(SkippedCase(suite_case_id=case.id, reason=problem))
             continue
         runnable[case.id] = applicability
-    run = open_run(
-        db,
-        version_id,
-        threshold=read_config(db).eval_pass_threshold,
-        total=len(runnable),
-        skipped=skipped,
-        judge_model=get_settings().judge_model,
-    )
-    return PlannedEval(run_id=run.id, case_ids=tuple(runnable), applicability=runnable)
+    return runnable, skipped
 
 
 async def execute_workflow_eval(

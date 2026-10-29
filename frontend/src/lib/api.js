@@ -475,6 +475,9 @@ export const evaluation = {
    *  at once and the cases run in the background). */
   /** EV-02: freeze again every view the graph reads, for every case — after the
    *  Hệ CSDL's columns changed, or to grade on today's data. */
+  /** EV-03: library templates, data questions, then the model — up to ≥100 live cases. */
+  buildSuite: (agentId, versionId) =>
+    request(`/agents/${agentId}/versions/${versionId}/eval-suite/build`, { method: "POST" }),
   recordCassettes: (agentId, versionId) =>
     request(`/agents/${agentId}/versions/${versionId}/eval-cassettes/record`, { method: "POST" }),
   runById: (agentId, versionId, runId) => request(`/agents/${agentId}/versions/${versionId}/eval-runs/${runId}`),
