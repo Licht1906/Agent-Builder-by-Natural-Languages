@@ -81,7 +81,7 @@ async def test_starting_a_run_answers_running_before_any_case_has_run(
     assert started.status_code == 200, started.text
     begun = started.json()
     assert (begun["status"], begun["done_count"], begun["total_count"], begun["results"]) == ("running", 0, 19, [])
-    assert len(begun["skipped"]) == 4, "classification happens before the response — the skipped are known at once"
+    assert len(begun["skipped"]) == 6, "classification happens before the response — the skipped are known at once"
     run = finished.json()
     assert (run["status"], run["done_count"], run["total_count"]) == ("completed", 19, 19)
     assert len(run["results"]) == 19 and run["error"] is None

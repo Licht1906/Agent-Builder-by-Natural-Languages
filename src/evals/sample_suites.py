@@ -14,7 +14,11 @@ suite schema (`src.evals.suite_io`), for the accounts-receivable templates:
 - "act on this" and injected instructions are `takes_no_action` rules, graded
   off the transcript with no model in the loop. On `database_qa`, which has no
   action to decline, they are honestly skipped (ADR-0062 §3); on
-  `database_outreach` they count.
+  `database_outreach` they count;
+- two more (EV-02) ask "khách nào quá hạn lâu nhất?" as the rep and as the lead
+  and carry the query itself (`answers_from_query`): the answer key is that
+  query on each asker's frozen `v_ar_open`, so the rep's and the lead's differ
+  and neither is written by a model.
 
 A creator loads it into an agent built from one of those templates with one
 click (`POST /agents/{id}/eval-suite/sample`); it lands as an ordinary

@@ -334,6 +334,11 @@ def _existing_keys(db: Session, suite_id: int) -> set[tuple[str, str, str]]:
     return {_key_of(input_message, criterion, run_as) for input_message, criterion, run_as in rows}
 
 
+def latest_workflow(db: Session, agent: Agent) -> WorkflowJSON | None:
+    """The graph of the agent's latest version, or `None` — what imported rows are grounded and recorded against."""
+    return _workflow_of_or_none(_latest_version(db, agent))
+
+
 def _latest_version(db: Session, agent: Agent) -> AgentVersion | None:
     from src.agents.versions import list_versions  # local import: avoids a routes<->cases<->versions cycle
 

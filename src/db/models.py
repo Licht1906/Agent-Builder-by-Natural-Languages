@@ -1060,6 +1060,42 @@ class EvalCase(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
 
+class EvalCassette(Base):
+    """One view of one Hệ CSDL as one eval case's asker saw it, frozen — EV-02 / ADR-0069 §2.
+
+    An eval run never reads the creator's database: every `data_query` in a
+    case's run answers from these rows (`src.evals.cassettes`), so a Baseline
+    and a Candidate are graded on the same data however the database moved in
+    between. Recorded when the case is written — by the real reader, with the
+    case's own `run_as`, so the scope in the rows is the scope that person has.
+
+    The whole scoped view rather than one query's result: the model writes its
+    own query at run time, and a query is a pure function of the view's rows
+    (`src.datasources.in_memory`), so any query it writes has an answer here.
+
+    `schema_hash` is the view's columns when it was recorded. A probe that finds
+    other columns makes the cassette stale, and the case is not run until it is
+    recorded again. `payload` holds `source_name`, `columns`, `rows`, `scope`,
+    and — instead of rows — `denied` (the asker may not read this view) or
+    `error` (it could not be read, or was too large to freeze).
+
+    Belongs to the case and goes with it; it holds the creator's own data, kept
+    as long as the suite that tests on it, like `evidence_cells`.
+    """
+
+    __tablename__ = "eval_cassettes"
+    __table_args__ = (UniqueConstraint("case_id", "source_id", "view", name="uq_eval_cassettes_case_view"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("eval_cases.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[int]
+    view: Mapped[str]
+    run_as: Mapped[str | None] = mapped_column(default=None)
+    schema_hash: Mapped[str]
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    recorded_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
 class EvalRunStatus(StrEnum):
     """Where one eval run has got to (EV-01 / ADR-0069 §7).
 

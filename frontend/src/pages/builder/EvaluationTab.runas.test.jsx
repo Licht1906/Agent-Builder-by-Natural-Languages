@@ -14,6 +14,7 @@ vi.mock("../../lib/api", async () => {
       generate: vi.fn(), cases: vi.fn(), run: vi.fn(), latest: vi.fn(), updateCase: vi.fn(),
       removeCase: vi.fn(), importSuite: vi.fn(), exportSuite: vi.fn(), template: vi.fn(),
       sample: vi.fn().mockResolvedValue({ available: false, name: null, case_count: 0 }), loadSample: vi.fn(),
+      recordCassettes: vi.fn(), runById: vi.fn(),
     },
   };
 });
@@ -35,6 +36,28 @@ const rowOf = async (criterion) => (await screen.findByText(criterion)).closest(
 beforeEach(() => {
   vi.clearAllMocks();
   api.evaluation.latest.mockRejectedValue(Object.assign(new Error("none"), { status: 404 }));
+});
+
+describe("frozen data for eval (EV-02)", () => {
+  it("re-records the suite's frozen data on a graph that reads a database, and says how it went", async () => {
+    api.evaluation.cases.mockResolvedValue([{ ...CASE, run_as: "an@cty.vn" }]);
+    api.evaluation.recordCassettes.mockResolvedValue({ recorded: 1, problems: [] });
+    const notify = vi.fn();
+    render(<LanguageProvider><EvaluationTab agentId={1} versionId={2} readsDatabase notify={notify} /></LanguageProvider>);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Re-record frozen data/ }));
+
+    await waitFor(() => expect(api.evaluation.recordCassettes).toHaveBeenCalledWith(1, 2));
+    expect(notify).toHaveBeenCalledWith("Frozen data re-recorded for 1 case(s)");
+  });
+
+  it("offers nothing to re-record on a graph that reads no database", async () => {
+    api.evaluation.cases.mockResolvedValue([CASE]);
+    draw(false);
+    await screen.findByText(CASE.criterion);
+
+    expect(screen.queryByRole("button", { name: /Re-record frozen data/ })).not.toBeInTheDocument();
+  });
 });
 
 describe("an eval case's asker", () => {

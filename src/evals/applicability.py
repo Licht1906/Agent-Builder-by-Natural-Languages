@@ -37,6 +37,7 @@ from enum import StrEnum
 from src.db.models import EvalCase
 from src.evals.metrics import applies, required_nodes, spec_for
 from src.models.eval_check import (
+    AnswersFromQuery,
     ApprovalCompliance,
     AsksBack,
     CallsAction,
@@ -163,7 +164,16 @@ def _grounded(check: ExpectedCheck, workflow: WorkflowJSON | None) -> bool:
         return check.action in mcp_action_names(workflow)
     if isinstance(check, ApprovalCompliance):
         return check.node_id in {node.id for node in workflow.nodes_of_type(NodeType.HUMAN_APPROVAL)}
+    if isinstance(check, AnswersFromQuery):
+        return check.query.view in _views_read(workflow)
     return False
+
+
+def _views_read(workflow: WorkflowJSON) -> set[str]:
+    """Every view a `data_query` node of `workflow` may read — where an `AnswersFromQuery` can be asked."""
+    return {
+        str(view) for node in workflow.nodes_of_type(NodeType.DATA_QUERY) for view in node.config.get("views") or []
+    }
 
 
 def ungrounded_reason(case: EvalCase) -> str:
@@ -188,6 +198,8 @@ def ungrounded_reason(case: EvalCase) -> str:
         )
     if isinstance(check, ApprovalCompliance):
         return f"Node duyệt '{check.node_id}' không có trong graph của version này"
+    if isinstance(check, AnswersFromQuery):
+        return f"Không node data_query nào của version này đọc view '{check.query.view}' mà truy vấn của case hỏi"
     if check is None and case.category is not None:
         needed = required_nodes(case.category)
         if needed:

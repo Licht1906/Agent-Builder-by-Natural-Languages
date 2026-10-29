@@ -517,6 +517,12 @@ export const VI = {
   "Running {done}/{total} — you can leave this screen, the run continues":
     "Đang chạy {done}/{total} — có thể rời màn hình này, lần chạy vẫn tiếp tục",
   "The evaluation stopped: {reason}": "Lần chấm điểm đã dừng: {reason}",
+  /* EV-02 — dữ liệu đóng băng cho eval. */
+  "Re-record frozen data": "Ghi lại dữ liệu đóng băng",
+  "Eval reads the database as each case's asker saw it when the case was written. Record it again after the views changed — the next run is then measured on today's rows.":
+    "Chấm điểm đọc dữ liệu đúng như người hỏi của từng case thấy lúc case được viết. Ghi lại khi view đã đổi — lần chạy sau sẽ đo trên dữ liệu hôm nay.",
+  "Frozen data re-recorded for {n} case(s)": "Đã ghi lại dữ liệu đóng băng cho {n} case",
+  "Frozen data re-recorded for {n} case(s) · {p} could not be": "Đã ghi lại dữ liệu đóng băng cho {n} case · {p} case không ghi được",
   "source groundedness": "bám theo nguồn",
   "correctness": "đúng sự thật",
   "relevance": "đúng trọng tâm",

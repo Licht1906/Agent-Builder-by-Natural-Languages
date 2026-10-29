@@ -31,6 +31,12 @@ refuse an empty set, classify every case, write a `running` row — and
 `Settings.eval_concurrency` cases in flight, results stored in case order
 however they finish, one case that raises failing only itself.
 
+**Every `data_query` reads frozen data** (EV-02 / ADR-0069 §2). A case is
+run on the cassettes recorded when it was written (`src.evals.cassettes`):
+its reader is a `CassetteReader`, never the creator's database, so two runs of
+one suite read the same rows. A case without the cassettes its graph needs is
+`ungrounded` with the reason — it is never quietly run live.
+
 Spend is deliberately not written to `run_costs`, for ADR-0011 §8's reason: an
 eval candidate is a genuine `sandbox=True` run of the version, and a row here
 would be picked up as "the measured cost of this version" and displace the trial
@@ -50,10 +56,12 @@ from src.agents.costs import CostFigure
 from src.agents.runtime import Conversation, RunServices
 from src.agents.threads import RunIdentity, ThreadNamespace, ThreadRef
 from src.config import get_settings
+from src.datasources.dialects.base import QueryRows
 from src.datasources.reader import DatabaseReader
 from src.db.base import SessionLocal
 from src.db.models import EvalCase, RunApprovalStatus
 from src.evals.applicability import Applicability, applicability_of, as_case_applicability, ungrounded_reason
+from src.evals.cassettes import CassetteReader, answer_key, cassette_problem, cassettes_for, data_reads, sources_of
 from src.evals.checks import (
     CheckVerdict,
     asked_back_rule,
@@ -74,7 +82,7 @@ from src.evals.judge import (
 from src.evals.metrics import DEFAULT_THRESHOLD
 from src.evals.results import fail_run, finish_run, open_run, record_progress
 from src.evals.runner import RUN_DID_NOT_FINISH, EvalRunError, EvalServices, stopped_reason
-from src.models.eval_check import ApprovalCompliance, AsksBack, ExpectedCheck, ForbidsAction, check_of
+from src.models.eval_check import AnswersFromQuery, ApprovalCompliance, AsksBack, ExpectedCheck, ForbidsAction, check_of
 from src.models.node_registry import NodeType
 from src.models.schemas import EvalCaseResult, EvalEvidence, MetricScoreOut, SandboxTranscriptEntry, SkippedCase
 from src.models.solution_spec import SuccessCriterionCategory
@@ -150,7 +158,10 @@ class _Subject:
     knowledge: KnowledgeStore
     #: The door every case's `data_query` reads go through — asked by each
     #: case's own `run_as` (DS-05). `None` reads nothing, as on any unwired run.
+    #: In an eval run it is the case's `CassetteReader` (EV-02).
     databases: DatabaseReader | None = None
+    #: An `AnswersFromQuery` case's answer key: its query on its own cassette.
+    answer_key: QueryRows | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,12 +212,20 @@ def plan_workflow_eval(
         )
     runnable: dict[int, Applicability] = {}
     skipped: list[SkippedCase] = []
+    frozen = cassettes_for(db, [case.id for case in cases]) if data_reads(workflow) else {}
+    sources = sources_of(db, workflow)
     for case in cases:
         applicability = applicability_of(case, success_criteria=success_criteria, workflow=workflow)
         if applicability is Applicability.UNGROUNDED:
             skipped.append(SkippedCase(suite_case_id=case.id, reason=ungrounded_reason(case)))
-        else:
-            runnable[case.id] = applicability
+            continue
+        # EV-02: no frozen data to read is a case that cannot be graded, not
+        # one that may read the live database instead.
+        problem = cassette_problem(case, workflow, frozen.get(case.id, []), sources)
+        if problem is not None:
+            skipped.append(SkippedCase(suite_case_id=case.id, reason=problem))
+            continue
+        runnable[case.id] = applicability
     run = open_run(
         db,
         version_id,
@@ -253,13 +272,15 @@ async def execute_workflow_eval(
         found = db.scalars(select(EvalCase).where(EvalCase.id.in_(plan.case_ids))).all()
         by_id = {case.id: case for case in found}
         cases = [by_id[case_id] for case_id in plan.case_ids if case_id in by_id]
+        frozen = cassettes_for(db, [case.id for case in cases]) if data_reads(workflow) else None
         in_flight = asyncio.Semaphore(max(1, get_settings().eval_concurrency))
         done = 0
 
         async def one(case: EvalCase) -> EvalCaseResult:
             nonlocal done
+            asked = subject if frozen is None else _on_frozen_data(subject, case, frozen.get(case.id, []))
             async with in_flight:
-                result = await _guarded_result(case, subject, applicability=plan.applicability[case.id])
+                result = await _guarded_result(case, asked, applicability=plan.applicability[case.id])
             done += 1
             record_progress(db, plan.run_id, done)
             return result
@@ -271,6 +292,17 @@ async def execute_workflow_eval(
         fail_run(db, plan.run_id, stopped_reason(exc))
     finally:
         db.close()
+
+
+def _on_frozen_data(subject: _Subject, case: EvalCase, cassettes: Sequence[Any]) -> _Subject:
+    """`subject` for one case of a graph that reads a Hệ CSDL: its reads answered from its own cassettes (EV-02).
+
+    Built from every cassette of the case, so a case with none — nobody asking
+    — gets a reader that denies, exactly as nobody asking would live.
+    """
+    check = check_of(case.expected_check)
+    key = answer_key(check, cassettes, run_as=case.run_as) if isinstance(check, AnswersFromQuery) else None
+    return replace(subject, databases=CassetteReader.of(cassettes, asker=case.run_as), answer_key=key)
 
 
 async def _guarded_result(case: EvalCase, subject: _Subject, *, applicability: Applicability) -> EvalCaseResult:
@@ -301,7 +333,7 @@ async def _result_for(case: EvalCase, subject: _Subject, *, applicability: Appli
     """
     check = check_of(case.expected_check)
     record = await _eval_run(case.input_message, _asked_by(subject, case.run_as), scripted=_scripted_for(check))
-    verdict = None if check is None else grade_check(check, record.transcript)
+    verdict = None if check is None else grade_check(check, record.transcript, answer_key=subject.answer_key)
     if verdict is not None and verdict.safety_violation:
         return _result(case, check, record, verdict, applicability)
     if record.error is not None:

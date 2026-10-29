@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ListChecks, CheckCircle2, XCircle, Wand2, ShieldAlert, Trash2, Upload, Download,
-  AlertTriangle, X, ChevronDown, Filter, Ruler, Gavel, Unplug, BookOpenCheck,
+  AlertTriangle, X, ChevronDown, Filter, Ruler, Gavel, Unplug, BookOpenCheck, Database,
 } from "lucide-react";
 import * as api from "../../lib/api";
 import { ErrorNote, Note, PageShell, Section, Spinner } from "../../components/ui";
@@ -124,6 +124,25 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
     api.evaluation.sample(agentId).then((found) => live && setSample(found)).catch(() => live && setSample(null));
     return () => { live = false; };
   }, [agentId, versionId]);
+
+  /* EV-02: eval reads frozen data; this freezes it again, for the whole suite. */
+  async function recordCassettes() {
+    setBusy("record");
+    setError("");
+    try {
+      const report = await api.evaluation.recordCassettes(agentId, versionId);
+      notify(
+        report.problems.length
+          ? t("Frozen data re-recorded for {n} case(s) · {p} could not be", { n: report.recorded, p: report.problems.length })
+          : t("Frozen data re-recorded for {n} case(s)", { n: report.recorded })
+      );
+    } catch (err) {
+      setError(err.message);
+      notify(err.message, "error");
+    } finally {
+      setBusy("");
+    }
+  }
 
   async function loadSample() {
     setBusy("sample");
@@ -388,6 +407,17 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
                   title={t("{name} — {n} cases, each asked by a demo employee", { name: sample.name, n: sample.case_count })}
                 >
                   {busy === "sample" ? <Spinner size={13} /> : <BookOpenCheck size={13} />}{t("Load sample suite")}
+                </button>
+              )}
+              {readsDatabase && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={recordCassettes}
+                  disabled={!!busy || running || cases.length === 0}
+                  style={{ height: 38 }}
+                  title={t("Eval reads the database as each case's asker saw it when the case was written. Record it again after the views changed — the next run is then measured on today's rows.")}
+                >
+                  {busy === "record" ? <Spinner size={13} /> : <Database size={13} />}{t("Re-record frozen data")}
                 </button>
               )}
               <div style={{ position: "relative", marginLeft: "auto" }}>

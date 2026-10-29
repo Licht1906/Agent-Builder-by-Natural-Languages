@@ -473,6 +473,10 @@ export const evaluation = {
   latest: (agentId, versionId) => request(`/agents/${agentId}/versions/${versionId}/eval-runs/latest`),
   /** One run read back — polled while it is `running` (EV-01: the POST answers
    *  at once and the cases run in the background). */
+  /** EV-02: freeze again every view the graph reads, for every case — after the
+   *  Hệ CSDL's columns changed, or to grade on today's data. */
+  recordCassettes: (agentId, versionId) =>
+    request(`/agents/${agentId}/versions/${versionId}/eval-cassettes/record`, { method: "POST" }),
   runById: (agentId, versionId, runId) => request(`/agents/${agentId}/versions/${versionId}/eval-runs/${runId}`),
   updateCase: (agentId, versionId, caseId, payload) =>
     request(`/agents/${agentId}/versions/${versionId}/eval-cases/${caseId}`, { method: "PATCH", body: payload }),

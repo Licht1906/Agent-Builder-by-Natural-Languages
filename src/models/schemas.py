@@ -1312,6 +1312,20 @@ class EvalRunRequest(BaseModel):
     case_ids: list[int] | None = Field(default=None, description="null = mọi case của suite")
 
 
+class CassetteProblemResponse(BaseModel):
+    """One case whose views could not be frozen, and why."""
+
+    case_id: int
+    reason: str
+
+
+class CassetteRecordResponse(BaseModel):
+    """What "Ghi lại dữ liệu đóng băng" did — EV-02."""
+
+    recorded: int = Field(..., description="Số case đã có dữ liệu đóng băng mới")
+    problems: list[CassetteProblemResponse] = Field(default_factory=list)
+
+
 class EvalRunResponse(BaseModel):
     """One eval run: every case's verdict, the score, and how far it is from the bar.
 

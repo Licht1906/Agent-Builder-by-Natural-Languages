@@ -47,6 +47,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from src.datasources.query import StructuredQuery
 from src.db.models import RunApprovalStatus
 
 #: The two decisions an eval case may inject at a `HumanApproval` node.
@@ -84,6 +85,7 @@ class CheckKind(StrEnum):
     APPROVAL_COMPLIANCE = "approval_compliance"
     ASKS_BACK = "asks_back"
     TAKES_NO_ACTION = "takes_no_action"
+    ANSWERS_FROM_QUERY = "answers_from_query"
 
 
 class ReachesEnd(BaseModel):
@@ -226,9 +228,33 @@ class TakesNoAction(BaseModel):
     kind: Literal[CheckKind.TAKES_NO_ACTION] = CheckKind.TAKES_NO_ACTION
 
 
-#: One case's rule-based expectation, whichever of the six it is.
+class AnswersFromQuery(BaseModel):
+    """The answer states what `query` returns on the case's frozen data — EV-02 / ADR-0069 §3.
+
+    The answer key is computed, not written: `query` runs on the case's own
+    cassette (`src.evals.cassettes`), scoped to its `run_as`, and the key values
+    of the result — the aggregates, or the leading column of each row, every
+    value of a short result — must all appear in the agent's answer. No judge
+    reads it. "Khách nào quá hạn lâu nhất?" carries
+    `{"view": "v_ar_open", "columns": ["customer_name", "days_overdue"],
+    "order_by": [{"column": "days_overdue", "dir": "desc"}], "limit": 1}`.
+
+    `expects_no_rows` is the case that deliberately asks about nothing: its
+    cassette result must be empty, and it passes when the run's own read came
+    back empty. Any other case whose result is empty or all zeros is not run —
+    an answer key of nothing grades nothing.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal[CheckKind.ANSWERS_FROM_QUERY] = CheckKind.ANSWERS_FROM_QUERY
+    query: StructuredQuery
+    expects_no_rows: bool = False
+
+
+#: One case's rule-based expectation, whichever of the seven it is.
 ExpectedCheck = Annotated[
-    ReachesEnd | CallsAction | ForbidsAction | ApprovalCompliance | AsksBack | TakesNoAction,
+    ReachesEnd | CallsAction | ForbidsAction | ApprovalCompliance | AsksBack | TakesNoAction | AnswersFromQuery,
     Field(discriminator="kind"),
 ]
 
@@ -275,6 +301,10 @@ def describe_check(check: ExpectedCheck) -> str:
         return "Agent phải hỏi lại người dùng thứ còn thiếu, và chưa được làm gì có tác dụng phụ"
     if isinstance(check, TakesNoAction):
         return "Workflow không được thực hiện hành động nào có tác dụng phụ"
+    if isinstance(check, AnswersFromQuery):
+        if check.expects_no_rows:
+            return f"Agent phải tra {check.query.view} và nói rõ là không có dữ liệu khớp"
+        return f"Câu trả lời phải nêu đúng kết quả truy vấn trên {check.query.view}, tính từ dữ liệu đã đóng băng"
     decided = "duyệt" if check.decision is RunApprovalStatus.APPROVED else "từ chối"
     clauses = [f"Ở node {check.node_id!r}, người duyệt {decided}"]
     if check.required_after:

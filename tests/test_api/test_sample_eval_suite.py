@@ -5,7 +5,7 @@ and shipped with the `database_qa`/`database_outreach` templates. Against a
 demo-shaped agent — a Hệ CSDL whose employee view holds `DEMO_ASKERS`, a
 `database_qa` graph — the ticket's criterion, through the V2 eval doors:
 
-- the Evaluation tab is offered the suite, and loading it adds all 23 cases,
+- the Evaluation tab is offered the suite, and loading it adds all 25 cases,
   each asking as one of the demo employees (`run_as`); loading twice adds none;
 - the whole suite runs through `workflow-eval-runs`: every judged case is read
   as its own asker (a rep sees their own customers, the lead the department),
@@ -164,7 +164,7 @@ async def _load(client: AsyncClient, version: AgentVersion, token: str) -> Any:
 def test_the_sample_suite_is_the_uc1_golden_set_in_the_v2_schema() -> None:
     lines = [json.loads(line) for line in SAMPLE_SUITES["database_qa"].content().decode("utf-8").splitlines()]
 
-    assert len(lines) == 23
+    assert len(lines) == 25
     assert {line["run_as"] for line in lines} == set(DEMO_ASKERS.values())
     assert {line["source_case"].rsplit("_", 1)[0] for line in lines} == {
         "uc1_ar_v3_lookup",
@@ -172,9 +172,11 @@ def test_the_sample_suite_is_the_uc1_golden_set_in_the_v2_schema() -> None:
         "uc1_ar_v3_leak",
         "uc1_ar_v3_injection",
         "uc1_ar_v3_cross_tenant",
+        "ev02_most_overdue",
     }
     assert all(line["expected"] and line["criterion"] for line in lines)
     assert sum(1 for line in lines if line.get("expected_check") == {"kind": "takes_no_action"}) == 4
+    assert sum(1 for line in lines if (line.get("expected_check") or {}).get("kind") == "answers_from_query") == 2
 
 
 async def test_loading_the_sample_adds_every_case_asking_as_a_demo_employee_once(
@@ -186,13 +188,13 @@ async def test_loading_the_sample_adds_every_case_asking_as_a_demo_employee_once
     first = await _load(client, demo_agent, creator_token)
     again = await _load(client, demo_agent, creator_token)
 
-    assert offered.json() == {"available": True, "name": "Bộ đề mẫu: trợ lý công nợ", "case_count": 23}
+    assert offered.json() == {"available": True, "name": "Bộ đề mẫu: trợ lý công nợ", "case_count": 25}
     assert first.status_code == 200, first.text
-    assert (first.json()["added_count"], first.json()["error_count"]) == (23, 0)
-    assert (again.json()["added_count"], again.json()["skipped_count"]) == (0, 23)
+    assert (first.json()["added_count"], first.json()["error_count"]) == (25, 0)
+    assert (again.json()["added_count"], again.json()["skipped_count"]) == (0, 25)
     cases = db_session.query(EvalCase).filter(EvalCase.run_as.in_(list(DEMO_ASKERS.values()))).all()
-    assert len(cases) == 23
-    assert all(case.extra and case.extra["source_case"].startswith("uc1_ar_v3_") for case in cases)
+    assert len(cases) == 25
+    assert all(case.extra and case.extra["source_case"].startswith(("uc1_ar_v3_", "ev02_")) for case in cases)
 
 
 async def test_the_sample_runs_through_v2_eval_each_case_as_its_own_asker(
@@ -205,7 +207,9 @@ async def test_the_sample_runs_through_v2_eval_each_case_as_its_own_asker(
 
     assert response.status_code == 200, response.text
     run = response.json()
-    assert len(run["results"]) == 19 and len(run["skipped"]) == 4, "the four takes_no_action rules need an action"
+    assert len(run["results"]) == 19 and len(run["skipped"]) == 6, (
+        "the four takes_no_action rules need an action; the two answers_from_query ask v_ar_open, not read here"
+    )
     reads = {
         result["input_message"] + "|" + read["args"]["run_as"]: read["result"]
         for result in run["results"]

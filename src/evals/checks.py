@@ -47,8 +47,11 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from src.datasources.dialects.base import QueryRows
+from src.datasources.query import StructuredQuery
 from src.db.models import RunApprovalStatus
 from src.models.eval_check import (
+    AnswersFromQuery,
     ApprovalCompliance,
     AsksBack,
     CallsAction,
@@ -77,14 +80,22 @@ class CheckVerdict:
     safety_violation: bool = False
 
 
-def grade_check(check: ExpectedCheck, transcript: Sequence[SandboxTranscriptEntry]) -> CheckVerdict:
+def grade_check(
+    check: ExpectedCheck, transcript: Sequence[SandboxTranscriptEntry], *, answer_key: QueryRows | None = None
+) -> CheckVerdict:
     """Whether `transcript` satisfies `check` — the whole of rule-based grading.
 
     Dispatches on the check's own kind rather than on the case's category,
     because the category is what *chose* the check at generation time and a
     second reading of it here would be a second chance to route a case down the
     wrong path. A `prohibitions` case has no category at all and still grades.
+
+    `answer_key` is `AnswersFromQuery`'s alone (EV-02): the case's query run on
+    its cassette, computed by the caller because the cassette is not on the
+    transcript. Without it that rule fails closed, saying why.
     """
+    if isinstance(check, AnswersFromQuery):
+        return _answered_from_query(check, transcript, answer_key)
     if isinstance(check, ReachesEnd):
         return _reached_end(transcript)
     if isinstance(check, CallsAction):
@@ -259,6 +270,90 @@ def _collector_asked(transcript: Sequence[SandboxTranscriptEntry]) -> str | None
             if entry.kind == "node" and entry.node_type == NodeType.COLLECT.value and entry.port_taken == "incomplete"
         ),
         None,
+    )
+
+
+#: How many values of a long result the answer must name — its first rows, a
+#: list the asker can check, not the whole table.
+KEY_VALUE_LIMIT = 10
+
+#: A result this short is named in full: every value of every row.
+_SHORT_RESULT = 3
+
+#: What `_finding_of` writes for a read that matched nothing.
+_NO_ROWS = "(không có dòng nào khớp)"
+
+
+def key_values(rows: QueryRows, query: StructuredQuery) -> list[str]:
+    """The values an answer drawn from `rows` has to state — EV-02's `must_contain`, computed.
+
+    An aggregating query's aggregates (and its groups); otherwise every value
+    of a short result (one to three rows — "khách quá hạn lâu nhất" is its name
+    *and* its days), and the leading column of each row of a longer one, up to
+    `KEY_VALUE_LIMIT`.
+    """
+    if query.aggregating or len(rows.rows) <= _SHORT_RESULT:
+        picked = [value for row in rows.rows[:KEY_VALUE_LIMIT] for value in row]
+    else:
+        picked = [row[0] for row in rows.rows[:KEY_VALUE_LIMIT] if row]
+    return list(dict.fromkeys(_shown_value(value) for value in picked if value is not None and _shown_value(value)))
+
+
+def trivial_answer(rows: QueryRows, query: StructuredQuery) -> bool:
+    """No rows, or aggregates that are all zero or null — an answer key that would grade nothing (ADR-0069 §3)."""
+    if not rows.rows:
+        return True
+    if query.aggregates:
+        width = len(query.aggregates)
+        return all(value in (0, None) for row in rows.rows for value in row[-width:])
+    return False
+
+
+def _shown_value(value: object) -> str:
+    """A value as an answer would write it: an integral number without `.0`, two decimals at most."""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else f"{value:.2f}".rstrip("0").rstrip(".")
+    return str(value).strip()
+
+
+def _normalised(text: str) -> str:
+    """Lower-case, thousands separators dropped between digits — "15.000.000" and "15,000,000" are 15000000."""
+    collapsed = re.sub(r"(?<=\d)[.,\s\u00a0](?=\d{3}(?!\d))", "", text)
+    return collapsed.casefold()
+
+
+def _mentions(answer: str, value: str) -> bool:
+    said = _normalised(answer)
+    return any(_normalised(form) in said for form in {value, value.replace(".", ",")})
+
+
+def _answered_from_query(
+    check: AnswersFromQuery, transcript: Sequence[SandboxTranscriptEntry], answer_key: QueryRows | None
+) -> CheckVerdict:
+    """`AnswersFromQuery`: every key value of the computed answer is in what the agent said."""
+    if answer_key is None:
+        return CheckVerdict(passed=False, reason="Không tính được đáp án: case chưa có dữ liệu đóng băng khớp")
+    if check.expects_no_rows:
+        empty = any(
+            entry.kind == "tool_result"
+            and entry.tool == "data_query"
+            and entry.ok
+            and _NO_ROWS in (entry.content or "")
+            for entry in transcript
+        )
+        if empty:
+            return CheckVerdict(passed=True, reason="Agent đã tra và không có dòng nào khớp, như dữ liệu đóng băng")
+        return CheckVerdict(passed=False, reason="Agent không tra ra kết quả rỗng như dữ liệu đóng băng")
+    wanted = key_values(answer_key, check.query)
+    answer = final_answer(transcript)
+    missing = [value for value in wanted if not _mentions(answer, value)]
+    if not missing:
+        return CheckVerdict(passed=True, reason=f"Câu trả lời nêu đủ đáp án tính từ truy vấn: {', '.join(wanted)}")
+    return CheckVerdict(
+        passed=False,
+        reason=f"Câu trả lời thiếu {', '.join(missing)} — đáp án tính từ truy vấn là {', '.join(wanted)}",
     )
 
 

@@ -39,8 +39,9 @@ from sqlalchemy.orm import Session
 
 from src.api.agent_routes import Checkpointer, OwnedAgent, OwnedVersion, validated_spec
 from src.api.workflow_run_routes import Databases, Knowledge, runnable_workflow
+from src.datasources.reader import DatabaseReader
 from src.db.base import get_db
-from src.db.models import EvalCase, EvalRun
+from src.db.models import AgentVersion, EvalCase, EvalRun
 from src.evals.cases import (
     EvalCaseError,
     add_case,
@@ -51,14 +52,17 @@ from src.evals.cases import (
     save_generated,
     update_case,
 )
+from src.evals.cassettes import record_missing
 from src.evals.gate import score_for, version_blocker
 from src.evals.results import newest_run, results_of, skipped_of
 from src.evals.runner import EvalRunError, EvalServices, run_eval
 from src.evals.sample_suites import case_count, sample_suite_of_agent
-from src.evals.suite_io import SuiteImportError, export_suite, import_suite, template_csv
+from src.evals.suite_io import SuiteImportError, export_suite, import_suite, latest_workflow, template_csv
 from src.evals.workflow_cases import generate_workflow_cases
 from src.evals.workflow_runner import execute_workflow_eval, plan_workflow_eval
 from src.models.schemas import (
+    CassetteProblemResponse,
+    CassetteRecordResponse,
     EvalCaseCreateRequest,
     EvalCaseResponse,
     EvalCaseUpdateRequest,
@@ -69,6 +73,7 @@ from src.models.schemas import (
     SuiteImportResponse,
     SuiteImportRowResponse,
 )
+from src.models.workflow import WorkflowJSON
 from src.services.llm import ChatModelFactory, get_chat_model_factory
 from src.services.tracing import Tracer, get_tracer
 from src.solution.specs import SpecStageError, solution_spec_of
@@ -111,6 +116,7 @@ EvalRunServices = Annotated[EvalServices, Depends(get_eval_services)]
 async def import_my_agents_eval_suite(
     agent: OwnedAgent,
     db: Annotated[Session, Depends(get_db)],
+    databases: Databases,
     file: Annotated[UploadFile, File(description="CSV, JSONL hoặc XLSX — cùng một schema")],
     dry_run: Annotated[bool, Query(description="true = chỉ kiểm, không ghi gì xuống DB")] = False,
 ) -> SuiteImportResponse:
@@ -125,6 +131,8 @@ async def import_my_agents_eval_suite(
         report = import_suite(db, agent, content=content, filename=file.filename or "", dry_run=dry_run)
     except SuiteImportError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    if not dry_run:
+        _record_suite(db, agent.id, latest_workflow(db, agent), databases)
     return SuiteImportResponse(
         rows=[SuiteImportRowResponse(row=r.row, status=r.status, reason=r.reason) for r in report.rows],
         added_count=report.added_count,
@@ -147,6 +155,7 @@ def my_agents_sample_suite(agent: OwnedAgent, db: Annotated[Session, Depends(get
 def import_my_agents_sample_suite(
     agent: OwnedAgent,
     db: Annotated[Session, Depends(get_db)],
+    databases: Databases,
     dry_run: Annotated[bool, Query(description="true = chỉ kiểm, không ghi gì xuống DB")] = False,
 ) -> SuiteImportResponse:
     """Load the template's sample suite through the ordinary importer — the same row report, the same dedup.
@@ -158,6 +167,8 @@ def import_my_agents_sample_suite(
     if sample is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template của agent này không có bộ đề mẫu")
     report = import_suite(db, agent, content=sample.content(), filename=sample.path.name, dry_run=dry_run)
+    if not dry_run:
+        _record_suite(db, agent.id, latest_workflow(db, agent), databases)
     return SuiteImportResponse(
         rows=[SuiteImportRowResponse(row=r.row, status=r.status, reason=r.reason) for r in report.rows],
         added_count=report.added_count,
@@ -224,6 +235,7 @@ async def generate_my_versions_workflow_eval_cases(
     version: OwnedVersion,
     db: Annotated[Session, Depends(get_db)],
     model_factory: Annotated[ChatModelFactory, Depends(get_chat_model_factory)],
+    databases: Databases,
 ) -> EvalGenerationResponse:
     """Write test cases from a confirmed workflow's spec **and** its graph — #48 / ADR-0028.
 
@@ -251,6 +263,7 @@ async def generate_my_versions_workflow_eval_cases(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     generation = await generate_workflow_cases(spec, workflow, model_factory=model_factory)
     saved = save_generated(db, version.agent_id, version.id, generation)
+    record_missing(db, saved.cases, workflow, databases)
     return EvalGenerationResponse(
         cases=[EvalCaseResponse.model_validate(case) for case in saved.cases],
         skipped_criteria=list(generation.skipped_criteria),
@@ -271,6 +284,7 @@ def add_my_versions_eval_case(
     version: OwnedVersion,
     payload: EvalCaseCreateRequest,
     db: Annotated[Session, Depends(get_db)],
+    databases: Databases,
 ) -> EvalCaseResponse:
     """A case the creator writes themselves — for what the generator missed or got wrong."""
     try:
@@ -285,6 +299,7 @@ def add_my_versions_eval_case(
         )
     except EvalCaseError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    _record_cases(db, version, [case], databases)
     return EvalCaseResponse.model_validate(case)
 
 
@@ -311,8 +326,10 @@ OwnedCase = Annotated[EvalCase, Depends(_get_owned_case)]
 @router.patch(f"{_VERSION}/eval-cases/{{case_id}}", response_model=EvalCaseResponse)
 def change_my_versions_eval_case(
     case: OwnedCase,
+    version: OwnedVersion,
     payload: EvalCaseUpdateRequest,
     db: Annotated[Session, Depends(get_db)],
+    databases: Databases,
 ) -> EvalCaseResponse:
     """Correct a case before it is ever run against the agent.
 
@@ -332,6 +349,9 @@ def change_my_versions_eval_case(
         )
     except EvalCaseError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    if payload.run_as is not None:
+        # A different asker reads different rows: the old cassettes are someone else's.
+        _record_cases(db, version, [edited], databases, again=True)
     return EvalCaseResponse.model_validate(edited)
 
 
@@ -343,6 +363,45 @@ def delete_my_versions_eval_case(case: OwnedCase, db: Annotated[Session, Depends
     what they ran (`eval_runs.results`), so deleting a case rewrites no history.
     """
     delete_case(db, case)
+
+
+@router.post(f"{_VERSION}/eval-cassettes/record", response_model=CassetteRecordResponse)
+def record_my_versions_eval_cassettes(
+    version: OwnedVersion, db: Annotated[Session, Depends(get_db)], databases: Databases
+) -> CassetteRecordResponse:
+    """Freeze, again, every view the confirmed graph reads, for every case of the suite — EV-02.
+
+    What "Ghi lại dữ liệu đóng băng" does: after the Hệ CSDL's columns changed,
+    after the graph started reading another view, or when the creator wants the
+    suite graded on today's data. Re-recording moves the baseline — the next
+    run is measured on the new rows, so its delta against an older run says
+    nothing about the agent.
+    """
+    workflow = runnable_workflow(version)
+    report = record_missing(db, list_cases(db, version.agent_id), workflow, databases, again=True)
+    return CassetteRecordResponse(
+        recorded=report.recorded,
+        problems=[
+            CassetteProblemResponse(case_id=case_id, reason=reason) for case_id, reason in report.problems.items()
+        ],
+    )
+
+
+def _record_cases(
+    db: Session, version: AgentVersion, cases: list[EvalCase], databases: DatabaseReader, *, again: bool = False
+) -> None:
+    """Freeze the views `version`'s graph reads for `cases` — nothing when it has no runnable graph yet (EV-02)."""
+    try:
+        workflow = runnable_workflow(version)
+    except HTTPException:
+        return
+    record_missing(db, cases, workflow, databases, again=again)
+
+
+def _record_suite(db: Session, agent_id: int, workflow: WorkflowJSON | None, databases: DatabaseReader) -> None:
+    """Freeze what is missing for every case of the suite, after a file brought new ones in."""
+    if workflow is not None:
+        record_missing(db, list_cases(db, agent_id), workflow, databases)
 
 
 @router.post(f"{_VERSION}/eval-runs", response_model=EvalRunResponse)
