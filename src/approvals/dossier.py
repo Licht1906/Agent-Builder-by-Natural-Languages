@@ -39,6 +39,7 @@ from src.approvals.decisions import history_for
 from src.db.models import Agent, AgentVersion, ApprovalDecision, EvalRun, SandboxRun, User
 from src.evals.gate import score_for, version_blocker
 from src.evals.results import Breakdown, Score, breakdown_of, latest_run
+from src.evals.suite_changes import SuiteChanges, suite_changes
 from src.models.agent_spec import AgentSpec
 from src.models.node_registry import McpConfig, NodeType
 from src.models.solution_spec import AgentSolutionSpecification
@@ -182,6 +183,10 @@ class Dossier:
     worst_case: CostFigure | None
     measured: CostFigure | None
     decisions: tuple[ApprovalDecision, ...]
+    #: EV-05 / ADR-0069 §6: what happened to the suite since the baseline — the
+    #: system's retirements (and how many were failing), the creator's own
+    #: edits and deletions, and the cases with no baseline yet.
+    suite_changes: SuiteChanges | None = None
 
 
 def requested_tools(spec: AgentSpec) -> tuple[RequestedTool, ...]:
@@ -358,6 +363,7 @@ def build_dossier(db: Session, version: AgentVersion) -> Dossier:
         # version `request_approval` refuses is the divergence `src.evals.gate`
         # exists to prevent.
         blocked_reason=version_blocker(db, version.id),
+        suite_changes=suite_changes(db, version) if workflow is not None else None,
         estimate=estimated_cost(spec) if spec is not None else None,
         worst_case=worst_case_cost(spec) if spec is not None else None,
         measured=latest_trial_cost(db, version.id),

@@ -157,6 +157,10 @@ function ReportDrawer({ versionId, windowDays, thresholds, onClose, series }) {
               <td /><td className="ab-mono" style={{ textAlign: "right", color: report.regressions.length ? series.red : undefined }}>{report.regressions.length}</td><td />
             </tr>
             <tr>
+              <td>{t("new cases, no baseline (not in the delta)")}</td>
+              <td /><td className="ab-mono" style={{ textAlign: "right" }}>{(report.new_cases || []).length}</td><td />
+            </tr>
+            <tr>
               <td>{t("online, this window")}</td>
               <td />
               <td style={{ textAlign: "right" }}><RateCell rate={report.online} smallN={thresholds?.small_n ?? 20} series={series} /></td>
@@ -168,6 +172,18 @@ function ReportDrawer({ versionId, windowDays, thresholds, onClose, series }) {
       <ul style={{ margin: 0, paddingLeft: "var(--space-4)", fontSize: "var(--text-sm)", lineHeight: 1.6 }}>
         {report.notes.map((n, i) => <li key={i}>{n}</li>)}
       </ul>
+      {(report.new_cases || []).length > 0 && (
+        <div>
+          <SectionLabel>{t("new cases — no baseline yet")}</SectionLabel>
+          <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4, fontSize: "var(--text-xs)" }}>
+            {report.new_cases.map((c, i) => (
+              <li key={i} style={{ color: c.passed ? undefined : series.red }}>
+                {c.passed ? "✓" : "✗"} {c.input_message} <span style={{ color: muted }}>— {c.criterion}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {report.regressions.length > 0 && (
         <div>
           <SectionLabel>{t("read these before shipping")}</SectionLabel>

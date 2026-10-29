@@ -74,6 +74,7 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
   const [uploading, setUploading] = useState(false);
   const [runMenu, setRunMenu] = useState(false);
   const [sample, setSample] = useState(null);
+  const [history, setHistory] = useState(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -181,6 +182,30 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
       notify(err.message, "error");
     } finally {
       setBusy("");
+    }
+  }
+
+  /** EV-05: retired cases stay readable — the suite's history, loaded when asked for. */
+  async function toggleHistory() {
+    if (history) {
+      setHistory(null);
+      return;
+    }
+    try {
+      setHistory(await api.evaluation.history(agentId, versionId));
+    } catch (err) {
+      notify(err.message, "error");
+    }
+  }
+
+  /** EV-05: the creator's read of a failing case. "Case sai" is then fixed by editing or deleting it. */
+  async function triageCase(testCase, verdict) {
+    try {
+      const triage = await api.evaluation.triage(agentId, versionId, testCase.id, verdict, result?.id ?? null);
+      setCases((current) => current.map((entry) => (entry.id === testCase.id ? { ...entry, triage } : entry)));
+      notify(t(verdict === "agent_wrong" ? "Marked: the agent is wrong" : "Marked: the case is wrong — edit or delete it"));
+    } catch (err) {
+      notify(err.message, "error");
     }
   }
 
@@ -417,6 +442,25 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
             last time does not un-fold the next one. */}
         <Note tone="warn" fold text={result?.blocked_reason} />
         {smokeNote && <Note text={smokeNote} />}
+        <div style={{ marginBottom: 10 }}>
+          <button className="btn btn-ghost" style={{ height: 28, fontSize: "var(--text-xs)" }} onClick={toggleHistory}>
+            {history ? t("Hide the suite's history") : t("Suite history (retired cases)")}
+          </button>
+          {history && (
+            <div style={{ border: "1px solid var(--color-divider)", padding: "var(--space-2) var(--space-3)", marginTop: 6 }}>
+              {history.retired.length === 0 && <p style={{ margin: 0, color: muted, fontSize: "var(--text-sm)" }}>{t("No case has been retired.")}</p>}
+              {history.retired.map((entry) => (
+                <div key={entry.id} style={{ padding: "6px 0", borderBottom: "1px solid var(--color-divider)", fontSize: "var(--text-sm)" }}>
+                  <b>{entry.criterion}</b> — {entry.input_message}
+                  <div style={{ color: muted, fontSize: "var(--text-xs)" }}>
+                    {t("retired in v{v}: {reason}", { v: entry.retired_in_version_id, reason: entry.retired_reason || "" })}
+                    {entry.retired_failing_at_baseline && <span style={{ color: warn }}> · {t("was failing at the baseline")}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div>
             {/* Every verb in this toolbar adds to, or scores, the one set. */}
@@ -521,6 +565,7 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
                     onDelete={() => setDoomed(testCase)}
                     readsDatabase={readsDatabase}
                     onRunAs={(runAs) => saveRunAs(testCase, runAs)}
+                    onTriage={(verdict) => triageCase(testCase, verdict)}
                     busy={!!busy}
                   />
                 ))}
@@ -616,7 +661,7 @@ function Meter({ segments, notch, title }) {
 
 /* ── One golden-set case ──────────────────────────────────────────────── */
 
-function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete, readsDatabase, onRunAs, busy }) {
+function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete, readsDatabase, onRunAs, onTriage, busy }) {
   const { t } = useLang();
   const ruleBased = Boolean(testCase.expected_check);
   const orphan = verdict?.applicability === "orphan";
@@ -680,7 +725,24 @@ function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete
               <ShieldAlert size={11} />{t("safety — cannot be waived")}
             </span>
           )}
+          {testCase.triage && (
+            <span className="ab-chip" title={t("{who} · {at}", { who: testCase.triage.actor_email || "—", at: new Date(testCase.triage.at).toLocaleString() })}>
+              {t(testCase.triage.verdict === "agent_wrong" ? "read: the agent is wrong" : "read: the case is wrong")}
+            </span>
+          )}
         </div>
+        {/* EV-05: a failing case is read by its creator — the agent is wrong,
+            or the case is (then edit or delete it). Who and when is kept. */}
+        {verdict && !verdict.passed && onTriage && (
+          <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            <button className="btn btn-ghost" style={{ height: 26, fontSize: "var(--text-xs)" }} disabled={busy} onClick={() => onTriage("agent_wrong")}>
+              {t("The agent is wrong")}
+            </button>
+            <button className="btn btn-ghost" style={{ height: 26, fontSize: "var(--text-xs)" }} disabled={busy} onClick={() => onTriage("case_wrong")}>
+              {t("The case is wrong")}
+            </button>
+          </div>
+        )}
         <p style={{ fontSize: "var(--text-sm)", color: muted, margin: "8px 0 0", lineHeight: 1.5 }}>
           <b>{t("Input:")}</b> {testCase.input_message}
         </p>

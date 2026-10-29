@@ -246,7 +246,10 @@ def save_generated(db: Session, agent_id: int, version_id: int, generation: Gene
     already_generated = set(
         db.execute(
             select(EvalCase.criterion).where(
-                EvalCase.suite_id == suite.id, EvalCase.origin == EvalCaseOrigin.GENERATED
+                EvalCase.suite_id == suite.id,
+                EvalCase.origin == EvalCaseOrigin.GENERATED,
+                # A retired case's criterion is free to be generated again (EV-05).
+                EvalCase.retired_in_version_id.is_(None),
             )
         ).scalars()
     )
@@ -286,6 +289,10 @@ def list_cases(db: Session, agent_id: int) -> list[EvalCase]:
     `eval_pass_threshold` like every other, and the creator can delete it. A
     filter that hid rows a creator can no longer produce would only make part
     of their own suite invisible.
+
+    **Retired cases are not in it** (EV-05 / ADR-0069 §5): a case the spec or
+    graph moved past is out of the suite, kept in its history
+    (`src.evals.suite_changes.retired_cases`), never run and never counted.
     """
     suite = get_suite(db, agent_id)
     if suite is None:
@@ -293,7 +300,7 @@ def list_cases(db: Session, agent_id: int) -> list[EvalCase]:
     return list(
         db.execute(
             select(EvalCase)
-            .where(EvalCase.suite_id == suite.id)
+            .where(EvalCase.suite_id == suite.id, EvalCase.retired_in_version_id.is_(None))
             .order_by(EvalCase.created_at, EvalCase.id)
         ).scalars()
     )

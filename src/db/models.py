@@ -1058,6 +1058,17 @@ class EvalCase(Base):
     extra: Mapped[dict[str, Any] | None] = mapped_column(
         JSON, default=None, doc="Cột ngoài schema khi nạp file (UC-1: principal, retrieval_context, …)"
     )
+    #: EV-05 / ADR-0069 §5: the version whose spec or graph no longer fits this
+    #: case. A retired case is out of the suite — not run, not counted — and
+    #: never deleted: it stays readable in the suite's history.
+    retired_in_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_versions.id", ondelete="SET NULL"), default=None
+    )
+    retired_reason: Mapped[str | None] = mapped_column(default=None)
+    retired_at: Mapped[datetime | None] = mapped_column(default=None)
+    #: It was failing in the baseline's gate run when it was retired — what the
+    #: approval screen counts as "K case đang rớt" (ADR-0069 §6).
+    retired_failing_at_baseline: Mapped[bool] = mapped_column(default=False, server_default="false")
     cell_key: Mapped[str | None] = mapped_column(default=None, doc="Di sản lưới tình huống (ADR-0065) — chỉ hàng cũ")
     zone: Mapped[str | None] = mapped_column(default=None, doc="Di sản lưới tình huống (ADR-0065) — chỉ hàng cũ")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -1098,6 +1109,44 @@ class EvalCassette(Base):
     schema_hash: Mapped[str]
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     recorded_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class SuiteChangeKind(StrEnum):
+    """What happened to a case, in the suite's history — EV-05 / ADR-0069 §6."""
+
+    RETIRED = "retired"
+    EDITED = "edited"
+    DELETED = "deleted"
+    #: A failing case read by its creator: "agent sai" or "case sai".
+    TRIAGED = "triaged"
+
+
+class TriageVerdict(StrEnum):
+    AGENT_WRONG = "agent_wrong"
+    CASE_WRONG = "case_wrong"
+
+
+class EvalSuiteChange(Base):
+    """One change to a suite, kept so a reviewer sees what moved between baseline and candidate (ADR-0069 §6).
+
+    The point is the road around the gate: rewording a criterion to shed the
+    cases that fail. So system retirements and the creator's own edits and
+    deletions are written down separately, with who and when — `actor_id`
+    `None` is the system. `case_id` is not a foreign key: a deleted case's
+    entry must outlive it, and `detail` keeps what it said.
+    """
+
+    __tablename__ = "eval_suite_changes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    suite_id: Mapped[int] = mapped_column(ForeignKey("eval_suites.id", ondelete="CASCADE"), index=True)
+    case_id: Mapped[int | None] = mapped_column(default=None)
+    version_id: Mapped[int | None] = mapped_column(default=None, doc="Version đang mở khi thay đổi xảy ra")
+    kind: Mapped[SuiteChangeKind]
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    verdict: Mapped[TriageVerdict | None] = mapped_column(default=None)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class EvalRunKind(StrEnum):

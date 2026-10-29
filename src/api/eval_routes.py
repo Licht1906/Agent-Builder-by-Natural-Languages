@@ -35,13 +35,15 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.api.agent_routes import Checkpointer, OwnedAgent, OwnedVersion, validated_spec
 from src.api.workflow_run_routes import Databases, Knowledge, runnable_workflow
+from src.auth.dependencies import CurrentUser
 from src.datasources.reader import DatabaseReader
 from src.db.base import get_db
-from src.db.models import AgentVersion, EvalCase, EvalRun, EvalRunKind
+from src.db.models import AgentVersion, EvalCase, EvalRun, EvalRunKind, EvalSuiteChange, SuiteChangeKind, User
 from src.evals.cases import (
     EvalCaseError,
     add_case,
@@ -58,10 +60,13 @@ from src.evals.results import newest_run, results_of, skipped_of
 from src.evals.runner import EvalRunError, EvalServices, run_eval
 from src.evals.sample_suites import case_count, sample_suite_of_agent
 from src.evals.suite_builder import build_suite
+from src.evals.suite_changes import latest_triage, record_change, retire_stale, retired_cases, triage
 from src.evals.suite_io import SuiteImportError, export_suite, import_suite, latest_workflow, template_csv
 from src.evals.workflow_cases import generate_workflow_cases
 from src.evals.workflow_runner import execute_workflow_eval, plan_workflow_eval
 from src.models.schemas import (
+    CaseTriageRequest,
+    CaseTriageResponse,
     CassetteProblemResponse,
     CassetteRecordResponse,
     EvalCaseCreateRequest,
@@ -72,6 +77,8 @@ from src.models.schemas import (
     EvalRunResponse,
     EvalSuiteBuildResponse,
     SampleSuiteResponse,
+    SuiteChangeResponse,
+    SuiteHistoryResponse,
     SuiteImportResponse,
     SuiteImportRowResponse,
 )
@@ -277,8 +284,18 @@ async def generate_my_versions_workflow_eval_cases(
 def list_my_versions_eval_cases(
     version: OwnedVersion, db: Annotated[Session, Depends(get_db)]
 ) -> list[EvalCaseResponse]:
-    """Every test case of this version's agent suite, oldest first — exactly the set the next run will use."""
-    return [EvalCaseResponse.model_validate(case) for case in list_cases(db, version.agent_id)]
+    """Every test case of this version's agent suite, oldest first — exactly the set the next run will use.
+
+    Retired cases are not here (`…/eval-suite/history` has them); each case
+    carries its creator's latest read of it, if it failed and was read (EV-05).
+    """
+    triaged = latest_triage(db, version.agent_id)
+    return [
+        EvalCaseResponse.model_validate(case).model_copy(
+            update={"triage": _triage_response(db, triaged[case.id]) if case.id in triaged else None}
+        )
+        for case in list_cases(db, version.agent_id)
+    ]
 
 
 @router.post(f"{_VERSION}/eval-cases", response_model=EvalCaseResponse, status_code=status.HTTP_201_CREATED)
@@ -332,6 +349,7 @@ def change_my_versions_eval_case(
     payload: EvalCaseUpdateRequest,
     db: Annotated[Session, Depends(get_db)],
     databases: Databases,
+    user: CurrentUser,
 ) -> EvalCaseResponse:
     """Correct a case before it is ever run against the agent.
 
@@ -340,6 +358,7 @@ def change_my_versions_eval_case(
     last word on it. Omitted fields are left alone, so fixing an input does not
     require restating the expectation.
     """
+    before = {"criterion": case.criterion, "input_message": case.input_message, "expected": case.expected}
     try:
         edited = update_case(
             db,
@@ -351,6 +370,13 @@ def change_my_versions_eval_case(
         )
     except EvalCaseError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    after = {"criterion": edited.criterion, "input_message": edited.input_message, "expected": edited.expected}
+    if after != before:
+        # EV-05 / ADR-0069 §6: a reviewer sees every hand edit, with who made it.
+        record_change(
+            db, edited, SuiteChangeKind.EDITED, version_id=version.id, actor_id=user.id, detail={"before": before}
+        )
+        db.commit()
     if payload.run_as is not None:
         # A different asker reads different rows: the old cassettes are someone else's.
         _record_cases(db, version, [edited], databases, again=True)
@@ -358,13 +384,79 @@ def change_my_versions_eval_case(
 
 
 @router.delete(f"{_VERSION}/eval-cases/{{case_id}}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_my_versions_eval_case(case: OwnedCase, db: Annotated[Session, Depends(get_db)]) -> None:
+def delete_my_versions_eval_case(
+    case: OwnedCase, version: OwnedVersion, db: Annotated[Session, Depends(get_db)], user: CurrentUser
+) -> None:
     """Throw a case away.
 
     Runs already scored against it are untouched: they hold their own copy of
     what they ran (`eval_runs.results`), so deleting a case rewrites no history.
+    The deletion itself is written down, with who did it (EV-05) — the entry
+    keeps what the case said.
     """
+    record_change(
+        db, case, SuiteChangeKind.DELETED, version_id=version.id, actor_id=user.id, detail={"expected": case.expected}
+    )
     delete_case(db, case)
+
+
+@router.post(f"{_VERSION}/eval-cases/{{case_id}}/triage", response_model=CaseTriageResponse)
+def triage_my_versions_eval_case(
+    case: OwnedCase,
+    version: OwnedVersion,
+    payload: CaseTriageRequest,
+    db: Annotated[Session, Depends(get_db)],
+    user: CurrentUser,
+) -> CaseTriageResponse:
+    """The creator's read of a failing case: "agent sai" or "case sai" — with who and when (EV-05, ADR-0069 §4).
+
+    "Case sai" is followed by editing or deleting the case, both written down
+    in their own right; the read itself is what the reviewer sees beside them.
+    """
+    change = triage(db, case, payload.verdict, version_id=version.id, actor_id=user.id, run_id=payload.run_id)
+    return _triage_response(db, change)
+
+
+@router.get(f"{_VERSION}/eval-suite/history", response_model=SuiteHistoryResponse)
+def read_my_versions_eval_suite_history(
+    version: OwnedVersion, db: Annotated[Session, Depends(get_db)]
+) -> SuiteHistoryResponse:
+    """Retired cases, still readable, and every change to the suite — newest first (EV-05)."""
+    suite = get_suite(db, version.agent_id)
+    changes: list[EvalSuiteChange] = []
+    if suite is not None:
+        changes = list(
+            db.scalars(
+                select(EvalSuiteChange).where(EvalSuiteChange.suite_id == suite.id).order_by(EvalSuiteChange.id.desc())
+            )
+        )
+    return SuiteHistoryResponse(
+        retired=[EvalCaseResponse.model_validate(case) for case in retired_cases(db, version.agent_id)],
+        changes=[suite_change_response(db, change) for change in changes],
+    )
+
+
+def suite_change_response(db: Session, change: EvalSuiteChange) -> SuiteChangeResponse:
+    """One history entry on the wire — public because the approval dossier shows the same entries."""
+    actor = db.get(User, change.actor_id) if change.actor_id is not None else None
+    detail = dict(change.detail or {})
+    return SuiteChangeResponse(
+        kind=change.kind,
+        case_id=change.case_id,
+        criterion=str(detail.pop("criterion", "")),
+        input_message=str(detail.pop("input_message", "")),
+        actor_email=actor.email if actor is not None else None,
+        verdict=change.verdict,
+        version_id=change.version_id,
+        at=change.created_at,
+        detail=detail,
+    )
+
+
+def _triage_response(db: Session, change: EvalSuiteChange) -> CaseTriageResponse:
+    actor = db.get(User, change.actor_id) if change.actor_id is not None else None
+    assert change.verdict is not None
+    return CaseTriageResponse(verdict=change.verdict, actor_email=actor.email if actor else None, at=change.created_at)
 
 
 @router.post(f"{_VERSION}/eval-suite/build", response_model=EvalSuiteBuildResponse)
@@ -394,6 +486,7 @@ async def build_my_versions_eval_suite(
         dropped=report.dropped,
         live_count=report.live_count,
         target=report.target,
+        retired=report.retired,
     )
 
 
@@ -514,6 +607,9 @@ async def run_my_versions_workflow_eval(
         solution_spec = solution_spec_of(version)
     except SpecStageError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    # EV-05: a case this (newest) version can no longer grade but its
+    # predecessor could is retired, not run as an orphan.
+    retire_stale(db, version, workflow=workflow, spec=solution_spec)
     try:
         kind = payload.kind if payload is not None else EvalRunKind.GATE
         suite = list_cases(db, version.agent_id)

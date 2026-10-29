@@ -476,6 +476,13 @@ export const evaluation = {
    *  at once and the cases run in the background). */
   /** EV-02: freeze again every view the graph reads, for every case — after the
    *  Hệ CSDL's columns changed, or to grade on today's data. */
+  /** EV-05: "agent sai" / "case sai" on a failing case — who and when are kept. */
+  triage: (agentId, versionId, caseId, verdict, runId) =>
+    request(`/agents/${agentId}/versions/${versionId}/eval-cases/${caseId}/triage`, {
+      method: "POST",
+      body: { verdict, run_id: runId },
+    }),
+  history: (agentId, versionId) => request(`/agents/${agentId}/versions/${versionId}/eval-suite/history`),
   /** EV-03: library templates, data questions, then the model — up to ≥100 live cases. */
   buildSuite: (agentId, versionId) =>
     request(`/agents/${agentId}/versions/${versionId}/eval-suite/build`, { method: "POST" }),

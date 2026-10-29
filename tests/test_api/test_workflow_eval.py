@@ -1026,14 +1026,19 @@ def test_the_case_generator_is_told_each_actions_required_parameters() -> None:
 # --------------------------------------------------------------------------- #
 
 
-async def test_a_rule_based_case_ungrounded_against_this_versions_graph_is_skipped_not_run(
+async def test_a_rule_based_case_the_new_graph_cannot_ground_is_retired_not_run(
     client: AsyncClient,
     creator_token: str,
     confirmed: Callable[..., AgentVersion],
     db_session: Session,
     documents: str,
 ) -> None:
-    """AC: a `CallsAction` case naming an action absent from the graph does not run, and is not counted."""
+    """A `CallsAction` case naming an action the new graph dropped does not run, is not counted — and is retired.
+
+    ADR-0054 §1 skipped it on every run; since EV-05 (ADR-0069 §5) the newest
+    version retires a case its predecessor could grade and it cannot, and the
+    case leaves the suite with the reason, kept in its history.
+    """
     from src.db.models import EvalCase, EvalCaseOrigin, EvalSuite
     from src.models.eval_check import CallsAction, check_payload
 
@@ -1069,23 +1074,23 @@ async def test_a_rule_based_case_ungrounded_against_this_versions_graph_is_skipp
     install(_Router())
     response = await run_eval(client, version2, creator_token)
 
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["results"] == []
-    assert payload["total_count"] == 0
-    [skipped] = payload["skipped"]
-    assert skipped["suite_case_id"] == case.id
-    assert SEND_EMAIL in skipped["reason"]
+    # Its only case retired, the suite has nothing left to run — the empty-set refusal, not a perfect score.
+    assert response.status_code == 409, response.text
+    db_session.refresh(case)
+    assert case.retired_in_version_id == version2.id
+    assert case.retired_reason is not None and SEND_EMAIL in case.retired_reason
 
 
-async def test_a_judge_graded_case_whose_criterion_left_the_spec_still_runs_marked_orphan(
+async def test_a_judge_graded_case_whose_criterion_left_the_spec_is_retired_not_run_as_an_orphan(
     client: AsyncClient,
     creator_token: str,
     confirmed: Callable[..., AgentVersion],
     documents: str,
     db_session: Session,
 ) -> None:
-    """AC: a judge-graded case whose criterion is gone from this version's spec still runs, tagged `orphan`."""
+    """A judge-graded case whose criterion left this version's spec is retired — EV-05 replaces ADR-0054 §1's orphan."""
+    from src.db.models import EvalCase
+
     install(
         _Router(
             generation=[
@@ -1116,8 +1121,10 @@ async def test_a_judge_graded_case_whose_criterion_left_the_spec_still_runs_mark
     run = (await run_eval(client, version2, creator_token)).json()
 
     by_criterion = {result["criterion"]: result["applicability"] for result in run["results"]}
-    assert by_criterion["Trả lời đúng chính sách trong sổ tay"] == "orphan"
+    assert "Trả lời đúng chính sách trong sổ tay" not in by_criterion
     assert by_criterion["Chạy xong và trả lời được người dùng"] == "live"
+    retired = db_session.query(EvalCase).filter(EvalCase.criterion == "Trả lời đúng chính sách trong sổ tay").all()
+    assert retired and all(case.retired_in_version_id == version2.id for case in retired)
 
 
 # --------------------------------------------------------------------------- #

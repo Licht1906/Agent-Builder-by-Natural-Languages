@@ -32,6 +32,8 @@ from src.db.models import (
     ExternalConnectionStatus,
     KnowledgeBaseMode,
     SandboxRunStatus,
+    SuiteChangeKind,
+    TriageVerdict,
     UserRole,
     UserStatus,
     VectorDistanceMetric,
@@ -1221,6 +1223,10 @@ class EvalCaseResponse(BaseModel):
     zone: str | None = Field(default=None, description="Di sản lưới tình huống (ADR-0065) — chỉ hàng cũ mới có")
     created_at: UtcTimestamp
     updated_at: UtcTimestamp
+    retired_in_version_id: int | None = Field(default=None, description="Version đã retire case này (EV-05); null = còn trong suite")
+    retired_reason: str | None = None
+    retired_failing_at_baseline: bool = False
+    triage: "CaseTriageResponse | None" = Field(default=None, description="Lần người tạo đọc case rớt gần nhất (EV-05)")
 
 
 class EvalCaseCreateRequest(BaseModel):
@@ -1320,6 +1326,52 @@ class EvalRunRequest(BaseModel):
     )
 
 
+class CaseTriageRequest(BaseModel):
+    """The creator's read of a failing case — EV-05 / ADR-0069 §4."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: TriageVerdict = Field(..., description="agent_wrong = agent sai; case_wrong = case sai (rồi sửa/xoá)")
+    run_id: int | None = Field(default=None, description="Lần chạy mà case rớt")
+
+
+class CaseTriageResponse(BaseModel):
+    verdict: TriageVerdict
+    actor_email: str | None
+    at: UtcTimestamp
+
+
+class SuiteChangeResponse(BaseModel):
+    """One entry of the suite's history — who changed which case, and when (EV-05)."""
+
+    kind: SuiteChangeKind
+    case_id: int | None
+    criterion: str
+    input_message: str
+    actor_email: str | None = Field(default=None, description="null = hệ thống")
+    verdict: TriageVerdict | None = None
+    version_id: int | None
+    at: UtcTimestamp
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class SuiteHistoryResponse(BaseModel):
+    """Retired cases, still readable, and every change written down (EV-05)."""
+
+    retired: list[EvalCaseResponse]
+    changes: list[SuiteChangeResponse]
+
+
+class SuiteChangesResponse(BaseModel):
+    """The approval screen's "Thay đổi bộ đề" — ADR-0069 §6, since the baseline version."""
+
+    baseline_version_id: int | None
+    retired: list[EvalCaseResponse] = Field(default_factory=list, description="Hệ thống retire")
+    retired_failing_count: int = Field(default=0, description="Trong số đó, bao nhiêu case đang rớt ở baseline")
+    creator_changes: list[SuiteChangeResponse] = Field(default_factory=list, description="Người tạo sửa/xoá")
+    new_cases: list[EvalCaseResponse] = Field(default_factory=list, description="Case mới, chưa có baseline")
+
+
 class EvalSuiteBuildResponse(BaseModel):
     """What "Dựng bộ đề" added, from where, and how far the suite is from ADR-0069's ≥100 live cases (EV-03)."""
 
@@ -1329,6 +1381,7 @@ class EvalSuiteBuildResponse(BaseModel):
     dropped: int = Field(..., description="Case dữ liệu bị loại ngay vì đáp án rỗng, toàn số 0 hoặc không đọc được")
     live_count: int = Field(..., description="Số case live của suite sau khi dựng")
     target: int
+    retired: int = Field(default=0, description="Case hệ thống retire vì spec/graph của version này đã khác (EV-05)")
 
 
 class CassetteProblemResponse(BaseModel):
@@ -1977,6 +2030,10 @@ class ApprovalDossierResponse(BaseModel):
     )
     rejection_reason: str | None = Field(default=None, description="Lý do lần từ chối gần nhất, nếu có")
     decisions: list[ApprovalDecisionResponse] = Field(..., description="Lịch sử kiểm toán, cũ trước mới sau")
+    suite_changes: "SuiteChangesResponse | None" = Field(
+        default=None,
+        description="Thay đổi bộ đề từ baseline: hệ thống retire (bao nhiêu đang rớt), người tạo sửa/xoá, case mới (EV-05)",
+    )
 
 
 class VersionApprovalResponse(BaseModel):

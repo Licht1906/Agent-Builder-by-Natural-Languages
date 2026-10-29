@@ -179,6 +179,15 @@ class Regression:
 
 
 @dataclass(frozen=True, slots=True)
+class NewCase:
+    """A case the candidate ran that the baseline never did — "chưa có baseline" (EV-05)."""
+
+    input_message: str
+    criterion: str
+    passed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class VersionReport:
     agent_id: int
     agent_name: str
@@ -205,6 +214,10 @@ class VersionReport:
     #: already computed as though there were no baseline at all when this is
     #: true (see `version_report`).
     judge_changed: bool = False
+    #: EV-05 / ADR-0069 §5: the candidate's cases the baseline never ran. The
+    #: rates and deltas above are over the cases both runs asked; these are
+    #: listed apart, never folded into a delta they have no "before" for.
+    new_cases: list[NewCase] = field(default_factory=list)
 
 
 def version_report(
@@ -235,6 +248,20 @@ def version_report(
 
     cand_results = results_of(candidate_run) if candidate_run else []
     base_results = results_of(baseline_run) if baseline_run else []
+    # EV-05: compare only what both runs asked. A legacy baseline (no
+    # `suite_case_id`) cannot be intersected, and is compared whole as before.
+    new_cases: list[NewCase] = []
+    intersected = bool(baseline_run) and any(result.suite_case_id for result in base_results)
+    if intersected:
+        asked_before = {result.suite_case_id for result in base_results}
+        asked_now = {result.suite_case_id for result in cand_results}
+        new_cases = [
+            NewCase(input_message=r.input_message, criterion=r.criterion, passed=r.passed)
+            for r in cand_results
+            if r.suite_case_id not in asked_before
+        ]
+        cand_results = [result for result in cand_results if result.suite_case_id in asked_before]
+        base_results = [result for result in base_results if result.suite_case_id in asked_now]
     candidate_judge_model = candidate_run.judge_model if candidate_run else ""
     baseline_judge_model = baseline_run.judge_model if baseline_run else ""
     # ADR-0054 §4's guardrail pre-register: a run graded by a different judge
@@ -269,8 +296,23 @@ def version_report(
 
     candidate = metrics.Rate(candidate_run.total_count, candidate_run.passed_count) if candidate_run else metrics.Rate()
     baseline = metrics.Rate(baseline_run.total_count, baseline_run.passed_count) if baseline_run else None
+    common_baseline, common_candidate = baseline, candidate
+    if intersected and candidate_run:
+        # The delta is read over the common cases; the threshold below still
+        # reads the whole candidate run, as the gate does.
+        common_baseline = metrics.Rate(len(base_results), sum(1 for r in base_results if r.passed))
+        common_candidate = metrics.Rate(len(cand_results), sum(1 for r in cand_results if r.passed))
     threshold = float(candidate_run.threshold) if candidate_run else None
-    verdict, notes = _verdict(candidate, None if judge_changed else baseline, threshold, regressions, thresholds)
+    verdict, notes = _verdict(
+        candidate,
+        None if judge_changed else common_baseline,
+        threshold,
+        regressions,
+        thresholds,
+        candidate_on_common=common_candidate,
+    )
+    if new_cases:
+        notes.append(f"{len(new_cases)} case mới chưa có baseline — liệt kê riêng, không tính vào chênh lệch.")
     if judge_changed:
         notes.insert(
             0,
@@ -299,6 +341,7 @@ def version_report(
         candidate_judge_model=candidate_judge_model,
         baseline_judge_model=baseline_judge_model,
         judge_changed=judge_changed,
+        new_cases=new_cases,
     )
 
 
@@ -359,8 +402,14 @@ def _verdict(
     threshold: float | None,
     regressions: Sequence[Regression],
     thresholds: Thresholds,
+    *,
+    candidate_on_common: metrics.Rate | None = None,
 ) -> tuple[str, list[str]]:
-    """Ship / Iterate / Hold, with the reasons — slide 50: a verdict must come with what to do next."""
+    """Ship / Iterate / Hold, with the reasons — slide 50: a verdict must come with what to do next.
+
+    The threshold reads the whole candidate; the delta reads `candidate_on_common`
+    against `baseline` — the cases both runs asked (EV-05).
+    """
     notes: list[str] = []
     if candidate.n == 0:
         return "hold", ["Chưa chạy eval cho phiên bản này — không có gì để so."]
@@ -369,8 +418,9 @@ def _verdict(
         notes.append(f"Dưới ngưỡng gate {threshold:.0%} ({rate:.0%}).")
     if regressions:
         notes.append(f"{len(regressions)} case từng đạt ở bản trước nay trượt — đọc trace trước khi ship.")
-    if baseline is not None and baseline.rate is not None:
-        delta = rate - baseline.rate
+    common = candidate_on_common if candidate_on_common is not None else candidate
+    if baseline is not None and baseline.rate is not None and common.rate is not None:
+        delta = common.rate - baseline.rate
         if abs(delta) <= thresholds.noise_delta:
             notes.append(
                 f"Chênh {delta:+.1%} so với bản trước nằm trong dải nhiễu ±{thresholds.noise_delta:.0%} — chưa phải cải thiện."

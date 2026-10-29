@@ -33,7 +33,7 @@ from src.api.agent_routes import (
     requested_tool_responses,
     version_costs_response,
 )
-from src.api.eval_routes import eval_run_response
+from src.api.eval_routes import eval_run_response, suite_change_response
 from src.approvals.decisions import (
     approve_version,
     history_for,
@@ -47,6 +47,7 @@ from src.auth.dependencies import AdminUser
 from src.db.base import get_db
 from src.db.models import AgentVersion, ApprovalDecision, User
 from src.evals.results import Breakdown, Score
+from src.evals.suite_changes import SuiteChanges
 from src.models.schemas import (
     ApprovalDecidedEntryResponse,
     ApprovalDecisionResponse,
@@ -54,10 +55,12 @@ from src.models.schemas import (
     ApprovalQueueEntryResponse,
     ApprovalReasonRequest,
     EvalBreakdownResponse,
+    EvalCaseResponse,
     EvalScoreResponse,
     EvalTallyResponse,
     RequestedActionResponse,
     SandboxRunResponse,
+    SuiteChangesResponse,
     VersionApprovalResponse,
 )
 
@@ -391,6 +394,20 @@ def _dossier_response(db: Session, dossier: Dossier) -> ApprovalDossierResponse:
         ),
         rejection_reason=dossier.version.rejection_reason,
         decisions=[_decision(db, decision) for decision in dossier.decisions],
+        suite_changes=_suite_changes(db, dossier.suite_changes),
+    )
+
+
+def _suite_changes(db: Session, changes: SuiteChanges | None) -> SuiteChangesResponse | None:
+    """ADR-0069 §6's block, rendered with the same history entries the creator's own screen shows."""
+    if changes is None:
+        return None
+    return SuiteChangesResponse(
+        baseline_version_id=changes.baseline_version_id,
+        retired=[EvalCaseResponse.model_validate(case) for case in changes.retired],
+        retired_failing_count=changes.retired_failing,
+        creator_changes=[suite_change_response(db, change) for change in changes.creator_changes],
+        new_cases=[EvalCaseResponse.model_validate(case) for case in changes.new_cases],
     )
 
 

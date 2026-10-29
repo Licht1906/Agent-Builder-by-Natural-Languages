@@ -379,6 +379,7 @@ export function AdminDossier({ versionId, back, notify }) {
                       {dossier.blocked_reason}
                     </p>
                   )}
+                  {dossier.suite_changes && <SuiteChanges changes={dossier.suite_changes} />}
                 </div>
 
                 {/* Settled reviews get the record instead of the controls — not
@@ -500,3 +501,50 @@ function SpecList({ label, items, danger }) {
     </div>
   );
 }
+
+
+/* EV-05 / ADR-0069 §6: what happened to the suite since the baseline, in two
+   groups — what the system retired (and how many of those were failing at the
+   baseline: the road around the gate is rewording a criterion to shed failing
+   cases), and what the creator edited or deleted by hand — plus the cases with
+   no baseline yet. */
+function SuiteChanges({ changes }) {
+  const { t } = useLang();
+  const creatorEdits = changes.creator_changes.filter((change) => change.kind === "edited").length;
+  const creatorDeletes = changes.creator_changes.filter((change) => change.kind === "deleted").length;
+  return (
+    <div style={{ marginTop: 14 }}>
+      <h3 style={{ margin: "0 0 8px", fontSize: "var(--text-base)" }}>
+        {t("Suite changes")}
+        <span style={{ fontWeight: 400, fontSize: "var(--text-xs)", marginLeft: 8, opacity: 0.7 }}>
+          {changes.baseline_version_id != null ? t("since baseline v{v}", { v: changes.baseline_version_id }) : t("no baseline yet")}
+        </span>
+      </h3>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, background: "var(--color-divider)", border: "1px solid var(--color-divider)" }}>
+        <Evidence
+          label="retired by the system"
+          value={t("{n} ({k} failing at the baseline)", { n: changes.retired.length, k: changes.retired_failing_count })}
+          tone={changes.retired_failing_count ? "#b45309" : undefined}
+        />
+        <Evidence label="edited / deleted by the creator" value={`${creatorEdits} / ${creatorDeletes}`} />
+        <Evidence label="new cases, no baseline" value={changes.new_cases.length} />
+      </div>
+      {(changes.retired.length > 0 || changes.creator_changes.length > 0) && (
+        <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: "var(--text-sm)", lineHeight: 1.6 }}>
+          {changes.retired.map((entry) => (
+            <li key={`r${entry.id}`}>
+              {t("retired")}: <b>{entry.criterion}</b> — {entry.input_message}
+              {entry.retired_failing_at_baseline && <span style={{ color: "#b45309" }}> · {t("was failing at the baseline")}</span>}
+            </li>
+          ))}
+          {changes.creator_changes.map((entry, index) => (
+            <li key={`c${index}`}>
+              {t(entry.kind === "deleted" ? "deleted" : "edited")} {t("by {who}", { who: entry.actor_email || "—" })}: <b>{entry.criterion}</b> — {entry.input_message}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+

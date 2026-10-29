@@ -25,6 +25,7 @@ parked there would stall while the row already said "resumed".
 """
 
 import logging
+from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -451,6 +452,8 @@ class VersionReportOut(BaseModel):
     candidate_judge_model: str = ""
     baseline_judge_model: str = ""
     judge_changed: bool = False
+    #: EV-05: the candidate's cases with no baseline — outside every delta above.
+    new_cases: list[dict[str, Any]] = []
 
 
 class DeploymentStatusRequest(BaseModel):
@@ -856,6 +859,7 @@ def version_report(
         verdict=report.verdict,
         notes=report.notes,
         candidate_judge_model=report.candidate_judge_model,
+        new_cases=[asdict(case) for case in report.new_cases],
         baseline_judge_model=report.baseline_judge_model,
         judge_changed=report.judge_changed,
     )

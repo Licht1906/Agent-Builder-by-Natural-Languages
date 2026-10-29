@@ -249,7 +249,7 @@ async def generate_workflow_cases(
         if proposed:
             cases.extend(proposed)
         else:
-            skipped.append(_prohibition_criterion(prohibition))
+            skipped.append(prohibition_criterion(prohibition))
     return Generation(cases=tuple(cases), skipped_criteria=tuple(skipped))
 
 
@@ -617,7 +617,7 @@ async def _cases_for_prohibition(
     message = _text(reply, "input_message")
     if not message:
         return []
-    criterion = _prohibition_criterion(prohibition)
+    criterion = prohibition_criterion(prohibition)
     action = facts.forbiddable_action(reply.get("action"), prohibition=prohibition)
     if action is not None:
         check = ForbidsAction(action=action)
@@ -628,7 +628,7 @@ async def _cases_for_prohibition(
     return [GeneratedCase(criterion=criterion, input_message=message, expected=expected)]
 
 
-def _prohibition_criterion(prohibition: str) -> str:
+def prohibition_criterion(prohibition: str) -> str:
     """How a prohibition names itself on a case, and in `skipped_criteria`.
 
     Prefixed rather than stored bare, because a case list mixes both sources and

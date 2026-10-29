@@ -36,7 +36,8 @@ from src.evals.cases import get_or_create_suite, list_cases, save_generated
 from src.evals.cassettes import answer_key, cassette_problem, cassettes_for, data_reads, record_missing, sources_of
 from src.evals.checks import key_values
 from src.evals.library import AgentProfile, LibraryTemplate, fill, load_library, matching, profile_of
-from src.evals.workflow_cases import generate_workflow_cases
+from src.evals.suite_changes import retire_stale
+from src.evals.workflow_cases import generate_workflow_cases, prohibition_criterion
 from src.evals.workflow_runner import runnable_cases
 from src.models.eval_check import AnswersFromQuery, check_of, check_payload, describe_check
 from src.models.node_registry import DataQueryConfig
@@ -64,6 +65,7 @@ class BuildReport:
     dropped: int
     live_count: int
     target: int
+    retired: int = 0
 
 
 async def build_suite(
@@ -79,6 +81,9 @@ async def build_suite(
 ) -> BuildReport:
     """Fill `version`'s agent suite towards `target` live cases — library, then data, then the model."""
     criteria = frozenset(criterion.text for criterion in spec.success_criteria)
+    # EV-05: what this version can no longer grade leaves first; its new
+    # criteria get cases below whether or not the suite is short.
+    retired = retire_stale(db, version, workflow=workflow, spec=spec)
     profile = profile_of(workflow, spec, reader)
 
     library_added = 0
@@ -92,8 +97,10 @@ async def build_suite(
         data_added, dropped = _add_data_cases(db, version, workflow, reader, profile.askers, criteria, target)
 
     generated_added = 0
-    if _live(db, version, workflow, criteria) < target:
-        generation = await generate_workflow_cases(spec, workflow, model_factory=model_factory)
+    missing = _uncovered(db, version, spec)
+    if missing is not None or _live(db, version, workflow, criteria) < target:
+        asked = missing if missing is not None and _live(db, version, workflow, criteria) >= target else spec
+        generation = await generate_workflow_cases(asked, workflow, model_factory=model_factory)
         saved = save_generated(db, version.agent_id, version.id, generation)
         generated_added = len(saved.cases)
         if reader is not None:
@@ -106,7 +113,24 @@ async def build_suite(
         dropped=dropped,
         live_count=_live(db, version, workflow, criteria),
         target=target,
+        retired=len(retired),
     )
+
+
+def _uncovered(
+    db: Session, version: AgentVersion, spec: AgentSolutionSpecification
+) -> AgentSolutionSpecification | None:
+    """`spec` narrowed to the criteria and prohibitions no case of the suite covers yet — `None` when all are.
+
+    A reworded criterion is a new criterion: its old cases were retired, and
+    this is what gets it new ones even when the suite is already past 100.
+    """
+    covered = {case.criterion for case in list_cases(db, version.agent_id)}
+    criteria = [criterion for criterion in spec.success_criteria if criterion.text not in covered]
+    prohibitions = [item for item in spec.prohibitions if prohibition_criterion(item) not in covered]
+    if not criteria and not prohibitions:
+        return None
+    return spec.model_copy(update={"success_criteria": criteria, "prohibitions": prohibitions})
 
 
 # --------------------------------------------------------------------------- #

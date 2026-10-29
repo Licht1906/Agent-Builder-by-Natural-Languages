@@ -329,7 +329,9 @@ def _key_of(input_message: str, criterion: str, run_as: str | None) -> tuple[str
 
 def _existing_keys(db: Session, suite_id: int) -> set[tuple[str, str, str]]:
     rows = db.execute(
-        select(EvalCase.input_message, EvalCase.criterion, EvalCase.run_as).where(EvalCase.suite_id == suite_id)
+        select(EvalCase.input_message, EvalCase.criterion, EvalCase.run_as).where(
+            EvalCase.suite_id == suite_id, EvalCase.retired_in_version_id.is_(None)
+        )
     )
     return {_key_of(input_message, criterion, run_as) for input_message, criterion, run_as in rows}
 
