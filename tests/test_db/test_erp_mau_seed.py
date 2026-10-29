@@ -23,6 +23,7 @@ import sqlalchemy
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from scripts.demo_preflight import check_erp
 from scripts.seed_erp_mau import EMPLOYEES, EXPECTED_OVERDUE, INJECTED_NOTE, overdue_counts, seed
 from src.datasources.access import from_yaml
 from src.datasources.query import QueryAggregate, QueryFilter, StructuredQuery
@@ -153,3 +154,14 @@ def test_customers_write_to_the_configured_mailbox_and_one_note_is_an_injection(
 
 def test_the_sample_suites_askers_are_employees_here() -> None:
     assert set(DEMO_ASKERS.values()) <= {employee.email for employee in EMPLOYEES}
+
+
+def test_the_preflight_passes_on_todays_seed_and_names_what_drifted_on_a_stale_one(erp_dsn: str) -> None:
+    """DS-24: the check a presenter runs before going on stage, against the same counts the seed verifies."""
+    _seed(erp_dsn, today=date.today() - timedelta(days=40))
+    stale = check_erp(erp_dsn)
+    _seed(erp_dsn)
+
+    assert stale is not None and "E102" in stale
+    assert check_erp(erp_dsn) is None
+    assert check_erp(erp_dsn.replace("ds23_erp_mau_test", "ds24_no_such_db")) is not None

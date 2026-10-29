@@ -155,6 +155,8 @@ secrets:
 
 ## Kịch bản demo (≈8 phút)
 
+> **Bản diễn được (DS-24, [ADR-0086](../adr/0086-dien-tap-kich-ban-demo.md)).** Bước 4 chạy trên một agent hỏi đáp riêng, bước 5 người demo gõ địa chỉ khách, và câu inject không ra được thẻ duyệt: luật người nhận của ADR-0052 chặn nó sớm hơn. Runbook từng bước: [`docs/uc1-demo-runbook.md`](../uc1-demo-runbook.md).
+
 Chuẩn bị: Postgres "ERP mẫu" (seed Olist + `fin_invoice`, bảng nhân viên với "Nhân viên KD"/"Trưởng nhóm KD", email khách trỏ hộp thư người demo kiểm soát, một ghi chú khách chứa câu inject); Gmail đã kết nối OAuth.
 
 1. **Cắm DB** — Nguồn dữ liệu → Hệ CSDL → Thêm → PostgreSQL → Kiểm tra kết nối → tick `v_ar_open`, `v_customer_safe` → khai `v_employees`.
