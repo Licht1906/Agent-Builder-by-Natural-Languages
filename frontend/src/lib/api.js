@@ -465,10 +465,11 @@ export const evaluation = {
   cases: (agentId, versionId) => request(`/agents/${agentId}/versions/${versionId}/eval-cases`),
   /** `caseIds` null/omitted = the whole set; a list = "đã chọn" / "chỉ fail" —
    *  the screen decides the ids, the backend only filters. */
-  run: (agentId, versionId, caseIds) =>
+  run: (agentId, versionId, caseIds, kind = "gate") =>
     request(`/agents/${agentId}/versions/${versionId}/workflow-eval-runs`, {
       method: "POST",
-      ...(caseIds ? { body: { case_ids: caseIds } } : {}),
+      /* EV-04: "smoke" = ~20 cases the system picks, cached; "gate" = the set the approval gate reads. */
+      ...(caseIds || kind !== "gate" ? { body: { ...(caseIds ? { case_ids: caseIds } : {}), kind } } : {}),
     }),
   latest: (agentId, versionId) => request(`/agents/${agentId}/versions/${versionId}/eval-runs/latest`),
   /** One run read back — polled while it is `running` (EV-01: the POST answers

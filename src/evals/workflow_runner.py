@@ -37,6 +37,12 @@ its reader is a `CassetteReader`, never the creator's database, so two runs of
 one suite read the same rows. A case without the cassettes its graph needs is
 `ungrounded` with the reason — it is never quietly run live.
 
+**Two tiers** (EV-04 / ADR-0069 §7–8, `src.evals.smoke`). A `smoke` run asks
+about twenty cases the system picks and reuses a verdict while nothing it
+depended on changed; a `gate` run asks the whole set, never from the cache, and
+asks every safety case three times. A safety case that fails is a safety
+violation in either.
+
 Spend is deliberately not written to `run_costs`, for ADR-0011 §8's reason: an
 eval candidate is a genuine `sandbox=True` run of the version, and a row here
 would be picked up as "the measured cost of this version" and displace the trial
@@ -59,7 +65,7 @@ from src.config import get_settings
 from src.datasources.dialects.base import QueryRows
 from src.datasources.reader import DatabaseReader
 from src.db.base import SessionLocal
-from src.db.models import EvalCase, RunApprovalStatus
+from src.db.models import EvalCase, EvalCassette, EvalRunKind, RunApprovalStatus
 from src.evals.applicability import Applicability, applicability_of, as_case_applicability, ungrounded_reason
 from src.evals.cassettes import CassetteReader, answer_key, cassette_problem, cassettes_for, data_reads, sources_of
 from src.evals.checks import (
@@ -82,6 +88,17 @@ from src.evals.judge import (
 from src.evals.metrics import DEFAULT_THRESHOLD
 from src.evals.results import fail_run, finish_run, open_run, record_progress
 from src.evals.runner import RUN_DID_NOT_FINISH, EvalRunError, EvalServices, stopped_reason
+from src.evals.smoke import (
+    SAFETY_TRIALS,
+    cached_result,
+    combined,
+    fingerprint,
+    is_safety_case,
+    path_of,
+    remember,
+    smoke_selection,
+    with_safety,
+)
 from src.models.eval_check import AnswersFromQuery, ApprovalCompliance, AsksBack, ExpectedCheck, ForbidsAction, check_of
 from src.models.node_registry import NodeType
 from src.models.schemas import EvalCaseResult, EvalEvidence, MetricScoreOut, SandboxTranscriptEntry, SkippedCase
@@ -176,6 +193,7 @@ class PlannedEval:
     #: The cases to run, in suite order — the order `results` is stored in.
     case_ids: tuple[int, ...]
     applicability: Mapping[int, Applicability]
+    kind: EvalRunKind = EvalRunKind.GATE
 
 
 def plan_workflow_eval(
@@ -185,8 +203,12 @@ def plan_workflow_eval(
     workflow: WorkflowJSON,
     cases: Sequence[EvalCase],
     success_criteria: frozenset[str],
+    kind: EvalRunKind = EvalRunKind.GATE,
 ) -> PlannedEval:
     """Refuse an empty set, classify every case, and write a `running` run — all before the response.
+
+    A `smoke` run then keeps only the cases `smoke_selection` picks among the
+    runnable ones (EV-04).
 
     Refuses an empty set rather than recording a perfect score against it, and
     reads the threshold once, here — both for `src.evals.runner`'s reasons, and
@@ -211,6 +233,9 @@ def plan_workflow_eval(
             "của spec, hoặc tự thêm case, rồi chạy lại"
         )
     runnable, skipped = runnable_cases(db, cases, workflow=workflow, success_criteria=success_criteria)
+    if kind is EvalRunKind.SMOKE:
+        picked = smoke_selection([case for case in cases if case.id in runnable])
+        runnable = {case.id: runnable[case.id] for case in picked}
     run = open_run(
         db,
         version_id,
@@ -218,8 +243,9 @@ def plan_workflow_eval(
         total=len(runnable),
         skipped=skipped,
         judge_model=get_settings().judge_model,
+        kind=kind,
     )
-    return PlannedEval(run_id=run.id, case_ids=tuple(runnable), applicability=runnable)
+    return PlannedEval(run_id=run.id, case_ids=tuple(runnable), applicability=runnable, kind=kind)
 
 
 def runnable_cases(
@@ -288,11 +314,22 @@ async def execute_workflow_eval(
         in_flight = asyncio.Semaphore(max(1, get_settings().eval_concurrency))
         done = 0
 
+        judge = get_settings().judge_model
+
         async def one(case: EvalCase) -> EvalCaseResult:
             nonlocal done
-            asked = subject if frozen is None else _on_frozen_data(subject, case, frozen.get(case.id, []))
+            cassettes = (frozen or {}).get(case.id, [])
+            asked = subject if frozen is None else _on_frozen_data(subject, case, cassettes)
+            applicability = plan.applicability[case.id]
             async with in_flight:
-                result = await _guarded_result(case, asked, applicability=plan.applicability[case.id])
+                if plan.kind is EvalRunKind.SMOKE:
+                    result = await _smoke_result(db, case, asked, applicability, cassettes, judge=judge)
+                else:
+                    trials = SAFETY_TRIALS if is_safety_case(case) else 1
+                    result = combined(
+                        [await _guarded_result(case, asked, applicability=applicability) for _ in range(trials)]
+                    )
+            result = with_safety(case, result)
             done += 1
             record_progress(db, plan.run_id, done)
             return result
@@ -317,7 +354,30 @@ def _on_frozen_data(subject: _Subject, case: EvalCase, cassettes: Sequence[Any])
     return replace(subject, databases=CassetteReader.of(cassettes, asker=case.run_as), answer_key=key)
 
 
-async def _guarded_result(case: EvalCase, subject: _Subject, *, applicability: Applicability) -> EvalCaseResult:
+async def _smoke_result(
+    db: Session,
+    case: EvalCase,
+    subject: _Subject,
+    applicability: Applicability,
+    cassettes: Sequence[EvalCassette],
+    *,
+    judge: str,
+) -> EvalCaseResult:
+    """One smoke verdict: the cached one while nothing it depended on changed, otherwise a fresh run, kept."""
+    stamp = fingerprint(case, cassettes, judge)
+    reused = cached_result(db, case, subject.workflow, fingerprint_now=stamp)
+    if reused is not None:
+        return reused
+    seen: list[_RunRecord] = []
+    result = await _guarded_result(case, subject, applicability=applicability, seen=seen)
+    if seen and seen[-1].error is None:
+        remember(db, case, subject.workflow, result, fingerprint_now=stamp, path=path_of(seen[-1].transcript))
+    return result
+
+
+async def _guarded_result(
+    case: EvalCase, subject: _Subject, *, applicability: Applicability, seen: list["_RunRecord"] | None = None
+) -> EvalCaseResult:
     """`_result_for`, with anything it raises turned into this case failing, with the reason (EV-01).
 
     The run itself already never raises (`_eval_run` turns a crash into a
@@ -327,13 +387,15 @@ async def _guarded_result(case: EvalCase, subject: _Subject, *, applicability: A
     were fine.
     """
     try:
-        return await _result_for(case, subject, applicability=applicability)
+        return await _result_for(case, subject, applicability=applicability, seen=seen)
     except Exception as exc:  # noqa: BLE001 — one case's grading failure is that case's verdict
         reason = f"Không chấm được case này: {stopped_reason(exc)}"
         return _result(case, None, _RunRecord(error=reason), CheckVerdict(passed=False, reason=reason), applicability)
 
 
-async def _result_for(case: EvalCase, subject: _Subject, *, applicability: Applicability) -> EvalCaseResult:
+async def _result_for(
+    case: EvalCase, subject: _Subject, *, applicability: Applicability, seen: list["_RunRecord"] | None = None
+) -> EvalCaseResult:
     """Run one case and grade it, by rule or by judge.
 
     **The rule is applied before the run's own health is considered**, and the
@@ -345,6 +407,9 @@ async def _result_for(case: EvalCase, subject: _Subject, *, applicability: Appli
     """
     check = check_of(case.expected_check)
     record = await _eval_run(case.input_message, _asked_by(subject, case.run_as), scripted=_scripted_for(check))
+    if seen is not None:
+        # The smoke cache keeps the path this run took (EV-04).
+        seen.append(record)
     verdict = None if check is None else grade_check(check, record.transcript, answer_key=subject.answer_key)
     if verdict is not None and verdict.safety_violation:
         return _result(case, check, record, verdict, applicability)

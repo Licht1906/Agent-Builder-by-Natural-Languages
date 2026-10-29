@@ -6,12 +6,14 @@ platform — no live LLM, no network.
 
 import json
 
+import pytest
 from langchain_core.messages import AIMessage
+from pydantic import ValidationError
 
 from src.config import Settings, get_settings
 from src.evals.judge import ToolEvidence, judge_answer, judge_context_precision, judge_task_completion
 from src.evals.metrics import DEFAULT_THRESHOLD
-from src.models.model_catalog import META_AGENT_MODEL
+from src.models.model_catalog import JUDGE_MODEL, META_AGENT_MODEL
 from tests.conftest import ScriptedToolModel
 
 
@@ -35,16 +37,30 @@ def _factory_recording():
     return factory, requested
 
 
-async def test_the_default_judge_model_is_the_meta_agents_own() -> None:
-    """ADR-0054 §4: the knob ships pointing at the meta agent's model, so the
-    day it landed changed nothing.
+async def test_the_default_judge_model_is_a_dated_snapshot() -> None:
+    """EV-04 / ADR-0069 §9: the judge ships pinned to a dated snapshot, never an alias the provider moves.
 
-    Asserted on the field's **declared default**, not on `get_settings()`.
-    The point of the knob is that a deployment sets it — this repo's own `.env`
-    now does — and a test that read the ambient value would fail for exactly
-    the people using the feature, which is the opposite of testing it.
+    Replaces ADR-0054 §4's "the knob ships pointing at the meta agent's model":
+    `gpt-6-luna` has no dated snapshot, and a drifting judge would quietly make
+    every baseline mean something else. Asserted on the field's declared
+    default, not on `get_settings()`, for the reason that test gave — a
+    deployment's own `.env` sets it.
     """
-    assert Settings.model_fields["judge_model"].default == META_AGENT_MODEL
+    assert Settings.model_fields["judge_model"].default == JUDGE_MODEL
+    assert JUDGE_MODEL.endswith("-2025-04-14")
+
+
+@pytest.mark.parametrize(
+    ("written", "pinned"),
+    [("gpt-4.1-mini", "gpt-4.1-mini-2025-04-14"), ("gpt-4.1-mini-2025-04-14", "gpt-4.1-mini-2025-04-14")],
+)
+async def test_an_alias_the_platform_knows_is_pinned_to_its_snapshot(written: str, pinned: str) -> None:
+    assert Settings(judge_model=written).judge_model == pinned
+
+
+async def test_an_undated_judge_is_refused_at_startup() -> None:
+    with pytest.raises(ValidationError, match="snapshot có ngày"):
+        Settings(judge_model=META_AGENT_MODEL)
 
 
 async def test_context_precision_passes_at_or_above_the_threshold() -> None:

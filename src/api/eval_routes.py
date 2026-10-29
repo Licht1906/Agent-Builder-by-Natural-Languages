@@ -41,7 +41,7 @@ from src.api.agent_routes import Checkpointer, OwnedAgent, OwnedVersion, validat
 from src.api.workflow_run_routes import Databases, Knowledge, runnable_workflow
 from src.datasources.reader import DatabaseReader
 from src.db.base import get_db
-from src.db.models import AgentVersion, EvalCase, EvalRun
+from src.db.models import AgentVersion, EvalCase, EvalRun, EvalRunKind
 from src.evals.cases import (
     EvalCaseError,
     add_case,
@@ -503,6 +503,11 @@ async def run_my_versions_workflow_eval(
     The two refusals are the ones the V1 door already gives — a graph that cannot
     run, and an empty set — and neither is a 422: both are facts about the version
     rather than about this request. Both are answered before anything runs.
+
+    `kind` (EV-04): `gate`, the default, is the whole set (or `case_ids`), never
+    from cache, safety cases three trials each — the only kind the approval gate
+    reads. `smoke` is about twenty cases the system picks, cached verdicts
+    reused while nothing they depend on changed.
     """
     workflow = runnable_workflow(version)
     try:
@@ -510,12 +515,16 @@ async def run_my_versions_workflow_eval(
     except SpecStageError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     try:
+        kind = payload.kind if payload is not None else EvalRunKind.GATE
+        suite = list_cases(db, version.agent_id)
         plan = plan_workflow_eval(
             db,
             version_id=version.id,
             workflow=workflow,
-            cases=_selected(list_cases(db, version.agent_id), payload),
+            # A smoke run picks its own cases from the whole suite (EV-04).
+            cases=suite if kind is EvalRunKind.SMOKE else _selected(suite, payload),
             success_criteria=frozenset(criterion.text for criterion in solution_spec.success_criteria),
+            kind=kind,
         )
     except EvalRunError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
@@ -622,4 +631,5 @@ def eval_run_response(db: Session, run: EvalRun) -> EvalRunResponse:
         status=run.status,
         done_count=run.done_count,
         error=run.error,
+        kind=run.kind,
     )

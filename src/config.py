@@ -1,10 +1,10 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from src.models.model_catalog import META_AGENT_MODEL
+from src.models.model_catalog import JUDGE_MODEL, pinned_judge_model
 
 #: Published in `.env.example` and in this file, therefore known to everyone —
 #: usable while developing, refused in production by `Settings` below.
@@ -51,14 +51,12 @@ class Settings(BaseSettings):
     model_name: str = "gpt-4o-mini"
     llm_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
-    # Eval judge model (ADR-0054 §4). Defaults to `META_AGENT_MODEL` so the day
-    # this setting was introduced changes nobody's numbers; an operator who sets
-    # it to a genuinely different family (the lecture's own "judge phải khác họ
-    # model với generator", s52) is choosing a new baseline, not tuning a knob —
-    # `eval_runs.judge_model` records which one graded each run, and
-    # `src.pm.reports` refuses to diff a run against a baseline that used
-    # another.
-    judge_model: str = META_AGENT_MODEL
+    # Eval judge model (ADR-0054 §4), a dated snapshot since EV-04 (ADR-0069 §9;
+    # `src.models.model_catalog.JUDGE_MODEL`). Changing it is choosing a new
+    # baseline, not tuning a knob — `eval_runs.judge_model` records which one
+    # graded each run, and `src.pm.reports` refuses to diff a run against a
+    # baseline that used another.
+    judge_model: str = JUDGE_MODEL
 
     # EV-01 / ADR-0069 §7: how many cases of one eval run are in flight at once.
     # A case is a whole agent run plus a judge call, nearly all of it waiting on
@@ -348,6 +346,12 @@ class Settings(BaseSettings):
     smtp_from: str = "no-reply@example.com"
     tool_file_base_dir: str = "./data/workspace"
     tool_http_timeout_seconds: float = Field(default=15.0, gt=0)
+
+    @field_validator("judge_model")
+    @classmethod
+    def _dated_judge(cls, value: str) -> str:
+        """EV-04 / ADR-0069 §9: the judge is a dated snapshot — an alias drifts, and so would every baseline."""
+        return pinned_judge_model(value)
 
     @model_validator(mode="after")
     def _refuse_public_secrets_in_production(self) -> Self:

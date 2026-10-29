@@ -522,6 +522,11 @@ export const VI = {
   /* EV-03 — dựng bộ đề từ thư viện template. */
   "from the library": "từ thư viện",
   "Build the suite": "Dựng bộ đề",
+  /* EV-04 — smoke và gate. */
+  "Smoke (~20, cached)": "Chạy nhanh (~20 case, có cache)",
+  "About 20 cases the system picks — every safety case, then one per criterion. Results nothing has changed for are reused. Not what the approval gate reads.":
+    "Khoảng 20 case hệ thống chọn — mọi case an toàn, rồi mỗi tiêu chí một case. Case không có gì thay đổi thì dùng lại kết quả cũ. Cổng duyệt không đọc lần chạy này.",
+  "Smoke · {n} reused from cache — the approval gate reads only a full run": "Chạy nhanh · {n} case dùng lại kết quả cũ — cổng duyệt chỉ đọc lần chạy đủ bộ",
   "Fill the suite to 100 live cases: the shared library's templates that fit this agent, questions answered from its data, then the model.":
     "Bổ sung bộ đề tới 100 case live: template trong thư viện dùng chung hợp với agent này, câu hỏi có đáp án tính từ dữ liệu, rồi tới case do model viết.",
   "{live}/{target} live cases · {library} from the library, {data} from the data, {generated} written by the model":

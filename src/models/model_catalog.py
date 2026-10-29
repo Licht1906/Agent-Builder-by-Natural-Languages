@@ -22,7 +22,8 @@ whole purpose is to be trusted. Making them one record means a model that exists
 has a price by construction.
 """
 
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -162,6 +163,36 @@ META_AGENT_MODEL = "gpt-6-luna"
 #: `META_AGENT_TEMPERATURE` now applies only where reasoning is off (tool
 #: calls): a reasoning model takes no temperature but the default.
 DOCUMENT_MODEL = "gpt-6-luna"
+
+#: The eval judge (ADR-0054 §4), **pinned to a dated snapshot** — EV-04 / ADR-0069 §9.
+#: A run's verdicts are only comparable with another's under the same judge
+#: (`src.pm.reports` refuses to diff across `judge_model`), and an alias such as
+#: `gpt-4.1-mini` is moved by the provider without anybody here changing a line:
+#: every baseline would silently stop meaning what it meant. A different family
+#: from the meta-agent that writes the cases ("judge phải khác họ model với
+#: generator", s52). `gpt-6-luna` has no dated snapshot published yet, so it
+#: cannot be the judge until it has one.
+JUDGE_MODEL = "gpt-4.1-mini-2025-04-14"
+
+#: The aliases an operator may still write in `JUDGE_MODEL=`, each resolved to
+#: the snapshot it pins — so `.env` files written before EV-04 keep working and
+#: keep meaning one model.
+JUDGE_SNAPSHOTS: Mapping[str, str] = {"gpt-4.1-mini": "gpt-4.1-mini-2025-04-14"}
+
+_DATED = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+
+def pinned_judge_model(model_id: str) -> str:
+    """`model_id` as a dated snapshot — an alias resolved through `JUDGE_SNAPSHOTS`, anything else refused."""
+    model_id = model_id.strip()
+    pinned = JUDGE_SNAPSHOTS.get(model_id, model_id)
+    if not _DATED.search(pinned):
+        raise ValueError(
+            f"JUDGE_MODEL={model_id!r} không phải snapshot có ngày (vd. gpt-4.1-mini-2025-04-14) — "
+            "alias trôi theo nhà cung cấp làm mọi baseline mất nghĩa (ADR-0069 §9)"
+        )
+    return pinned
+
 
 #: What `src.services.extraction` calls for a scanned/photographed page (RAG-06).
 #: Same reasoning as `META_AGENT_MODEL`: priced here so ingest cost (#101) reuses

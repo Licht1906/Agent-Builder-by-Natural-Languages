@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from src.db.base import SessionLocal
-from src.db.models import EvalRun, EvalRunStatus
+from src.db.models import EvalRun, EvalRunKind, EvalRunStatus
 from src.models.schemas import EvalCaseResult, SkippedCase
 
 
@@ -188,6 +188,7 @@ def open_run(
     total: int,
     skipped: list[SkippedCase],
     judge_model: str,
+    kind: EvalRunKind = EvalRunKind.GATE,
 ) -> EvalRun:
     """Write down a run that has been asked for and not yet done — `running`, 0 of `total` (EV-01).
 
@@ -205,6 +206,7 @@ def open_run(
         judge_model=judge_model,
         status=EvalRunStatus.RUNNING,
         done_count=0,
+        kind=kind,
     )
     db.add(run)
     db.commit()
@@ -264,7 +266,7 @@ def recover_interrupted_eval_runs(session_factory: Callable[[], Session] = Sessi
 
 
 def latest_run(db: Session, version_id: int) -> EvalRun | None:
-    """The most recent **completed** eval run of `version_id`, or `None` if it has never finished one.
+    """The most recent **completed gate** run of `version_id`, or `None` if it has never finished one.
 
     The latest rather than the best. A creator who edits their cases and runs
     again is asking to be judged on the set they now stand behind, and "best run
@@ -273,11 +275,16 @@ def latest_run(db: Session, version_id: int) -> EvalRun | None:
 
     Completed only (EV-01): a run still going has no verdict yet, and one that
     stopped as a whole has none at all — neither may stand in for the last run
-    that did finish, in the gate or anywhere else.
+    that did finish, in the gate or anywhere else. Gate only (EV-04): a smoke
+    run is a subset, partly from cache, and is never evidence for approval.
     """
     return db.execute(
         select(EvalRun)
-        .where(EvalRun.version_id == version_id, EvalRun.status == EvalRunStatus.COMPLETED)
+        .where(
+            EvalRun.version_id == version_id,
+            EvalRun.status == EvalRunStatus.COMPLETED,
+            EvalRun.kind == EvalRunKind.GATE,
+        )
         .order_by(EvalRun.id.desc())
         .limit(1)
     ).scalar_one_or_none()

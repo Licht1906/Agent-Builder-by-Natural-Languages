@@ -213,12 +213,12 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
     }
   }
 
-  async function run(caseIds = null) {
+  async function run(caseIds = null, kind = "gate") {
     setBusy("run");
     setError("");
     setRunMenu(false);
     try {
-      setResult(await api.evaluation.run(agentId, versionId, caseIds));
+      setResult(await api.evaluation.run(agentId, versionId, caseIds, kind));
     } catch (err) {
       setError(err.message);
       notify(err.message, "error");
@@ -312,6 +312,9 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
        screen-reader stop — away instead of two lines of prose under the
        headline. `pass rate %` is absent entirely: it is `passed/total` said a
        second way, and two names for one measure are two numbers that drift. — */
+  const smokeNote = result?.kind === "smoke"
+    ? t("Smoke · {n} reused from cache — the approval gate reads only a full run", { n: (result.results || []).filter((r) => r.cached).length })
+    : null;
   const scoreFacts = running
     ? t("Running {done}/{total} — you can leave this screen, the run continues", { done: result.done_count, total: result.total_count })
     : result
@@ -413,6 +416,7 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
             The fold resets when the sentence changes, so a refusal left open
             last time does not un-fold the next one. */}
         <Note tone="warn" fold text={result?.blocked_reason} />
+        {smokeNote && <Note text={smokeNote} />}
 
         <div>
             {/* Every verb in this toolbar adds to, or scores, the one set. */}
@@ -460,6 +464,7 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
                 </button>
                 {runMenu && (
                   <div style={{ position: "absolute", right: 0, top: 42, zIndex: 20, background: "var(--color-bg)", border: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", minWidth: 190 }}>
+                    <button className="btn btn-ghost" style={{ justifyContent: "flex-start" }} onClick={() => run(null, "smoke")} title={t("About 20 cases the system picks — every safety case, then one per criterion. Results nothing has changed for are reused. Not what the approval gate reads.")}>{t("Smoke (~20, cached)")}</button>
                     <button className="btn btn-ghost" style={{ justifyContent: "flex-start" }} onClick={() => run(null)}>{t("All cases")}</button>
                     <button className="btn btn-ghost" style={{ justifyContent: "flex-start" }} disabled={!failedIds.length} onClick={() => run(failedIds)}>{t("Only the failed ones")}</button>
                     <button className="btn btn-ghost" style={{ justifyContent: "flex-start" }} disabled={!selected.size} onClick={() => run([...selected])}>{t("Selected ({n})", { n: selected.size })}</button>

@@ -26,6 +26,7 @@ from src.db.models import (
     DeploymentStatus,
     DocumentStatus,
     EvalCaseOrigin,
+    EvalRunKind,
     EvalRunStatus,
     ExternalConnectionProvider,
     ExternalConnectionStatus,
@@ -1167,6 +1168,9 @@ class EvalCaseResult(BaseModel):
             "`context_precision`/`task_completion` ghi vào đây; rỗng với mọi case khác"
         ),
     )
+    trials: int = Field(default=1, ge=1, description="Số lượt chạy case này (gate: case an toàn chạy 3 lượt — EV-04)")
+    trials_passed: int = Field(default=1, ge=0, description="Số lượt đậu; case an toàn chỉ đậu khi đậu mọi lượt")
+    cached: bool = Field(default=False, description="Smoke dùng lại kết quả cũ vì không gì nó phụ thuộc đã đổi (EV-04)")
 
 
 class MetricScoreOut(BaseModel):
@@ -1310,6 +1314,10 @@ class EvalRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     case_ids: list[int] | None = Field(default=None, description="null = mọi case của suite")
+    kind: EvalRunKind = Field(
+        default=EvalRunKind.GATE,
+        description="gate = đủ bộ (hoặc case_ids), không cache; smoke = ≈20 case hệ thống chọn, có cache (EV-04)",
+    )
 
 
 class EvalSuiteBuildResponse(BaseModel):
@@ -1376,6 +1384,7 @@ class EvalRunResponse(BaseModel):
         description="running → completed | failed; điểm số chỉ có nghĩa khi completed (EV-01)",
     )
     done_count: int = Field(default=0, description="Số case đã chạy xong — tiến độ done/total khi đang chạy")
+    kind: EvalRunKind = Field(default=EvalRunKind.GATE, description="smoke hay gate — cổng duyệt chỉ đọc gate (EV-04)")
     error: str | None = Field(default=None, description="Vì sao cả lần chạy dừng (status failed)")
     created_at: UtcTimestamp
     results: list[EvalCaseResult]

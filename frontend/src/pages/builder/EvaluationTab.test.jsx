@@ -204,6 +204,20 @@ describe("EvaluationTab", () => {
     expect(screen.queryByText(/what it did and answered/)).not.toBeInTheDocument();
   });
 
+  /* EV-04: smoke is one more choice in the run menu, and says it is not the gate's. */
+  it("runs a smoke and says how many verdicts came from the cache", async () => {
+    api.evaluation.run.mockResolvedValue({
+      ...LATEST, id: 11, kind: "smoke", status: "completed",
+      results: [{ ...LATEST.results[0], cached: true }],
+    });
+    draw();
+    await userEvent.click(await screen.findByRole("button", { name: /Run evaluation/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Smoke \(~20, cached\)/ }));
+
+    await waitFor(() => expect(api.evaluation.run).toHaveBeenCalledWith(7, 13, null, "smoke"));
+    expect(await screen.findByText(/Smoke · 1 reused from cache/)).toBeInTheDocument();
+  });
+
   /* EV-03: one button fills the suite towards 100 live cases and says where they came from. */
   it("builds the suite and reports how many cases came from the library, the data and the model", async () => {
     api.evaluation.buildSuite.mockResolvedValue({
@@ -246,12 +260,12 @@ describe("EvaluationTab", () => {
     draw();
     await userEvent.click(await screen.findByRole("button", { name: /Run evaluation/ }));
     await userEvent.click(screen.getByRole("button", { name: /Only the failed ones/ }));
-    await waitFor(() => expect(api.evaluation.run).toHaveBeenCalledWith(7, 13, [1]));
+    await waitFor(() => expect(api.evaluation.run).toHaveBeenCalledWith(7, 13, [1], "gate"));
 
     await userEvent.click((await screen.findAllByRole("checkbox", { name: /Select this case/ }))[1]);
     await userEvent.click(screen.getByRole("button", { name: /Run evaluation/ }));
     await userEvent.click(screen.getByRole("button", { name: /Selected \(1\)/ }));
-    await waitFor(() => expect(api.evaluation.run).toHaveBeenLastCalledWith(7, 13, [2]));
+    await waitFor(() => expect(api.evaluation.run).toHaveBeenLastCalledWith(7, 13, [2], "gate"));
   });
 
   it("previews an upload row by row and writes nothing until the creator confirms", async () => {

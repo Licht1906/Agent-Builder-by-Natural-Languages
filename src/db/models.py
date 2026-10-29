@@ -1100,6 +1100,39 @@ class EvalCassette(Base):
     recorded_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
+class EvalRunKind(StrEnum):
+    """Which tier of eval a run is — EV-04 / ADR-0069 §7.
+
+    `smoke` is the creator's fast loop: ~20 cases the system picks, a cached
+    verdict reused while nothing it depends on changed. `gate` is the whole set,
+    never from cache, safety cases three trials each — the only kind the
+    approval gate reads.
+    """
+
+    SMOKE = "smoke"
+    GATE = "gate"
+
+
+class EvalSmokeCache(Base):
+    """A smoke verdict, reusable while nothing it depended on changed — EV-04 / ADR-0069 §7.
+
+    One row per case, the latest. Reused when `fingerprint` (the case's own
+    text and rule, its frozen data, the judge) is the same and the nodes the
+    case's run went through (`path`) still hash to `path_hash` in the graph
+    being smoked: editing a node re-runs exactly the cases that passed through
+    it. A gate run never reads this table.
+    """
+
+    __tablename__ = "eval_smoke_cache"
+
+    case_id: Mapped[int] = mapped_column(ForeignKey("eval_cases.id", ondelete="CASCADE"), primary_key=True)
+    fingerprint: Mapped[str]
+    path: Mapped[list[str]] = mapped_column(JSON, doc="Node id lượt chạy đã đi qua")
+    path_hash: Mapped[str]
+    result: Mapped[dict[str, Any]] = mapped_column(JSON, doc="EvalCaseResult đã chấm")
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
 class EvalRunStatus(StrEnum):
     """Where one eval run has got to (EV-01 / ADR-0069 §7).
 
@@ -1161,6 +1194,11 @@ class EvalRun(Base):
     )
     done_count: Mapped[int] = mapped_column(
         default=0, server_default="0", doc="Số case đã chạy xong — tiến độ done/total khi đang chạy"
+    )
+    kind: Mapped[EvalRunKind] = mapped_column(
+        default=EvalRunKind.GATE,
+        server_default=EvalRunKind.GATE.name,
+        doc="smoke (≈20 case, có cache) hay gate (đủ bộ, không cache) — cổng duyệt chỉ đọc gate (EV-04)",
     )
     error: Mapped[str | None] = mapped_column(default=None, doc="Vì sao cả run dừng (status failed)")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
