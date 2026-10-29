@@ -43,9 +43,11 @@ với canvas mà spec mô tả: `collect → data_query → agent_llm → human_
 
 - Kịch bản trên sân khấu lệch spec ở ba chỗ: hai agent, người demo gõ địa chỉ, cảnh inject không có thẻ.
   Spec §Kịch bản demo trỏ sang ADR này.
-- Tiêu chí của DS-24 (hai lần diễn tập liên tiếp trên GCP, mỗi lần ≤ 8 phút) cần người demo thật, tài khoản
-  Gmail thật và bản deploy GCP. Repo không làm thay được. Bảng nhật ký trong runbook là chỗ ghi kết quả.
-  Lúc viết ADR này, `deploy.yml` chưa chạy được lần nào (`DEPLOYMENT-TODO.md` §3: hết quota GitHub Actions), và
-  job migrate trên GCP còn vướng `verify_uc1_data_surface.py` (§2).
+- **Môi trường diễn tập là local, không phải GCP như ticket ghi.** Chưa có bản deploy GCP nào: `deploy.yml`
+  chưa chạy được lần nào (`DEPLOYMENT-TODO.md` §3, hết quota GitHub Actions), job migrate còn vướng
+  `verify_uc1_data_surface.py` (§2). Runbook lấy local (compose + backend/frontend trên máy) làm môi trường chính,
+  GCP để ở phụ lục.
+- Tiêu chí của DS-24 (hai lần diễn tập liên tiếp, mỗi lần ≤ 8 phút) cần người demo thật và tài khoản Gmail thật.
+  Repo không làm thay được. Bảng nhật ký trong runbook là chỗ ghi kết quả.
 - Test diễn tập dùng model giả lập, nên không đo được độ trễ LLM hay Gmail. Phần đó runbook xử lý bằng làm
   nóng và phương án dự phòng.
