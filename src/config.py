@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # another.
     judge_model: str = META_AGENT_MODEL
 
+    # EV-01 / ADR-0069 §7: how many cases of one eval run are in flight at once.
+    # A case is a whole agent run plus a judge call, nearly all of it waiting on
+    # a provider, so 8 turns a 100-case gate from ~30 minutes into a few. Bounded
+    # because every case in flight holds model calls open against the same keys.
+    eval_concurrency: int = 8
+
     # Database — Postgres only; see docs/adr and issue #3 for why SQLite is not
     # an option (the conversation checkpointer is Postgres-only).
     database_url: str = "postgresql://postgres:postgres@localhost:5432/app_dev"

@@ -471,6 +471,9 @@ export const evaluation = {
       ...(caseIds ? { body: { case_ids: caseIds } } : {}),
     }),
   latest: (agentId, versionId) => request(`/agents/${agentId}/versions/${versionId}/eval-runs/latest`),
+  /** One run read back — polled while it is `running` (EV-01: the POST answers
+   *  at once and the cases run in the background). */
+  runById: (agentId, versionId, runId) => request(`/agents/${agentId}/versions/${versionId}/eval-runs/${runId}`),
   updateCase: (agentId, versionId, caseId, payload) =>
     request(`/agents/${agentId}/versions/${versionId}/eval-cases/${caseId}`, { method: "PATCH", body: payload }),
   /** Throw one test case away. A run already scored against it keeps its own

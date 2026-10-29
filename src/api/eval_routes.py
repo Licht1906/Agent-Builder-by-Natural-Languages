@@ -33,7 +33,7 @@ action nothing can call. Deleting such a case works as it always has.
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -52,12 +52,12 @@ from src.evals.cases import (
     update_case,
 )
 from src.evals.gate import score_for, version_blocker
-from src.evals.results import latest_run, results_of, skipped_of
+from src.evals.results import newest_run, results_of, skipped_of
 from src.evals.runner import EvalRunError, EvalServices, run_eval
 from src.evals.sample_suites import case_count, sample_suite_of_agent
 from src.evals.suite_io import SuiteImportError, export_suite, import_suite, template_csv
 from src.evals.workflow_cases import generate_workflow_cases
-from src.evals.workflow_runner import run_workflow_eval
+from src.evals.workflow_runner import execute_workflow_eval, plan_workflow_eval
 from src.models.schemas import (
     EvalCaseCreateRequest,
     EvalCaseResponse,
@@ -384,9 +384,17 @@ async def run_my_versions_workflow_eval(
     services: EvalRunServices,
     knowledge: Knowledge,
     databases: Databases,
+    background: BackgroundTasks,
     payload: EvalRunRequest | None = None,
 ) -> EvalRunResponse:
-    """Run the whole test set against this version's confirmed workflow, and score it.
+    """Start the whole test set against this version's confirmed workflow — answered at once, run in the background.
+
+    EV-01 / ADR-0069 §7: a hundred cases are a hundred agent runs, half an hour
+    one at a time and minutes eight at a time — either way longer than a
+    request should stay open. So this answers with the run `running`, 0 of N,
+    and `GET …/eval-runs/{run_id}` reports `done_count` until it is
+    `completed` (or `failed`, with `error`). The creator may leave the screen;
+    the run does not depend on anybody waiting for it.
 
     Every case is a sandboxed run of the real graph, and a case carrying an
     `expected_check` is graded by reading that run's transcript rather than by
@@ -398,11 +406,12 @@ async def run_my_versions_workflow_eval(
     `knowledge` is the same dependency the workflow chat and trial doors take, so
     a `KnowledgeSearch` node in an eval run reads the creator's real documents
     rather than a stand-in. A test set grounded in a stand-in would be evidence
-    about the stand-in.
+    about the stand-in. Like the streaming doors, the job keeps using it after
+    the request's session has closed.
 
     The two refusals are the ones the V1 door already gives — a graph that cannot
     run, and an empty set — and neither is a 422: both are facts about the version
-    rather than about this request.
+    rather than about this request. Both are answered before anything runs.
     """
     workflow = runnable_workflow(version)
     try:
@@ -410,19 +419,27 @@ async def run_my_versions_workflow_eval(
     except SpecStageError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     try:
-        run = await run_workflow_eval(
+        plan = plan_workflow_eval(
             db,
-            agent_id=version.agent_id,
             version_id=version.id,
             workflow=workflow,
             cases=_selected(list_cases(db, version.agent_id), payload),
-            services=services,
-            knowledge=knowledge,
-            databases=databases,
             success_criteria=frozenset(criterion.text for criterion in solution_spec.success_criteria),
         )
     except EvalRunError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    background.add_task(
+        execute_workflow_eval,
+        plan,
+        agent_id=version.agent_id,
+        version_id=version.id,
+        workflow=workflow,
+        services=services,
+        knowledge=knowledge,
+        databases=databases,
+    )
+    run = db.get(EvalRun, plan.run_id)
+    assert run is not None
     return eval_run_response(db, run)
 
 
@@ -436,16 +453,23 @@ def _selected(cases: list, payload: "EvalRunRequest | None") -> list:
 
 @router.get(f"{_VERSION}/eval-runs/latest", response_model=EvalRunResponse)
 def read_my_versions_latest_eval_run(version: OwnedVersion, db: Annotated[Session, Depends(get_db)]) -> EvalRunResponse:
-    """The run that decides whether this version may ask for approval.
+    """The run the Evaluation tab opens on: one still going if there is one, otherwise the last that finished.
 
     Declared before the by-id route because `latest` is not an integer and would
     otherwise be matched — and rejected — as one.
+
+    Not necessarily the run the gate reads (EV-01): a creator who left the
+    screen mid-run comes back to its progress, while `blocked_reason` keeps
+    describing the version by its last *completed* run, as the gate does. A run
+    that stopped as a whole is shown only until the next one starts.
 
     404 for a version nobody has evaluated. Unlike an agent with no costs, there
     is no true zero to report here: "no run" and "a run that scored nothing" are
     different states, and the approval gate treats them differently too.
     """
-    run = _latest_or_404(db, version.id)
+    run = newest_run(db, version.id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version chưa chạy eval lần nào")
     return eval_run_response(db, run)
 
 
@@ -463,14 +487,6 @@ def read_my_versions_eval_run(
     if run is None or run.version_id != version.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy lần chạy eval")
     return eval_run_response(db, run)
-
-
-def _latest_or_404(db: Session, version_id: int) -> EvalRun:
-    """The version's most recent eval run, or a 404 saying it has never had one."""
-    run = latest_run(db, version_id)
-    if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version chưa chạy eval lần nào")
-    return run
 
 
 def eval_run_response(db: Session, run: EvalRun) -> EvalRunResponse:
@@ -512,4 +528,7 @@ def eval_run_response(db: Session, run: EvalRun) -> EvalRunResponse:
         results=results_of(run),
         skipped=skipped_of(run),
         judge_model=run.judge_model,
+        status=run.status,
+        done_count=run.done_count,
+        error=run.error,
     )

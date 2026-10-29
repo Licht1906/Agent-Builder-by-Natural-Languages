@@ -35,7 +35,7 @@ from src.models.workflow import WorkflowJSON
 from src.services.secret_store import EncryptedDbSecretStore
 from src.workflow.templates import TEMPLATE_REGISTRY
 from src.workflow.tools import GMAIL
-from tests.conftest import auth_header
+from tests.conftest import auth_header, finished_eval_run
 from tests.test_api.test_workflow_eval import _Router, install
 
 pytestmark = pytest.mark.asyncio
@@ -201,10 +201,7 @@ async def test_the_sample_runs_through_v2_eval_each_case_as_its_own_asker(
     await _load(client, demo_agent, creator_token)
     router = install(_DemoRouter(answer_text="Theo v_ds22_ar, khách quá hạn của bạn được liệt kê ở trên."))
 
-    response = await client.post(
-        f"/api/v1/agents/{demo_agent.agent_id}/versions/{demo_agent.id}/workflow-eval-runs",
-        headers=auth_header(creator_token),
-    )
+    response = await finished_eval_run(client, demo_agent.agent_id, demo_agent.id, creator_token)
 
     assert response.status_code == 200, response.text
     run = response.json()

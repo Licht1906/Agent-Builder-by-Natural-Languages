@@ -36,6 +36,7 @@ from src.db.models import (
     AgentVersion,
     Deployment,
     EvalRun,
+    EvalRunStatus,
     MetaAgentGateRun,
     QualityScore,
     RunApproval,
@@ -422,7 +423,7 @@ def _offline_rates(
         latest = (
             select(EvalRun.version_id, func.max(EvalRun.id).label("id"))
             .join(AgentVersion, AgentVersion.id == EvalRun.version_id)
-            .where(AgentVersion.agent_id.in_(v2_agents))
+            .where(AgentVersion.agent_id.in_(v2_agents), EvalRun.status == EvalRunStatus.COMPLETED)
             .group_by(EvalRun.version_id)
             .subquery()
         )

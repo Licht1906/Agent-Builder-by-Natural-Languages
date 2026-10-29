@@ -220,6 +220,22 @@ def auth_header(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def finished_eval_run(client: Any, agent_id: int, version_id: int, token: str, **body: Any) -> Any:
+    """Start a workflow eval run and read it back finished — EV-01's two requests as one.
+
+    The POST answers with the run `running`; the run itself is a `BackgroundTasks`
+    job, and the in-process transport this suite talks through only hands the
+    POST's response back once the app call — background job included — has
+    returned. So the GET that follows reads the run completed. A refused POST
+    (409, 404) is returned as it is.
+    """
+    base = f"/api/v1/agents/{agent_id}/versions/{version_id}"
+    started = await client.post(f"{base}/workflow-eval-runs", json=body or None, headers=auth_header(token))
+    if started.status_code != 200:
+        return started
+    return await client.get(f"{base}/eval-runs/{started.json()['id']}", headers=auth_header(token))
+
+
 def user_id_of(token: str) -> int:
     """The `sub` claim of an already-issued token — cheaper than a lookup call
     for a test fixture's own bookkeeping (e.g. `created_by_id` on a seeded row).

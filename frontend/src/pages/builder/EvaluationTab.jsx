@@ -89,6 +89,35 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
 
   useEffect(() => { load(); }, [load]);
 
+  /* EV-01: a run answers `running` and fills in in the background. Poll it
+     until it is done — and say so only for a run this screen watched running,
+     not for one it merely reopened on. Leaving the screen stops the polling,
+     never the run; coming back reopens on it through `latest`. */
+  const running = result?.status === "running";
+  const watched = useRef(null);
+  useEffect(() => {
+    if (!running) return undefined;
+    watched.current = result.id;
+    const timer = setTimeout(async () => {
+      try {
+        setResult(await api.evaluation.runById(agentId, versionId, result.id));
+      } catch (err) {
+        setError(err.message);
+      }
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [running, result, agentId, versionId]);
+  useEffect(() => {
+    if (!result || running || watched.current !== result.id) return;
+    watched.current = null;
+    if (result.status === "failed") {
+      setError(result.error);
+      notify(t("The evaluation stopped: {reason}", { reason: result.error }), "error");
+    } else {
+      notify(t("{passed}/{total} checks passed", { passed: result.passed_count, total: result.total_count }));
+    }
+  }, [result, running, notify, t]);
+
   /* The template's own sample suite (DS-22) — offered only when it ships one. */
   useEffect(() => {
     let live = true;
@@ -145,9 +174,7 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
     setError("");
     setRunMenu(false);
     try {
-      const evaluated = await api.evaluation.run(agentId, versionId, caseIds);
-      setResult(evaluated);
-      notify(t("{passed}/{total} checks passed", { passed: evaluated.passed_count, total: evaluated.total_count }));
+      setResult(await api.evaluation.run(agentId, versionId, caseIds));
     } catch (err) {
       setError(err.message);
       notify(err.message, "error");
@@ -241,7 +268,9 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
        screen-reader stop — away instead of two lines of prose under the
        headline. `pass rate %` is absent entirely: it is `passed/total` said a
        second way, and two names for one measure are two numbers that drift. — */
-  const scoreFacts = result
+  const scoreFacts = running
+    ? t("Running {done}/{total} — you can leave this screen, the run continues", { done: result.done_count, total: result.total_count })
+    : result
     ? [
         `${result.passed_count}/${result.total_count} ${t("passed")}`,
         t("bar {n}%", { n: Math.round(result.threshold * 100) }),
@@ -292,12 +321,22 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
               aria-label={scoreFacts}
               style={{
                 display: "block", fontFamily: "var(--font-heading)", fontSize: "var(--text-2xl)", lineHeight: 1.05,
-                color: result ? (result.meets_threshold ? "var(--color-accent)" : warn) : "var(--color-text)",
+                color: result && !running ? (result.meets_threshold ? "var(--color-accent)" : warn) : "var(--color-text)",
               }}
             >
-              {result ? `${result.passed_count}/${result.total_count}` : "—"}
+              {running ? (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  <Spinner size={16} />{t("Running {done}/{total}", { done: result.done_count, total: result.total_count })}
+                </span>
+              ) : result ? `${result.passed_count}/${result.total_count}` : "—"}
             </span>
-            {result && (
+            {running && (
+              <Meter
+                title={scoreFacts}
+                segments={[{ key: "done", frac: result.total_count ? result.done_count / result.total_count : 0, color: faint }]}
+              />
+            )}
+            {result && !running && (
               <Meter
                 title={scoreFacts}
                 segments={[{
@@ -352,7 +391,7 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
                 </button>
               )}
               <div style={{ position: "relative", marginLeft: "auto" }}>
-                <button className="btn btn-primary" onClick={() => setRunMenu((v) => !v)} disabled={!!busy || cases.length === 0} style={{ height: 38 }}>
+                <button className="btn btn-primary" onClick={() => setRunMenu((v) => !v)} disabled={!!busy || running || cases.length === 0} style={{ height: 38 }}>
                   {busy === "run" ? <Spinner size={13} /> : <ListChecks size={13} />}{t("Run evaluation")}<ChevronDown size={12} />
                 </button>
                 {runMenu && (

@@ -631,7 +631,6 @@ class PlatformCallPurpose(StrEnum):
     # spend nothing on that" is reading a category that was never wired up.
 
 
-
 class RunTrigger(StrEnum):
     """What started a run — PM playbook §1's `trigger` attribute.
 
@@ -768,7 +767,6 @@ class AgentRun(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), index=True)
 
 
-
 class AuditEvent(Base):
     """One link of the V2 runtime's audit chain — DS-10, carried over from UC-1's `audit_log`.
 
@@ -818,6 +816,7 @@ class AuditChainHead(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     last_seq: Mapped[int] = mapped_column(default=0)
     last_hash: Mapped[str] = mapped_column(doc="entry_hash của bản cuối")
+
 
 class RunLabel(Base):
     """One expert verdict on one run — ADR-0053 §3, layer three.
@@ -1061,6 +1060,19 @@ class EvalCase(Base):
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())
 
 
+class EvalRunStatus(StrEnum):
+    """Where one eval run has got to (EV-01 / ADR-0069 §7).
+
+    A run is written the moment it is asked for and finished by a background
+    job, so a row can exist before it means anything. Only `completed` rows are
+    evidence: the gate, the dossier and the PM board read nothing else.
+    """
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class EvalRun(Base):
     """One execution of a version's whole test set, and what it decided — see #13.
 
@@ -1102,8 +1114,16 @@ class EvalRun(Base):
             "chạy có judge_model khác nhau"
         ),
     )
+    status: Mapped[EvalRunStatus] = mapped_column(
+        default=EvalRunStatus.COMPLETED,
+        server_default=EvalRunStatus.COMPLETED.name,
+        doc="running → completed | failed; chỉ run completed mới là bằng chứng (EV-01)",
+    )
+    done_count: Mapped[int] = mapped_column(
+        default=0, server_default="0", doc="Số case đã chạy xong — tiến độ done/total khi đang chạy"
+    )
+    error: Mapped[str | None] = mapped_column(default=None, doc="Vì sao cả run dừng (status failed)")
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
-
 
 
 class EvidenceZone(StrEnum):

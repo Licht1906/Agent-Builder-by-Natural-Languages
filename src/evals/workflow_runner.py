@@ -24,16 +24,25 @@ produced — the same transcript, through the same mapper, that a trial stores f
 an admin to read. The remaining cases go to `judge_answer` exactly as ADR-0011
 sends them.
 
+**A set runs in the background, several cases at once** (EV-01 / ADR-0069
+§7). `plan_workflow_eval` does everything a request can answer at once —
+refuse an empty set, classify every case, write a `running` row — and
+`execute_workflow_eval` does the rest after the response has gone: up to
+`Settings.eval_concurrency` cases in flight, results stored in case order
+however they finish, one case that raises failing only itself.
+
 Spend is deliberately not written to `run_costs`, for ADR-0011 §8's reason: an
 eval candidate is a genuine `sandbox=True` run of the version, and a row here
 would be picked up as "the measured cost of this version" and displace the trial
 run the creator actually watched.
 """
 
-from collections.abc import Mapping, Sequence
+import asyncio
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.admin.config import read_config
@@ -42,7 +51,8 @@ from src.agents.runtime import Conversation, RunServices
 from src.agents.threads import RunIdentity, ThreadNamespace, ThreadRef
 from src.config import get_settings
 from src.datasources.reader import DatabaseReader
-from src.db.models import EvalCase, EvalRun, RunApprovalStatus
+from src.db.base import SessionLocal
+from src.db.models import EvalCase, RunApprovalStatus
 from src.evals.applicability import Applicability, applicability_of, as_case_applicability, ungrounded_reason
 from src.evals.checks import (
     CheckVerdict,
@@ -62,7 +72,7 @@ from src.evals.judge import (
     shown,
 )
 from src.evals.metrics import DEFAULT_THRESHOLD
-from src.evals.results import store_run
+from src.evals.results import fail_run, finish_run, open_run, record_progress
 from src.evals.runner import RUN_DID_NOT_FINISH, EvalRunError, EvalServices, stopped_reason
 from src.models.eval_check import ApprovalCompliance, AsksBack, ExpectedCheck, ForbidsAction, check_of
 from src.models.node_registry import NodeType
@@ -143,19 +153,29 @@ class _Subject:
     databases: DatabaseReader | None = None
 
 
-async def run_workflow_eval(
+@dataclass(frozen=True, slots=True)
+class PlannedEval:
+    """A run that has been written down and not yet executed — what the request hands the background job.
+
+    Ids rather than rows: the job opens a session of its own, and an ORM row
+    belongs to the request's, closed by the time the job starts.
+    """
+
+    run_id: int
+    #: The cases to run, in suite order — the order `results` is stored in.
+    case_ids: tuple[int, ...]
+    applicability: Mapping[int, Applicability]
+
+
+def plan_workflow_eval(
     db: Session,
     *,
-    agent_id: int,
     version_id: int,
     workflow: WorkflowJSON,
     cases: Sequence[EvalCase],
-    services: EvalServices,
-    knowledge: KnowledgeStore,
     success_criteria: frozenset[str],
-    databases: DatabaseReader | None = None,
-) -> EvalRun:
-    """Run every case against `workflow` in sandbox mode, score the set, and store the run.
+) -> PlannedEval:
+    """Refuse an empty set, classify every case, and write a `running` run — all before the response.
 
     Refuses an empty set rather than recording a perfect score against it, and
     reads the threshold once, here — both for `src.evals.runner`'s reasons, and
@@ -166,7 +186,7 @@ async def run_workflow_eval(
     Every case is classified against `workflow`/`success_criteria` before it
     runs (ADR-0054 §1): a rule-based case whose action or node this graph does
     not have is `ungrounded` and never reaches the sandbox — it is reported in
-    the returned run's `skipped[]` instead of costing a run nobody could grade.
+    the run's `skipped[]` instead of costing a run nobody could grade.
     Since ADR-0054 §4's `applies_when` became enforceable, so is a case whose
     catalog metric names node types this graph has none of: `context_precision`
     on a graph that retrieves nothing is **not applicable**, which is a
@@ -179,7 +199,47 @@ async def run_workflow_eval(
             "Chưa có test case nào để chạy — hãy sinh bộ test case từ tiêu chí thành công và điều cấm "
             "của spec, hoặc tự thêm case, rồi chạy lại"
         )
-    threshold = read_config(db).eval_pass_threshold
+    runnable: dict[int, Applicability] = {}
+    skipped: list[SkippedCase] = []
+    for case in cases:
+        applicability = applicability_of(case, success_criteria=success_criteria, workflow=workflow)
+        if applicability is Applicability.UNGROUNDED:
+            skipped.append(SkippedCase(suite_case_id=case.id, reason=ungrounded_reason(case)))
+        else:
+            runnable[case.id] = applicability
+    run = open_run(
+        db,
+        version_id,
+        threshold=read_config(db).eval_pass_threshold,
+        total=len(runnable),
+        skipped=skipped,
+        judge_model=get_settings().judge_model,
+    )
+    return PlannedEval(run_id=run.id, case_ids=tuple(runnable), applicability=runnable)
+
+
+async def execute_workflow_eval(
+    plan: PlannedEval,
+    *,
+    agent_id: int,
+    version_id: int,
+    workflow: WorkflowJSON,
+    services: EvalServices,
+    knowledge: KnowledgeStore,
+    databases: DatabaseReader | None = None,
+    session_factory: Callable[[], Session] = SessionLocal,
+) -> None:
+    """Run a planned set against `workflow` in sandbox mode and fill its run in — the background half.
+
+    Up to `Settings.eval_concurrency` cases at once; each finished case moves
+    `done_count`, so the screen can say how far along it is. `results` keeps
+    the plan's order, never the order cases happened to finish in, so the same
+    set run one at a time or eight at a time is stored the same way.
+
+    A case deleted between the plan and the run is left out rather than run
+    from nothing. Anything that stops the run as a whole marks it `failed` with
+    the reason; one case that raises fails only itself (`_guarded_result`).
+    """
     subject = _Subject(
         workflow=workflow,
         agent_id=agent_id,
@@ -188,17 +248,45 @@ async def run_workflow_eval(
         knowledge=knowledge,
         databases=databases,
     )
-    results: list[EvalCaseResult] = []
-    skipped: list[SkippedCase] = []
-    for case in cases:
-        applicability = applicability_of(case, success_criteria=success_criteria, workflow=workflow)
-        if applicability is Applicability.UNGROUNDED:
-            skipped.append(SkippedCase(suite_case_id=case.id, reason=ungrounded_reason(case)))
-            continue
-        results.append(await _result_for(case, subject, applicability=applicability))
-    return store_run(
-        db, version_id, threshold=threshold, results=results, skipped=skipped, judge_model=get_settings().judge_model
-    )
+    db = session_factory()
+    try:
+        found = db.scalars(select(EvalCase).where(EvalCase.id.in_(plan.case_ids))).all()
+        by_id = {case.id: case for case in found}
+        cases = [by_id[case_id] for case_id in plan.case_ids if case_id in by_id]
+        in_flight = asyncio.Semaphore(max(1, get_settings().eval_concurrency))
+        done = 0
+
+        async def one(case: EvalCase) -> EvalCaseResult:
+            nonlocal done
+            async with in_flight:
+                result = await _guarded_result(case, subject, applicability=plan.applicability[case.id])
+            done += 1
+            record_progress(db, plan.run_id, done)
+            return result
+
+        results = await asyncio.gather(*(one(case) for case in cases))
+        finish_run(db, plan.run_id, list(results))
+    except Exception as exc:  # noqa: BLE001 — a run nobody is watching must still say it stopped, and why
+        db.rollback()
+        fail_run(db, plan.run_id, stopped_reason(exc))
+    finally:
+        db.close()
+
+
+async def _guarded_result(case: EvalCase, subject: _Subject, *, applicability: Applicability) -> EvalCaseResult:
+    """`_result_for`, with anything it raises turned into this case failing, with the reason (EV-01).
+
+    The run itself already never raises (`_eval_run` turns a crash into a
+    failed case); what is left is grading — a judge provider refusing, a rule
+    that cannot be parsed. Before EV-01 that sank the whole request; with a
+    hundred cases in the background it would sink ninety-nine verdicts that
+    were fine.
+    """
+    try:
+        return await _result_for(case, subject, applicability=applicability)
+    except Exception as exc:  # noqa: BLE001 — one case's grading failure is that case's verdict
+        reason = f"Không chấm được case này: {stopped_reason(exc)}"
+        return _result(case, None, _RunRecord(error=reason), CheckVerdict(passed=False, reason=reason), applicability)
 
 
 async def _result_for(case: EvalCase, subject: _Subject, *, applicability: Applicability) -> EvalCaseResult:
@@ -225,7 +313,8 @@ async def _result_for(case: EvalCase, subject: _Subject, *, applicability: Appli
         # judge-graded categories below already stand on. After the error gate,
         # so a run with no answer is never graded on its fragment; a judge
         # provider failure propagates here exactly as it does for
-        # `judge_answer` one branch down — the suite has no void to map it to.
+        # `judge_answer` one branch down, and `_guarded_result` fails this case
+        # with it.
         if isinstance(check, AsksBack) and asked_back_rule(record.transcript) is None:
             judged = await judge_asks_back(
                 input_message=case.input_message,

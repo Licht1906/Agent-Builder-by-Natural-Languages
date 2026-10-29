@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from src.config import get_settings
 from src.db.base import engine
 from src.db.models import AgentVersion, EvalCase, SandboxRun, User, VersionStatus
-from tests.conftest import ScriptedRun, auth_header, parse_sse
+from tests.conftest import ScriptedRun, auth_header, finished_eval_run, parse_sse
 from tests.test_api.test_data_query_node import (  # noqa: F401 — fixtures are found by name
     OVERDUE,
     SPEC,
@@ -241,10 +241,7 @@ async def test_an_eval_case_runs_as_its_own_asker(
     assert db_session.query(EvalCase).filter(EvalCase.run_as == "an@cty.vn").count() == 1
     scripted_chat_model_factory([[_writes(OVERDUE)], [AIMessage(content="C1")]])
 
-    response = await client.post(
-        f"/api/v1/agents/{version.agent_id}/versions/{version.id}/workflow-eval-runs",
-        headers=auth_header(creator_token),
-    )
+    response = await finished_eval_run(client, version.agent_id, version.id, creator_token)
 
     assert response.status_code == 200, response.text
     (result,) = response.json()["results"]

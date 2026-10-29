@@ -36,6 +36,7 @@ from src.api.workflow_routes import router as workflow_router
 from src.api.workflow_run_routes import router as workflow_run_router
 from src.config import get_settings
 from src.db.base import get_db
+from src.evals.results import recover_interrupted_eval_runs
 from src.services.ingestion import recover_interrupted_ingestions
 from src.services.llm import PROVIDER_ERROR_TYPES, PROVIDER_REFUSAL_UNKNOWN, provider_failure_of
 from src.services.tracing import shutdown_tracing
@@ -77,6 +78,11 @@ async def lifespan(app: FastAPI):
     recovered = recover_interrupted_ingestions()
     if recovered:
         print(f"Marked {recovered} interrupted ingestion(s) as failed — reingest to resume")
+    # Eval runs are background jobs of the same kind (EV-01), and recovered the
+    # same way: a run left `running` by a previous process is nobody's work now.
+    stalled = recover_interrupted_eval_runs()
+    if stalled:
+        print(f"Marked {stalled} interrupted eval run(s) as failed — run them again")
     # Built here, not on the first chat: `setup()` runs LangGraph's migrations,
     # some of which are `CREATE INDEX CONCURRENTLY` — and that waits for every
     # open transaction in the database to end. Lazily, the first request had
@@ -99,6 +105,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
 
 async def _model_provider_unavailable(_request: Request, exc: Exception) -> JSONResponse:
     """Turn a refusal from the model provider into a sentence, and a 503.

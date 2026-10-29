@@ -512,6 +512,11 @@ export const VI = {
     "Đã viết {n} case · {skipped} tiêu chí không chuyển thành case được",
   "{n} test case(s) written from the specification": "Đã viết {n} test case từ bản đặc tả",
   "{passed}/{total} checks passed": "Đạt {passed}/{total} bài",
+  /* EV-01 — chấm điểm chạy nền. */
+  "Running {done}/{total}": "Đang chạy {done}/{total}",
+  "Running {done}/{total} — you can leave this screen, the run continues":
+    "Đang chạy {done}/{total} — có thể rời màn hình này, lần chạy vẫn tiếp tục",
+  "The evaluation stopped: {reason}": "Lần chấm điểm đã dừng: {reason}",
   "source groundedness": "bám theo nguồn",
   "correctness": "đúng sự thật",
   "relevance": "đúng trọng tâm",

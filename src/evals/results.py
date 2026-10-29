@@ -10,12 +10,14 @@ them separately is how a screen ends up saying *đạt* beside a blocked button.
 """
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from src.db.models import EvalRun
+from src.db.base import SessionLocal
+from src.db.models import EvalRun, EvalRunStatus
 from src.models.schemas import EvalCaseResult, SkippedCase
 
 
@@ -178,14 +180,111 @@ def store_run(
     return run
 
 
+def open_run(
+    db: Session,
+    version_id: int,
+    *,
+    threshold: float,
+    total: int,
+    skipped: list[SkippedCase],
+    judge_model: str,
+) -> EvalRun:
+    """Write down a run that has been asked for and not yet done — `running`, 0 of `total` (EV-01).
+
+    The threshold and the judge are fixed here, once for the whole run, for
+    `store_run`'s reasons: the background job that fills the row in later must
+    not pick up a bar or a judge an admin changed while it ran.
+    """
+    run = EvalRun(
+        version_id=version_id,
+        threshold=threshold,
+        passed_count=0,
+        total_count=total,
+        results=[],
+        skipped=[case.model_dump(mode="json") for case in skipped],
+        judge_model=judge_model,
+        status=EvalRunStatus.RUNNING,
+        done_count=0,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def record_progress(db: Session, run_id: int, done: int) -> None:
+    """`done` cases of a running run have a verdict — what the screen shows as "37/150"."""
+    db.execute(update(EvalRun).where(EvalRun.id == run_id).values(done_count=done))
+    db.commit()
+
+
+def finish_run(db: Session, run_id: int, results: list[EvalCaseResult]) -> None:
+    """Fill a running run in with its results, in case order, and mark it `completed` — evidence from now on."""
+    db.execute(
+        update(EvalRun)
+        .where(EvalRun.id == run_id)
+        .values(
+            status=EvalRunStatus.COMPLETED,
+            passed_count=sum(1 for result in results if result.passed),
+            total_count=len(results),
+            done_count=len(results),
+            results=[result.model_dump(mode="json") for result in results],
+        )
+    )
+    db.commit()
+
+
+def fail_run(db: Session, run_id: int, reason: str) -> None:
+    """A run that stopped as a whole — not a case that failed, which `finish_run` records like any verdict."""
+    db.execute(update(EvalRun).where(EvalRun.id == run_id).values(status=EvalRunStatus.FAILED, error=reason))
+    db.commit()
+
+
+#: What `recover_interrupted_eval_runs` writes into `error`.
+INTERRUPTED_RUN = "Bị gián đoạn giữa chừng (khởi động lại server) — hãy chạy lại"
+
+
+def recover_interrupted_eval_runs(session_factory: Callable[[], Session] = SessionLocal) -> int:
+    """At boot, mark every run a previous process left `running` as `failed`.
+
+    The background job lives entirely inside the process that accepted the
+    request (`src.services.ingestion`'s reason, and the same remedy): nothing is
+    resumed, the row just stops claiming that somebody is working on it.
+    """
+    db = session_factory()
+    try:
+        stalled = list(db.scalars(select(EvalRun).where(EvalRun.status == EvalRunStatus.RUNNING)))
+        for run in stalled:
+            run.status = EvalRunStatus.FAILED
+            run.error = INTERRUPTED_RUN
+        db.commit()
+        return len(stalled)
+    finally:
+        db.close()
+
+
 def latest_run(db: Session, version_id: int) -> EvalRun | None:
-    """The most recent eval run of `version_id`, or `None` if it has never been evaluated.
+    """The most recent **completed** eval run of `version_id`, or `None` if it has never finished one.
 
     The latest rather than the best. A creator who edits their cases and runs
     again is asking to be judged on the set they now stand behind, and "best run
     ever" would let a version be approved on a test set its own creator has since
     replaced.
+
+    Completed only (EV-01): a run still going has no verdict yet, and one that
+    stopped as a whole has none at all — neither may stand in for the last run
+    that did finish, in the gate or anywhere else.
     """
+    return db.execute(
+        select(EvalRun)
+        .where(EvalRun.version_id == version_id, EvalRun.status == EvalRunStatus.COMPLETED)
+        .order_by(EvalRun.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def newest_run(db: Session, version_id: int) -> EvalRun | None:
+    """The most recent run of `version_id` whatever its status — what the Evaluation tab reopens on."""
     return db.execute(
         select(EvalRun).where(EvalRun.version_id == version_id).order_by(EvalRun.id.desc()).limit(1)
     ).scalar_one_or_none()

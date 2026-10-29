@@ -33,6 +33,7 @@ vi.mock("../../lib/api", async () => {
       cases: vi.fn(),
       run: vi.fn(),
       latest: vi.fn(),
+      runById: vi.fn(),
       updateCase: vi.fn(),
       removeCase: vi.fn(),
       importSuite: vi.fn(),
@@ -201,6 +202,23 @@ describe("EvaluationTab", () => {
     // A failing case is never folded: it is the case d81dfe4 opened up.
     expect(screen.queryByText(/what it did and answered/)).not.toBeInTheDocument();
   });
+
+  /* EV-01: the POST answers `running`; the screen polls the run, shows how far
+     along it is, and says so once it has finished. */
+  it("shows a background run's progress and announces it when it finishes", async () => {
+    api.evaluation.run.mockResolvedValue({ ...LATEST, id: 10, status: "running", done_count: 0, total_count: 150, results: [] });
+    api.evaluation.runById
+      .mockResolvedValueOnce({ ...LATEST, id: 10, status: "running", done_count: 37, total_count: 150, results: [] })
+      .mockResolvedValue({ ...LATEST, id: 10, status: "completed", done_count: 2, passed_count: 2, total_count: 2 });
+    const notify = draw();
+    await userEvent.click(await screen.findByRole("button", { name: /Run evaluation/ }));
+    await userEvent.click(screen.getByRole("button", { name: /All cases/ }));
+
+    expect(await screen.findByText("Running 0/150")).toBeInTheDocument();
+    expect(await screen.findByText("Running 37/150", {}, { timeout: 3500 })).toBeInTheDocument();
+    await waitFor(() => expect(notify).toHaveBeenCalledWith("2/2 checks passed"), { timeout: 3500 });
+    expect(api.evaluation.runById).toHaveBeenCalledWith(7, 13, 10);
+  }, 10000);
 
   it("runs only the failed or the selected cases with exactly those ids", async () => {
     const failed = {

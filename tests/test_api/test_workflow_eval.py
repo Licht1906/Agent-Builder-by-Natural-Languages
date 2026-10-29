@@ -37,7 +37,7 @@ from src.approvals.decisions import EvalOverride
 from src.config import get_settings
 from src.db.models import AgentVersion, RunApproval, User, VersionStatus
 from src.workflow.tools import GMAIL
-from tests.conftest import auth_header, install_chat_model_factory, shelf_with, writes_json
+from tests.conftest import auth_header, finished_eval_run, install_chat_model_factory, shelf_with, writes_json
 
 pytestmark = pytest.mark.asyncio
 
@@ -404,11 +404,8 @@ async def generate(client: AsyncClient, version: AgentVersion, token: str) -> An
 
 
 async def run_eval(client: AsyncClient, version: AgentVersion, token: str) -> Any:
-    """Run the whole set against the graph and score it."""
-    return await client.post(
-        f"/api/v1/agents/{version.agent_id}/versions/{version.id}/workflow-eval-runs",
-        headers=auth_header(token),
-    )
+    """Run the whole set against the graph and read the scored run back."""
+    return await finished_eval_run(client, version.agent_id, version.id, token)
 
 
 def results_for(run: dict[str, Any], criterion_fragment: str) -> list[dict[str, Any]]:

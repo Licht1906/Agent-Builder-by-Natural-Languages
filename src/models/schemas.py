@@ -26,6 +26,7 @@ from src.db.models import (
     DeploymentStatus,
     DocumentStatus,
     EvalCaseOrigin,
+    EvalRunStatus,
     ExternalConnectionProvider,
     ExternalConnectionStatus,
     KnowledgeBaseMode,
@@ -1345,6 +1346,12 @@ class EvalRunResponse(BaseModel):
             "chạy có judge_model khác nhau"
         ),
     )
+    status: EvalRunStatus = Field(
+        default=EvalRunStatus.COMPLETED,
+        description="running → completed | failed; điểm số chỉ có nghĩa khi completed (EV-01)",
+    )
+    done_count: int = Field(default=0, description="Số case đã chạy xong — tiến độ done/total khi đang chạy")
+    error: str | None = Field(default=None, description="Vì sao cả lần chạy dừng (status failed)")
     created_at: UtcTimestamp
     results: list[EvalCaseResult]
     skipped: list[SkippedCase] = Field(
