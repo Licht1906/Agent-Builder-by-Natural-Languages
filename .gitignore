@@ -96,3 +96,6 @@ docs/usecase_spec/uc1-ar-assistant/ac_checklist_evidence/*.md
 # Firebase CLI
 firebase-debug.log
 .firebase/
+
+# Bản nháp do scripts/draft_eval_library.py sinh — chỉ phần đã duyệt mới vào eval/library/ (EV-06).
+eval/library/drafts/

@@ -21,6 +21,7 @@ Plus the validator (a template without a rule is refused), the new
 # ruff: noqa: F811
 
 import json
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -238,8 +239,37 @@ async def test_each_demo_agent_reaches_a_hundred_live_cases(
     report = built.json()
     assert built.status_code == 200, built.text
     assert report["live_count"] >= 100, report
-    assert report["library_added"] > 0 and report["data_added"] > 0
+    assert report["library_added"] > 0
+    # The outreach agent can reach 100 from the library alone (EV-06's v1); the read-only one needs its data.
+    assert template_id == "database_outreach" or report["data_added"] > 0
     assert report["live_count"] == report["target"] or report["live_count"] > 100
+
+
+# --------------------------------------------------------------------------- #
+# EV-06: the v1 library — every tag covered, and the demo agent well served
+# --------------------------------------------------------------------------- #
+
+
+def test_every_tag_of_the_v1_library_has_at_least_ten_templates() -> None:
+    counts = Counter(tag for template in load_library() for tag in template.tags)
+
+    assert set(counts) == TAGS
+    assert min(counts.values()) >= 10, counts
+
+
+async def test_the_demo_agent_receives_at_least_thirty_library_templates(
+    client: AsyncClient, creator_token: str, agent: Callable[[str], AgentVersion]
+) -> None:
+    """The outreach agent the demo builds (send + approval + collect + a scoped Hệ CSDL) — EV-06's AC."""
+    version = agent("database_outreach")
+    install(_Router(generation=[]))
+
+    built = await client.post(
+        f"/api/v1/agents/{version.agent_id}/versions/{version.id}/eval-suite/build", headers=auth_header(creator_token)
+    )
+
+    assert built.status_code == 200, built.text
+    assert built.json()["library_added"] >= 30, built.json()
 
 
 # --------------------------------------------------------------------------- #

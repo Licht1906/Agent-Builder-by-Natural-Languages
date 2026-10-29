@@ -165,9 +165,18 @@ def contact_of(customer_id: str, mailbox: str) -> str:
 
 
 def seed(conn: psycopg.Connection, *, mailbox: str, today: date | None = None) -> None:
-    """Apply the schema and write the demo company — one transaction, every demo row replaced."""
-    today = today or date.today()
+    """Apply the schema and write the demo company — one transaction, every demo row replaced.
+
+    "Today" is the database's `CURRENT_DATE`, not this machine's clock: the views
+    count `days_overdue` from the former, and a seed run just after midnight in
+    Hà Nội (UTC+7) against a server on UTC would otherwise be a day off — every
+    "62 ngày" read back as 61.
+    """
     with conn.cursor() as cur:
+        if today is None:
+            cur.execute("SELECT CURRENT_DATE")
+            row = cur.fetchone()
+            today = row[0] if row is not None else date.today()
         cur.execute(SCHEMA.read_text(encoding="utf-8"))
         cur.execute("DELETE FROM fin_invoice WHERE invoice_id LIKE 'HD-%'")
         cur.execute("DELETE FROM crm_customer WHERE customer_id LIKE 'KH-%'")

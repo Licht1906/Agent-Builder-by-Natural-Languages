@@ -16,6 +16,7 @@ docs/
 eval/
 # …trừ thư viện template eval: route dựng bộ đề đọc nó lúc chạy (EV-03, src.evals.library).
 !eval/library/
+eval/library/drafts/
 *.md
 !requirements.txt
 .dockerignore
