@@ -19,6 +19,12 @@ dialect owns the SQL (`PostgresDialect.identity_lookup`).
 **A model never decides scope.** Nothing here is shown to or filled in by an
 LLM; `data_query` (DS-04) asks `scope_for` and ANDs the answer into SQL the
 code builds.
+
+**Writing is granted separately, and more narrowly** (ADR-0094). A rule's
+`tables` say which operations a position may make on which base table, and on
+which of its rows — the same `where`-by-attribute shape, or `all_rows` written
+out. A view grant never implies a table grant: being allowed to read
+receivables says nothing about being allowed to change them.
 """
 
 import unicodedata
@@ -31,9 +37,18 @@ from typing import Any, Literal
 from uuid import UUID
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from src.datasources.dialects import ColumnRef, IdentityLookup, Introspection
+from src.datasources.write import WriteOp
 
 #: The attribute every identity must declare — the key `rules` are looked up by.
 POSITION = "position"
@@ -42,6 +57,9 @@ POSITION = "position"
 #: quyền", never "không có dữ liệu" (the spec's own line), and never which of
 #: the branches it was — that is for the audit trail, not for the asker.
 DENIED = "Bạn không có quyền xem dữ liệu này"
+
+#: `DENIED`'s twin for a write — said the same way whichever branch refused it.
+WRITE_DENIED = "Bạn không có quyền thay đổi dữ liệu này"
 
 
 # --------------------------------------------------------------------------- #
@@ -68,13 +86,55 @@ class WhereGrant(BaseModel):
 Grant = Literal["all"] | WhereGrant
 
 
+class TableGrant(BaseModel):
+    """One position's grant on one base table: which operations, on which rows — `where` or `all_rows`, never neither.
+
+    `where` is a view grant's shape — `{table_column: asker_attribute}`,
+    equality, ANDed — and bounds every row an update or delete may touch and
+    every row an insert may create. `all_rows: true` is the only way to say
+    "any row", and like `all` on a view it has to be written out.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operations: list[WriteOp] = Field(..., min_length=1)
+    where: dict[str, str] | None = None
+    all_rows: bool = False
+
+    @model_serializer(mode="wrap")
+    def _as_written(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Only the half that was chosen — `where` or `all_rows: true` — so `access.yaml` reads as it was written."""
+        return {key: value for key, value in handler(self).items() if key == "operations" or value}
+
+    @model_validator(mode="after")
+    def _rows_are_named(self) -> "TableGrant":
+        if len(set(self.operations)) != len(self.operations):
+            raise ValueError("operations bị lặp")
+        if self.all_rows == bool(self.where):
+            raise ValueError("cần đúng một trong hai: where (lọc theo thuộc tính) hoặc all_rows: true")
+        return self
+
+
 class Rule(BaseModel):
-    """What one position may see, view by view. A view not listed here is a view it may not see."""
+    """What one position may see, view by view, and change, table by table. Not listed is not allowed."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     position: str
-    views: dict[str, Grant] = Field(..., min_length=1)
+    views: dict[str, Grant] = Field(default_factory=dict)
+    tables: dict[str, TableGrant] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _without_empty_grants(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """No `tables: {}` on a rule that writes nothing — a saved read-only rule stays exactly what it was."""
+        return {key: value for key, value in handler(self).items() if key == "position" or value}
+
+    @model_validator(mode="after")
+    def _grants_something(self) -> "Rule":
+        """A rule with neither views nor tables grants nothing — a position listed only to look covered."""
+        if not self.views and not self.tables:
+            raise ValueError("rule phải cho phép ít nhất một view hoặc một bảng")
+        return self
 
     @field_validator("position")
     @classmethod
@@ -123,14 +183,15 @@ class AccessRules(BaseModel):
             if rule.position in seen:
                 raise ValueError(f"chức vụ {rule.position!r} có nhiều hơn một rule")
             seen.add(rule.position)
-            for view, grant in rule.views.items():
-                if isinstance(grant, WhereGrant):
-                    unknown = [name for name in grant.where.values() if name not in self.identity.attributes]
-                    if unknown:
-                        raise ValueError(
-                            f"rule của {rule.position!r} trên {view} lọc theo thuộc tính chưa khai trong identity: "
-                            f"{', '.join(unknown)}"
-                        )
+            filters = [(view, grant.where) for view, grant in rule.views.items() if isinstance(grant, WhereGrant)]
+            filters.extend((table, grant.where) for table, grant in rule.tables.items() if grant.where)
+            for target, where in filters:
+                unknown = [name for name in where.values() if name not in self.identity.attributes]
+                if unknown:
+                    raise ValueError(
+                        f"rule của {rule.position!r} trên {target} lọc theo thuộc tính chưa khai trong identity: "
+                        f"{', '.join(unknown)}"
+                    )
         return self
 
 
@@ -158,6 +219,10 @@ class DenyCause(StrEnum):
     NO_RULES = "no_rules"
     RULES_OUT_OF_DATE = "rules_out_of_date"
     VIEW_NOT_ALLOWED = "view_not_allowed"
+    TABLE_NOT_GRANTED = "table_not_granted"
+    OPERATION_NOT_GRANTED = "operation_not_granted"
+    TABLE_NOT_ALLOWED = "table_not_allowed"
+    OUT_OF_SCOPE_VALUE = "out_of_scope_value"
 
 
 @dataclass(frozen=True)
@@ -208,6 +273,36 @@ def scope_for(rules: AccessRules, principal: Principal | None, view: str) -> Sco
         value = _filter_value(principal.attributes.get(attribute))
         if value is None:
             return Deny(cause=DenyCause.MISSING_ATTRIBUTE)
+        pairs.append((column, value))
+    return Where(pairs=tuple(pairs))
+
+
+def scope_for_write(rules: AccessRules, principal: Principal | None, table: str, operation: WriteOp) -> Scope:
+    """What rows of `table` `principal` may change by `operation` under `rules` — `Deny` unless a rule says so.
+
+    `scope_for`'s branches, in its order, with one more: the table may be
+    granted but not this operation. Every deny carries `WRITE_DENIED`.
+    """
+    if principal is None:
+        return Deny(cause=DenyCause.UNKNOWN_ASKER, reason=WRITE_DENIED)
+    position = _filter_value(principal.attributes.get(POSITION))
+    if position is None:
+        return Deny(cause=DenyCause.NO_POSITION, reason=WRITE_DENIED)
+    rule = next((rule for rule in rules.rules if rule.position == _normalised(str(position))), None)
+    if rule is None:
+        return Deny(cause=DenyCause.NO_RULE, reason=WRITE_DENIED)
+    grant = rule.tables.get(table)
+    if grant is None:
+        return Deny(cause=DenyCause.TABLE_NOT_GRANTED, reason=WRITE_DENIED)
+    if operation not in grant.operations:
+        return Deny(cause=DenyCause.OPERATION_NOT_GRANTED, reason=WRITE_DENIED)
+    if grant.all_rows:
+        return All()
+    pairs: list[tuple[str, Any]] = []
+    for column, attribute in (grant.where or {}).items():
+        value = _filter_value(principal.attributes.get(attribute))
+        if value is None:
+            return Deny(cause=DenyCause.MISSING_ATTRIBUTE, reason=WRITE_DENIED)
         pairs.append((column, value))
     return Where(pairs=tuple(pairs))
 
@@ -265,8 +360,18 @@ def _normalised(text: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def access_problems(rules: AccessRules, *, allowed_views: Sequence[str], snapshot: Introspection) -> list[str]:
-    """One sentence per view or column `rules` name that the Hệ CSDL does not have or does not allow.
+def access_problems(
+    rules: AccessRules,
+    *,
+    allowed_views: Sequence[str],
+    snapshot: Introspection,
+    allowed_tables: Sequence[str] | None = None,
+) -> list[str]:
+    """One sentence per view, table or column `rules` name that the Hệ CSDL does not have or does not allow.
+
+    `allowed_tables` `None` leaves the `tables` grants unchecked — what the
+    *read* path asks, so a table unticked for writing closes writing only,
+    never reading (ADR-0094). Saving and writing pass the ticked list.
 
     Checked against the last probe (`snapshot_of`), so saving is not a network
     call; the exported package runs the same check against production at
@@ -289,6 +394,26 @@ def access_problems(rules: AccessRules, *, allowed_views: Sequence[str], snapsho
                 problems.extend(
                     f"view {view} không có cột {column} {whose}" for column in grant.where if column not in columns
                 )
+        if allowed_tables is not None:
+            problems.extend(_table_problems(rule, set(allowed_tables), snapshot))
+    return problems
+
+
+def _table_problems(rule: Rule, allowed: set[str], snapshot: Introspection) -> list[str]:
+    """`access_problems` for one rule's table grants: ticked for writing, still there, every `where` column real."""
+    problems: list[str] = []
+    whose = f"(quy tắc của chức vụ {rule.position})"
+    for table, grant in rule.tables.items():
+        if table not in allowed:
+            problems.append(f"bảng {table} chưa được tick cho phép ghi {whose}")
+            continue
+        columns = snapshot.table_columns.get(table)
+        if columns is None:
+            problems.append(f"không có bảng {table} {whose}")
+            continue
+        problems.extend(
+            f"bảng {table} không có cột {column} {whose}" for column in grant.where or {} if column not in columns
+        )
     return problems
 
 

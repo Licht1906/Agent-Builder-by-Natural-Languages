@@ -1924,6 +1924,15 @@ class DatabaseSource(Base):
     base_tables: Mapped[list[str]] = mapped_column(
         JSON, default=list, doc="Bảng gốc lần kiểm tra gần nhất thấy — để từ chối khi bị tick"
     )
+    #: ADR-0094: the base tables a `data_write` node may change — ticked apart
+    #: from `allowed_views` on purpose, so reading a view never implies writing
+    #: anything. `table_columns` is the last probe's columns of every base table.
+    allowed_write_tables: Mapped[list[str]] = mapped_column(
+        JSON, default=list, doc="Các bảng gốc người tạo cho phép agent ghi (thêm/sửa/xoá), luôn qua bước duyệt"
+    )
+    table_columns: Mapped[dict[str, list[str]]] = mapped_column(
+        JSON, default=dict, doc="{bảng gốc: [cột, …]} của lần kiểm tra gần nhất"
+    )
     last_probe_status: Mapped[DatabaseSourceStatus] = mapped_column(default=DatabaseSourceStatus.UNTESTED)
     last_probe_reason: Mapped[str | None] = mapped_column(
         default=None, doc="ProbeFailure của lần kiểm tra gần nhất — để UI viết lời khuyên, không phải lời của driver"

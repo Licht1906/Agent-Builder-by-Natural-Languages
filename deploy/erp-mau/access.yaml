@@ -2,6 +2,8 @@
 # để so và để test (tests/test_db/test_erp_mau_seed.py đọc file này).
 #
 # Nhân viên KD thấy khách của chính mình, trưởng nhóm thấy cả phòng, kế toán trưởng thấy mọi phòng.
+# Ghi (ADR-0094): nhân viên KD thêm/sửa ghi chú nhắc nợ cho khách của mình, trưởng nhóm thêm/sửa/xoá trong
+# cả phòng, kế toán trưởng chỉ xem. Mọi lần ghi đều chờ người duyệt đúng dòng sẽ ghi.
 identity:
   view: v_employees
   match_by: email
@@ -14,11 +16,18 @@ rules:
     views:
       v_ar_open: {where: {sales_rep_id: employee_code}}
       v_customer_safe: {where: {sales_rep_id: employee_code}}
+      v_ar_followups: {where: {sales_rep_id: employee_code}}
+    tables:
+      ar_followups: {operations: [insert, update], where: {sales_rep_id: employee_code, department: department}}
   - position: Trưởng nhóm KD
     views:
       v_ar_open: {where: {department: department}}
       v_customer_safe: {where: {department: department}}
+      v_ar_followups: {where: {department: department}}
+    tables:
+      ar_followups: {operations: [insert, update, delete], where: {department: department}}
   - position: Kế toán trưởng
     views:
       v_ar_open: all
       v_customer_safe: all
+      v_ar_followups: all

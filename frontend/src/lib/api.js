@@ -581,6 +581,17 @@ export const adminUsers = {
   activate: (userId) => request(`/admin/users/${userId}/activate`, { method: "POST" }),
 };
 
+/** ADR-0093: the shared eval template library (`eval/library/*.jsonl`), read and
+ *  edited by an admin. Each edit rewrites the one file; cases already in a suite
+ *  keep what they were filled with. */
+export const evalLibrary = {
+  list: () => request("/admin/eval-library"),
+  add: (template, file) => request("/admin/eval-library", { method: "POST", body: { template, ...(file ? { file } : {}) } }),
+  replace: (templateId, template) =>
+    request(`/admin/eval-library/${encodeURIComponent(templateId)}`, { method: "PUT", body: { template } }),
+  remove: (templateId) => request(`/admin/eval-library/${encodeURIComponent(templateId)}`, { method: "DELETE" }),
+};
+
 export const platformConfig = {
   read: () => request("/admin/config"),
   /** Change the eval bar and nothing else.

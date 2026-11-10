@@ -168,7 +168,7 @@ async def _from_template(
 def bound_databases(
     db: Session, workflow: WorkflowJSON, spec: AgentSolutionSpecification, *, owner_id: int
 ) -> WorkflowJSON:
-    """Each `data_query` node pointed at the Hệ CSDL the spec names, with its views — by rule, never by a model (DS-11).
+    """Each `data_query`/`data_write` node pointed at the Hệ CSDL the spec names — by rule, never by a model (DS-11).
 
     The n-th `data_query` node reads the n-th `database` source, the way the
     spec lists them. `source_id` is that source's `ref`; `views` are the
@@ -178,8 +178,19 @@ def bound_databases(
     node blank for the canvas to ring, as an unbound `tool_id` is.
     """
     refs = [source.ref for source in spec.data if source.kind is DataSourceKind.DATABASE]
-    nodes, index = [], 0
+    nodes, index, written = [], 0, 0
     for node in workflow.nodes:
+        if node.type is NodeType.DATA_WRITE:
+            # ADR-0094: the n-th `data_write` writes the n-th source, every table ticked for writing on it.
+            ref = refs[written] if written < len(refs) else None
+            written += 1
+            target = owned_source(db, ref, owner_id) if ref else None
+            if target is None:
+                nodes.append(node)
+                continue
+            tables = list(target.allowed_write_tables or [])
+            nodes.append(node.model_copy(update={"config": {**node.config, "source_id": str(ref), "tables": tables}}))
+            continue
         if node.type is not NodeType.DATA_QUERY:
             nodes.append(node)
             continue

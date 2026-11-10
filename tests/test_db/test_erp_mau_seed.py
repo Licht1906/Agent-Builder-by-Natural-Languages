@@ -28,11 +28,18 @@ from scripts.seed_erp_mau import EMPLOYEES, EXPECTED_OVERDUE, INJECTED_NOTE, ove
 from src.datasources.access import from_yaml
 from src.datasources.query import QueryAggregate, QueryFilter, StructuredQuery
 from src.datasources.reader import PlatformDatabaseReader
-from src.datasources.sources import create_database_source, run_database_test, save_access_rules, set_allowed_views
+from src.datasources.sources import (
+    create_database_source,
+    run_database_test,
+    save_access_rules,
+    set_allowed_views,
+    set_allowed_write_tables,
+)
+from src.datasources.write import StructuredWrite
 from src.db.base import engine
 from src.db.models import DatabaseDialect, DatabaseSource, SecretStoreEntry, User
 from src.evals.sample_suites import DEMO_ASKERS
-from src.models.node_registry import DataQueryConfig
+from src.models.node_registry import DataQueryConfig, DataWriteConfig
 from src.services.secret_store import EncryptedDbSecretStore
 
 ACCESS = Path(__file__).resolve().parents[2] / "deploy" / "erp-mau" / "access.yaml"
@@ -80,7 +87,8 @@ def erp_source(db_session: Session, seeded_creator: User, erp_dsn: str) -> Itera
         secret_store=store,
     )
     run_database_test(db_session, row, secret_store=store, trusted_hosts=TRUSTED)
-    set_allowed_views(db_session, row, ["v_employees", "v_ar_open", "v_customer_safe"])
+    set_allowed_views(db_session, row, ["v_employees", "v_ar_open", "v_customer_safe", "v_ar_followups"])
+    set_allowed_write_tables(db_session, row, ["ar_followups"])
     save_access_rules(db_session, row, from_yaml(ACCESS.read_text(encoding="utf-8")))
     yield row
     db_session.delete(row)
@@ -117,6 +125,40 @@ def test_somebody_outside_the_company_reads_nothing(db_session: Session, erp_sou
     outcome = _read_as(db_session, erp_source, "nguoi.la@example.com")
 
     assert outcome.rows is None and outcome.denied is not None
+
+
+def test_a_rep_writes_a_follow_up_for_their_own_customer_and_the_chief_accountant_writes_nothing(
+    db_session: Session, erp_source: DatabaseSource, erp_dsn: str
+) -> None:
+    """ADR-0094 on the demo's own database: the rep's note lands scoped to them; a read-only position is denied."""
+    with psycopg.connect(erp_dsn) as conn:
+        row = conn.execute(
+            "SELECT customer_id FROM crm_customer WHERE sales_rep_id = 'E102' ORDER BY customer_id LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    customer = row[0]
+    config = DataWriteConfig(source_id=str(erp_source.id), tables=["ar_followups"])
+    note = StructuredWrite.model_validate(
+        {"table": "ar_followups", "operation": "insert", "values": {"customer_id": customer, "note": "hẹn trả 20/11"}}
+    )
+
+    def writer(asker: str) -> PlatformDatabaseReader:
+        return PlatformDatabaseReader(
+            db=db_session,
+            owner_id=erp_source.owner_id,
+            asker=asker,
+            secret_store=EncryptedDbSecretStore(db=db_session),
+            trusted_hosts=TRUSTED,
+        )
+
+    done = writer("nv.kinhdoanh@erp-mau.local").write(config, note)
+    assert done.affected == 1, done.transcript_reason
+    denied = writer("ke.toan@erp-mau.local").write(config, note)
+    assert denied.affected is None and denied.denied is not None
+
+    with psycopg.connect(erp_dsn) as conn:
+        written = conn.execute("SELECT customer_id, sales_rep_id, department, note FROM ar_followups").fetchall()
+    assert written == [(customer, "E102", "Kinh doanh", "hẹn trả 20/11")]
 
 
 def test_seeding_again_changes_nothing_and_puts_a_stale_seed_right(erp_dsn: str) -> None:

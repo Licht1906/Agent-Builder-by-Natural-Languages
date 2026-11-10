@@ -305,6 +305,20 @@ function ConfigField({ name, field: declared, schema, value, node, mcpNodeIds = 
   if (node.type === "data_query" && name === "views") {
     return <DatabaseViewsField sourceId={node.config.source_id} value={value} readOnly={readOnly} onChange={onChange} />;
   }
+  // A `data_write` node's two (ADR-0094): the same Hệ CSDL picker, and only the
+  // tables ticked for writing on it — never a view, never typed.
+  if (node.type === "data_write" && name === "source_id") {
+    return (
+      <DatabaseSourceField
+        value={value}
+        readOnly={readOnly}
+        onChange={(sourceId) => onPatch({ source_id: sourceId, tables: [] })}
+      />
+    );
+  }
+  if (node.type === "data_write" && name === "tables") {
+    return <DatabaseTablesField sourceId={node.config.source_id} value={value} readOnly={readOnly} onChange={onChange} />;
+  }
 
   // A closed set of values, so a closed set of choices. Placed above the
   // `array` branch because an enum *of* arrays would otherwise be drawn as a
@@ -456,6 +470,46 @@ function DatabaseViewsField({ sourceId, value, readOnly, onChange }) {
         {stale.map((view) => (
           <p key={view} className="ab-mono" style={{ margin: 0, color: "#f8a5a5" }}>{t("{view} (not ticked)", { view })}</p>
         ))}
+      </ConfigDialog>
+    </>
+  );
+}
+
+function DatabaseTablesField({ sourceId, value, readOnly, onChange }) {
+  const { t } = useLang();
+  const [open, setOpen] = useState(false);
+  const sources = useDatabaseSources();
+  const chosen = new Set(value || []);
+  const source = (sources || []).find((entry) => String(entry.id) === String(sourceId));
+  const allowed = source ? source.allowed_write_tables || [] : [];
+  const stale = [...chosen].filter((table) => source && !allowed.includes(table));
+  const toggle = (table) => onChange(allowed.filter((name) => (name === table ? !chosen.has(name) : chosen.has(name))));
+  return (
+    <>
+      <FieldRow
+        label={t("Tables")}
+        summary={chosen.size === 0 ? t("Not filled in yet") : t("{n} selected", { n: chosen.size })}
+        warn={chosen.size === 0 || stale.length > 0}
+        title={t("Which tables this step may change — click to pick")}
+        onOpen={() => setOpen(true)}
+      />
+      <ConfigDialog title={t("Tables")} open={open} onClose={() => setOpen(false)}>
+        {!sourceId && <p className="text-muted" style={{ margin: 0 }}>{t("Pick a database first, then its writable tables appear here.")}</p>}
+        {sourceId && source && allowed.length === 0 && (
+          <p className="text-muted" style={{ margin: 0 }}>{t("This database has no table ticked for writing yet — tick some on the Data sources page.")}</p>
+        )}
+        {allowed.map((table) => (
+          <label key={table} className="ab-mono" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="checkbox" aria-label={table} disabled={readOnly} checked={chosen.has(table)} onChange={() => toggle(table)} />
+            {table}
+          </label>
+        ))}
+        {stale.map((table) => (
+          <p key={table} className="ab-mono" style={{ margin: 0, color: "#f8a5a5" }}>{t("{view} (not ticked)", { view: table })}</p>
+        ))}
+        <p className="text-muted" style={{ margin: 0, fontSize: "var(--text-xs)" }}>
+          {t("Every change this step makes waits for a Human Approval step in front of it.")}
+        </p>
       </ConfigDialog>
     </>
   );

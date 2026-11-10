@@ -11,7 +11,31 @@ import { useLang } from "../i18n";
    ============================================================ */
 
 //: Labels for the arguments a reader most needs to see; anything else keeps its own name.
-const LABELS = { to: "Recipient", cc: "Cc", bcc: "Bcc", subject: "Subject", body: "Body" };
+//: The last five are a `data_write`'s (ADR-0094): which database, which table, what change.
+const LABELS = {
+  to: "Recipient",
+  cc: "Cc",
+  bcc: "Bcc",
+  subject: "Subject",
+  body: "Body",
+  source_id: "Database",
+  table: "Table",
+  operation: "Change",
+  values: "New values",
+  where: "Rows",
+};
+
+const OPERATION_LABELS = { insert: "Add a row", update: "Edit rows", delete: "Delete rows" };
+
+/** A write's parts as a person reads them — still every value verbatim, only laid out. */
+function shown(key, value, t) {
+  if (key === "operation" && OPERATION_LABELS[value]) return t(OPERATION_LABELS[value]);
+  if (key === "where" && Array.isArray(value)) return value.map((match) => `${match.column} = ${JSON.stringify(match.value)}`).join("\n");
+  if (key === "values" && value && typeof value === "object") {
+    return Object.entries(value).map(([column, entry]) => `${column} = ${JSON.stringify(entry)}`).join("\n");
+  }
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
 
 export default function ApprovalPayload({ actions }) {
   const { t } = useLang();
@@ -32,7 +56,7 @@ export default function ApprovalPayload({ actions }) {
               <div key={key} style={{ display: "contents" }}>
                 <dt className="text-muted" style={{ fontSize: "var(--text-xs)", paddingTop: 2 }}>{LABELS[key] ? t(LABELS[key]) : key}</dt>
                 <dd style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", minWidth: 0 }}>
-                  {typeof value === "string" ? value : JSON.stringify(value)}
+                  {shown(key, value, t)}
                 </dd>
               </div>
             ))}

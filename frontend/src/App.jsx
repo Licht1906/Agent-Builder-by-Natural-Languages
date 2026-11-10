@@ -17,6 +17,7 @@ import ChatPage from "./pages/Chat";
 import { AdminQueue, AdminDossier } from "./pages/AdminApprovals";
 import AdminSettings from "./pages/AdminSettings";
 import AdminUsers from "./pages/AdminUsers";
+import AdminEvalLibrary from "./pages/AdminEvalLibrary";
 import PMDashboard from "./pages/PMDashboard";
 import { PM_TABS, PM_VIEWS, pmTabOf } from "./pages/pm/tabs";
 import KnowledgeBasesPage from "./pages/KnowledgeBases";
@@ -223,6 +224,9 @@ export default function App() {
   } else if (view === "admin-users") {
     crumb = t("ADMIN");
     pageTitle = t("Accounts");
+  } else if (view === "admin-eval-library") {
+    crumb = t("ADMIN");
+    pageTitle = t("Eval template library");
   } else if (PM_VIEWS.has(view) || view === "pm-dashboard") {
     crumb = isPm(session?.role) ? t("PRODUCT") : t("ADMIN");
     pageTitle = t("PM control room");
@@ -272,6 +276,7 @@ export default function App() {
           openBuilder={handleOpenBuilder}
           openApprovals={() => setView("admin-queue")}
           openUsers={() => setView("admin-users")}
+          openEvalLibrary={() => setView("admin-eval-library")}
           openPm={openPm}
           openSettings={() => setView("admin-settings")}
           openKnowledgeBases={() => setView("knowledge-bases")}
@@ -292,6 +297,8 @@ export default function App() {
           {view === "knowledge-bases" && <KnowledgeBasesPage notify={notify} />}
 
           {view === "admin-users" && <AdminUsers notify={notify} />}
+
+          {view === "admin-eval-library" && <AdminEvalLibrary notify={notify} />}
 
           {(PM_VIEWS.has(view) || view === "pm-dashboard") && (
             <PMDashboard tab={pmTabOf(view)} openTab={openPm} notify={notify} />

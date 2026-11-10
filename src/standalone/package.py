@@ -48,7 +48,7 @@ from src.db.models import (
     UserRole,
     VersionStatus,
 )
-from src.models.node_registry import DataQueryConfig, KnowledgeSearchConfig, NodeType
+from src.models.node_registry import DataQueryConfig, DataWriteConfig, KnowledgeSearchConfig, NodeType
 from src.models.solution_spec import AgentSolutionSpecification
 from src.models.workflow import WorkflowJSON
 from src.services.secret_store import SecretNotFoundError
@@ -165,10 +165,11 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
     trusted = frozenset(config.trusted_hosts)
     declared = {source.id: source for source in config.data_sources}
     read_by = _data_query_views(workflow)
-    unknown = sorted(set(read_by) - set(declared))
+    written_by = _data_write_tables(workflow)
+    unknown = sorted((set(read_by) | set(written_by)) - set(declared))
     if unknown:
         raise RuntimeConfigError(
-            "Workflow đọc Hệ CSDL chưa khai trong runtime.yaml (data_sources[].id): " + ", ".join(unknown)
+            "Workflow đọc hoặc ghi Hệ CSDL chưa khai trong runtime.yaml (data_sources[].id): " + ", ".join(unknown)
         )
     actions = mcp_action_names(workflow)
     if MAIL_SEND in actions and config.mail is None:
@@ -194,6 +195,17 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
         check = check_schema(found, rules=rules, read=read_by.get(source_id, ()), built_on=built_on.get(source_id, {}))
         problems.extend(f"Hệ CSDL {declared_source.name}: {problem}" for problem in check.missing)
         warnings.extend(f"Hệ CSDL {declared_source.name}: {warning}" for warning in check.warnings)
+        # ADR-0094: every table the workflow writes or access.yaml grants must be a base table here —
+        # a grant on a missing table would close the whole source, reads included.
+        wanted_tables = sorted(
+            written_by.get(source_id, set()) | {table for rule in rules.rules for table in rule.tables}
+        )
+        problems.extend(
+            f"Hệ CSDL {declared_source.name}: không có bảng {table} (agent ghi hoặc access.yaml cấp quyền ghi)"
+            for table in wanted_tables
+            if table not in found.table_columns
+        )
+        writable = [table for table in wanted_tables if table in found.table_columns]
         sources[source_id] = DatabaseSource(
             id=int(source_id) if source_id.isdigit() else 0,
             owner_id=0,
@@ -204,6 +216,8 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
             view_columns=check.view_columns,
             view_row_counts={},
             base_tables=list(found.base_tables),
+            allowed_write_tables=writable,
+            table_columns={table: list(found.table_columns[table]) for table in writable},
             last_probe_status=DatabaseSourceStatus.CONNECTED,
             access_rules=rules.model_dump(mode="json"),
         )
@@ -426,6 +440,15 @@ def _data_query_views(workflow: WorkflowJSON) -> dict[str, set[str]]:
         config = DataQueryConfig.model_validate(node.config)
         views.setdefault(config.source_id, set()).update(config.views)
     return views
+
+
+def _data_write_tables(workflow: WorkflowJSON) -> dict[str, set[str]]:
+    """`{source_id: tables}` the workflow's `data_write` nodes change (ADR-0094)."""
+    tables: dict[str, set[str]] = {}
+    for node in workflow.nodes_of_type(NodeType.DATA_WRITE):
+        config = DataWriteConfig.model_validate(node.config)
+        tables.setdefault(config.source_id, set()).update(config.tables)
+    return tables
 
 
 def _path(value: str, base: Path) -> Path:

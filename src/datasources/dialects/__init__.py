@@ -18,6 +18,7 @@ from src.datasources.dialects.base import (
     QueryRequest,
     QueryRows,
     ViewInfo,
+    WriteRequest,
     schema_problems,
 )
 from src.datasources.dialects.mysql import MySqlDialect
@@ -36,6 +37,7 @@ __all__ = [
     "QueryRequest",
     "QueryRows",
     "ViewInfo",
+    "WriteRequest",
     "dialect_for",
     "schema_problems",
 ]

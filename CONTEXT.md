@@ -37,8 +37,10 @@ _Avoid_: ERP connection, UC1Connection, external connection (that is a BYODB vec
 Which rows of which view each position may see — an `identity` (the employee
 view, the column the authenticated value matches, the attributes read off it)
 and `rules` (position → view → `all` or `where` view column = principal
-attribute). Deny by default. Applied in code to every query; a model never
-chooses a scope.
+attribute), and per table which of `insert`/`update`/`delete` a position may
+make on which rows (`tables`, ADR-0094 — never implied by a view grant). Deny
+by default. Applied in code to every query and write; a model never chooses a
+scope.
 _Vietnamese_: quy tắc truy cập
 _Avoid_: data_scope, RLS policy, authz
 
@@ -97,6 +99,16 @@ returns is cited (Data Source, view, row key) and marked untrusted for later
 steps. Never text-to-SQL.
 _Vietnamese_: truy vấn dữ liệu
 _Avoid_: SQL node, erp tool
+
+**Data Write**:
+The `data_write` node: the model fills a structured write (table, `insert` |
+`update` | `delete`, values, rows by equality) to one Database's tables ticked
+for writing; code builds parameterised SQL with the Principal's scope bound in.
+Never runs unless a person approved that exact write at a `human_approval` in
+front of it; mocked in a trial unless sent for real —
+[ADR-0094](docs/adr/0094-agent-ghi-he-csdl-qua-duyet.md).
+_Vietnamese_: ghi dữ liệu
+_Avoid_: SQL update node, write tool, erp write
 
 **Collector**:
 The `collect` node in front of an action: it reads the bound action's required

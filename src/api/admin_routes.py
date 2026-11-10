@@ -15,7 +15,9 @@ whoever answers for the platform rather than to whoever built the agent. #14's
 approval queue joins them here.
 """
 
+from collections import Counter
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -28,7 +30,17 @@ from src.api.workflow_routes import template_submission_response, tool_registrat
 from src.auth.dependencies import AdminUser
 from src.config import get_settings
 from src.db.base import get_db
-from src.db.models import Agent, TemplateSubmission, ToolRegistration, User, UserStatus
+from src.db.models import Agent, EvalCase, EvalCaseOrigin, TemplateSubmission, ToolRegistration, User, UserStatus
+from src.evals.library import LIBRARY_DIR, SLOTS, TAGS, AskerRole, Capability
+from src.evals.library_store import (
+    LibraryEditError,
+    StoredTemplate,
+    TemplateNotFoundError,
+    add_template,
+    delete_template,
+    read_library,
+    replace_template,
+)
 from src.models.model_catalog import ASSIGNABLE_MODELS
 from src.models.schemas import (
     ActivateUserResponse,
@@ -38,7 +50,11 @@ from src.models.schemas import (
     AssignableModelResponse,
     EmbeddingModelUsageResponse,
     EmbeddingUsageResponse,
+    EvalLibraryResponse,
     IngestionSpendEntryResponse,
+    LibraryProblemResponse,
+    LibraryTemplateResponse,
+    LibraryTemplateWriteRequest,
     PlatformConfigResponse,
     PlatformConfigUpdateRequest,
     SecretRefResponse,
@@ -47,6 +63,7 @@ from src.models.schemas import (
     ToolRegistrationResponse,
     ToolRiskOverrideRequest,
 )
+from src.models.solution_spec import SuccessCriterionCategory
 from src.services.ingestion_costs import GroupBy, ingestion_spend
 from src.services.secret_store import SecretNotFoundError, SecretStore, get_secret_store
 from src.workflow.embedding_budget import usage_report
@@ -536,3 +553,95 @@ def activate_user(user_id: int, _admin: AdminUser, db: Annotated[Session, Depend
         db.commit()
         db.refresh(user)
     return user
+
+
+# --------------------------------------------------------------------------- #
+# The shared eval template library (ADR-0093)
+# --------------------------------------------------------------------------- #
+
+
+def get_library_dir() -> Path:
+    """Where the library's files are — a dependency so a test edits a copy, never the repo's."""
+    return LIBRARY_DIR
+
+
+LibraryDir = Annotated[Path, Depends(get_library_dir)]
+
+
+def _cases_per_template(db: Session) -> Counter[str]:
+    """How many live cases in every suite were filled from each template."""
+    rows = db.execute(
+        select(EvalCase.extra).where(EvalCase.origin == EvalCaseOrigin.LIBRARY, EvalCase.retired_at.is_(None))
+    ).scalars()
+    return Counter(str(extra["template_id"]) for extra in rows if extra and extra.get("template_id"))
+
+
+def _template_response(stored: StoredTemplate, used: Counter[str]) -> LibraryTemplateResponse:
+    return LibraryTemplateResponse(
+        file=stored.file,
+        **stored.template.model_dump(mode="json"),
+        used_by_cases=used.get(stored.template.id, 0),
+    )
+
+
+@router.get("/eval-library", response_model=EvalLibraryResponse)
+def read_eval_library(
+    _admin: AdminUser, db: Annotated[Session, Depends(get_db)], directory: LibraryDir
+) -> EvalLibraryResponse:
+    """Every template of the shared library, with the file it sits in and how many suite cases came from it."""
+    listing = read_library(directory)
+    used = _cases_per_template(db)
+    return EvalLibraryResponse(
+        templates=[_template_response(stored, used) for stored in listing.templates],
+        problems=[LibraryProblemResponse(where=problem.where, reason=problem.reason) for problem in listing.problems],
+        files=listing.files,
+        tags=sorted(TAGS),
+        capabilities=[capability.value for capability in Capability],
+        slots={name: (capability.value if capability else None) for name, capability in SLOTS.items()},
+        run_as=[role.value for role in AskerRole],
+        categories=[category.value for category in SuccessCriterionCategory],
+    )
+
+
+@router.post("/eval-library", response_model=LibraryTemplateResponse, status_code=status.HTTP_201_CREATED)
+def add_eval_library_template(
+    payload: LibraryTemplateWriteRequest,
+    _admin: AdminUser,
+    db: Annotated[Session, Depends(get_db)],
+    directory: LibraryDir,
+) -> LibraryTemplateResponse:
+    """Add a template — it reaches an agent's suite the next time that suite is built."""
+    try:
+        stored = add_template(payload.template, file=payload.file, directory=directory)
+    except LibraryEditError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    return _template_response(stored, _cases_per_template(db))
+
+
+@router.put("/eval-library/{template_id}", response_model=LibraryTemplateResponse)
+def replace_eval_library_template(
+    template_id: str,
+    payload: LibraryTemplateWriteRequest,
+    _admin: AdminUser,
+    db: Annotated[Session, Depends(get_db)],
+    directory: LibraryDir,
+) -> LibraryTemplateResponse:
+    """Put a new text or rule in place of a template. Cases already in a suite keep what they were filled with."""
+    if payload.file is not None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="file chỉ dùng khi thêm mới")
+    try:
+        stored = replace_template(template_id, payload.template, directory=directory)
+    except TemplateNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from None
+    except LibraryEditError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    return _template_response(stored, _cases_per_template(db))
+
+
+@router.delete("/eval-library/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_eval_library_template(template_id: str, _admin: AdminUser, directory: LibraryDir) -> None:
+    """Remove a template. Cases already filled from it stay in their suites."""
+    try:
+        delete_template(template_id, directory=directory)
+    except TemplateNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from None

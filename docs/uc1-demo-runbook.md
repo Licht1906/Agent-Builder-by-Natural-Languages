@@ -55,7 +55,7 @@ DSN của ERP mẫu khi cắm làm Hệ CSDL: `postgresql://erp:erp@localhost:54
 | 2 | `ERP_MAU_CUSTOMER_MAILBOX` là **hộp thư người demo mở được**, loại nhận địa chỉ `+` (Gmail nhận được). Đổi xong thì seed lại. | Email khách là `<hộp-thư>+kh-0001@<domain>` |
 | 3 | Hai tài khoản trên nền tảng: **người tạo** (người demo, vai trò CREATOR) và **người duyệt phát hành** (AGENT_ADMIN). | Đăng nhập được cả hai |
 | 4 | Người tạo đã kết nối Gmail qua OAuth ở trang **Kết nối**, bằng tài khoản Google sẽ gửi mail trong demo. | Trang Kết nối hiện Gmail "đã kết nối" |
-| 5 | Dựng sẵn ba thứ dự phòng, đều bằng tài khoản người tạo: (a) Hệ CSDL **"ERP mẫu"**: tick `v_ar_open`, `v_customer_safe`; khai `v_employees`; quy tắc lấy từ [`deploy/erp-mau/access.yaml`](../deploy/erp-mau/access.yaml). (b) Agent **"Tra cứu công nợ"** từ mẫu *Hỏi đáp trên dữ liệu nghiệp vụ*, gắn vào (a), đã xác nhận workflow. (c) Agent **"Trợ lý công nợ (dự phòng)"** từ mẫu *Đọc dữ liệu nghiệp vụ rồi gửi thư có duyệt*, gắn vào (a) và Gmail; đã nạp bộ đề mẫu, đã chấm điểm, đã gửi xin duyệt và người duyệt đã duyệt. | (b) trả lời "3" khi chạy với tư cách nhân viên KD; (c) có nút **Xuất gói chạy độc lập** ở tab Duyệt & Phát hành |
+| 5 | Dựng sẵn ba thứ dự phòng, đều bằng tài khoản người tạo: (a) Hệ CSDL **"ERP mẫu"**: tick `v_ar_open`, `v_customer_safe`, `v_ar_followups`; tick bảng `ar_followups` ở mục *Bảng agent được phép thay đổi*; khai `v_employees`; quy tắc lấy từ [`deploy/erp-mau/access.yaml`](../deploy/erp-mau/access.yaml). (b) Agent **"Tra cứu công nợ"** từ mẫu *Hỏi đáp trên dữ liệu nghiệp vụ*, gắn vào (a), đã xác nhận workflow. (c) Agent **"Trợ lý công nợ (dự phòng)"** từ mẫu *Đọc dữ liệu nghiệp vụ rồi gửi thư có duyệt*, gắn vào (a) và Gmail; đã nạp bộ đề mẫu, đã chấm điểm, đã gửi xin duyệt và người duyệt đã duyệt. | (b) trả lời "3" khi chạy với tư cách nhân viên KD; (c) có nút **Xuất gói chạy độc lập** ở tab Duyệt & Phát hành |
 | 6 | File nháp mở sẵn, chứa: DSN của ERP mẫu, câu mô tả ở bước 2, các câu hỏi ở bước 4–5 (đã thay `<hộp-thư>` bằng địa chỉ thật). | — |
 | 7 | `DATABASE_SOURCE_TRUSTED_HOSTS` trong `.env` có `localhost` (xem §Dựng môi trường local). | Bấm **Kiểm tra kết nối** với DSN ở mục 6 thấy xanh |
 
@@ -89,7 +89,7 @@ Tổng ngân sách 7:30, chừa 30 giây cho chuyển tab và câu dẫn.
 ### Bước 1 — Cắm DB (1:00)
 
 **Thao tác.** Nguồn dữ liệu → Hệ CSDL → **Thêm Hệ CSDL** → PostgreSQL. Đặt tên "ERP mẫu — trực tiếp" (khác tên
-bản dự phòng), dán DSN → **Kiểm tra kết nối** → tick `v_ar_open`, `v_customer_safe` → chọn `v_employees`
+bản dự phòng), dán DSN → **Kiểm tra kết nối** → tick `v_ar_open`, `v_customer_safe`, `v_ar_followups` (và bảng `ar_followups` cho phép ghi, nếu demo cả cảnh ghi lại ngày hẹn trả — ADR-0094) → chọn `v_employees`
 làm danh tính (khớp theo email).
 
 **Mong đợi.**

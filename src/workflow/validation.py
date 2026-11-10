@@ -322,6 +322,12 @@ def _unguarded_side_effects(workflow: WorkflowJSON) -> Iterator[GraphProblem]:
                 f"nên mọi đường tới nó đều phải đi qua một bước Human Approval — hiện có đường không đi qua",
                 node_id=node_id,
             )
+    for node_id in unguarded_write_nodes(workflow):
+        yield GraphProblem(
+            f"Node {node_id!r} thay đổi dữ liệu trong Hệ CSDL (data_write), nên mọi đường tới nó đều phải đi qua "
+            f"một bước Human Approval — hiện có đường không đi qua",
+            node_id=node_id,
+        )
 
 
 def _unguarded_actions(workflow: WorkflowJSON) -> Iterator[tuple[str, McpConfig, ToolAction | None]]:
@@ -445,6 +451,20 @@ def unguarded_mcp_nodes(workflow: WorkflowJSON) -> tuple[str, ...]:
     document holds them rather than in whatever order the walk happened to
     reach them.
     """
+    return _unguarded_nodes(workflow, NodeType.MCP)
+
+
+def unguarded_write_nodes(workflow: WorkflowJSON) -> tuple[str, ...]:
+    """The `data_write` nodes some path reaches without an approval — ADR-0094's version of the same walk.
+
+    Every write is a side effect a person must stand in front of; there is no
+    risk level to consult, so every exposed `data_write` node is refused.
+    """
+    return _unguarded_nodes(workflow, NodeType.DATA_WRITE)
+
+
+def _unguarded_nodes(workflow: WorkflowJSON, node_type: NodeType) -> tuple[str, ...]:
+    """The nodes of `node_type` reached by some path with no `approved` port of a `HumanApproval` on it."""
     leaving: defaultdict[str, list[Edge]] = defaultdict(list)
     for edge in _valid_edges(workflow):
         leaving[edge.source_node_id].append(edge)
@@ -457,14 +477,14 @@ def unguarded_mcp_nodes(workflow: WorkflowJSON) -> tuple[str, ...]:
         node = workflow.node(node_id)
         if node is None:
             continue
-        if node.type is NodeType.MCP and not approved:
+        if node.type is node_type and not approved:
             exposed.add(node_id)
         for edge in leaving[node_id]:
             onward = approved or (node.type is NodeType.HUMAN_APPROVAL and edge.source_port == "approved")
             if (edge.target_node_id, onward) not in seen:
                 seen.add((edge.target_node_id, onward))
                 pending.append((edge.target_node_id, onward))
-    return tuple(node.id for node in workflow.nodes_of_type(NodeType.MCP) if node.id in exposed)
+    return tuple(node.id for node in workflow.nodes_of_type(node_type) if node.id in exposed)
 
 
 def _duplicate_ids(workflow: WorkflowJSON) -> Iterator[GraphProblem]:

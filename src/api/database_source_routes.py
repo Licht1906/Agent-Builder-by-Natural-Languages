@@ -25,6 +25,7 @@ from src.datasources.rule_draft import draft_access_rules
 from src.datasources.sources import (
     AccessRulesError,
     AllowedViewsError,
+    AllowedWriteTablesError,
     ColumnNotReadableError,
     DatabaseSourceInUseError,
     access_rules_of,
@@ -38,6 +39,7 @@ from src.datasources.sources import (
     run_database_test,
     save_access_rules,
     set_allowed_views,
+    set_allowed_write_tables,
     snapshot_of,
 )
 from src.db.base import get_db
@@ -51,6 +53,7 @@ from src.models.schemas import (
     DatabaseSourceCreateRequest,
     DatabaseSourceResponse,
     DatabaseSourceUpdateRequest,
+    DatabaseTableResponse,
     DatabaseViewResponse,
     DistinctValuesResponse,
 )
@@ -100,6 +103,13 @@ def _response_of(source: DatabaseSource) -> DatabaseSourceResponse:
             for view in snapshot.views
         ],
         base_tables=list(snapshot.base_tables),
+        allowed_write_tables=list(source.allowed_write_tables or []),
+        tables=[
+            DatabaseTableResponse(
+                name=name, columns=list(columns), writable=name in (source.allowed_write_tables or [])
+            )
+            for name, columns in snapshot.table_columns.items()
+        ],
         created_at=source.created_at,
     )
 
@@ -147,7 +157,7 @@ def update_my_database_source(
     db: Annotated[Session, Depends(get_db)],
     secret_store: SecretStoreDep,
 ) -> DatabaseSourceResponse:
-    """Rename, replace the DSN, or tick views — 422 naming every view that is not a view the last probe saw."""
+    """Rename, replace the DSN, tick views or tables to write — 422 naming every one the last probe did not see as such."""
     if request.name is not None:
         source = rename_database_source(db, source, request.name)
     if request.dsn is not None:
@@ -156,6 +166,11 @@ def update_my_database_source(
         try:
             source = set_allowed_views(db, source, request.allowed_views)
         except AllowedViewsError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+    if request.allowed_write_tables is not None:
+        try:
+            source = set_allowed_write_tables(db, source, request.allowed_write_tables)
+        except AllowedWriteTablesError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
     return _response_of(source)
 
@@ -290,7 +305,10 @@ async def draft_my_access_rules(
     position_column = ColumnRef(view=body.identity.view, column=body.identity.attributes[POSITION])
     try:
         positions = distinct_column_values(
-            source, position_column, secret_store=secret_store, trusted_hosts=get_settings().database_source_trusted_host_set
+            source,
+            position_column,
+            secret_store=secret_store,
+            trusted_hosts=get_settings().database_source_trusted_host_set,
         )
     except ColumnNotReadableError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None

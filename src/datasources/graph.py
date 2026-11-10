@@ -1,4 +1,4 @@
-"""Whether a graph's `data_query` nodes name Hệ CSDL their creator may read — checked at confirm. DS-04.
+"""Whether a graph's `data_query` and `data_write` nodes name Hệ CSDL their creator holds — checked at confirm.
 
 `src.workflow.knowledge_bases.knowledge_base_problems`' rule for a
 `knowledge_search` node, applied to a Hệ CSDL: a `source_id` is creator-typed
@@ -17,7 +17,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from src.db.models import DatabaseSource
-from src.models.node_registry import DataQueryConfig, NodeType
+from src.models.node_registry import DataQueryConfig, DataWriteConfig, NodeType
 from src.models.workflow import NodeInstance, WorkflowJSON
 from src.workflow.validation import GraphProblem, WorkflowGraphError
 
@@ -50,6 +50,27 @@ def database_source_problems(db: Session, workflow: WorkflowJSON, owner_id: int)
                     node_id=node.id,
                 )
             )
+    for node, write in _data_write_nodes(workflow):
+        if not write.source_id:
+            continue
+        source = owned_source(db, write.source_id, owner_id)
+        if source is None:
+            problems.append(
+                GraphProblem(
+                    f"Node {node.id!r} trỏ tới Hệ CSDL {write.source_id!r} không tồn tại hoặc không thuộc về bạn",
+                    node_id=node.id,
+                )
+            )
+            continue
+        unticked = [table for table in write.tables if table not in (source.allowed_write_tables or [])]
+        if unticked:
+            problems.append(
+                GraphProblem(
+                    f"Node {node.id!r} ghi bảng chưa được tick cho phép ghi ở Hệ CSDL {source.name!r}: "
+                    f"{', '.join(unticked)}",
+                    node_id=node.id,
+                )
+            )
     return tuple(problems)
 
 
@@ -61,8 +82,14 @@ def ensure_database_sources_owned(db: Session, workflow: WorkflowJSON, owner_id:
 
 
 def data_query_configs(workflow: WorkflowJSON) -> list[DataQueryConfig]:
-    """The config of every `data_query` node in `workflow` that parses — what "Chạy với tư cách…" searches behind."""
-    return [config for _, config in _data_query_nodes(workflow)]
+    """Every Hệ CSDL `workflow` reads or writes, as a `DataQueryConfig` — what "Chạy với tư cách…" searches behind.
+
+    A `data_write` node needs an asker as much as a read does (ADR-0094), and
+    the search only reads `source_id`, so a writing node is counted by its source.
+    """
+    reads = [config for _, config in _data_query_nodes(workflow)]
+    writes = [DataQueryConfig(source_id=write.source_id) for _, write in _data_write_nodes(workflow)]
+    return [*reads, *writes]
 
 
 def owned_source(db: Session, source_id: str, owner_id: int) -> DatabaseSource | None:
@@ -77,6 +104,15 @@ def owned_source(db: Session, source_id: str, owner_id: int) -> DatabaseSource |
     except ValueError:
         return None
     return source if source is not None and source.owner_id == owner_id else None
+
+
+def _data_write_nodes(workflow: WorkflowJSON) -> Iterator[tuple[NodeInstance, DataWriteConfig]]:
+    """Every `data_write` node whose config parses (ADR-0094) — `_data_query_nodes`' twin."""
+    for node in workflow.nodes_of_type(NodeType.DATA_WRITE):
+        try:
+            yield node, DataWriteConfig.model_validate(node.config)
+        except ValidationError:
+            continue
 
 
 def _data_query_nodes(workflow: WorkflowJSON) -> Iterator[tuple[NodeInstance, DataQueryConfig]]:

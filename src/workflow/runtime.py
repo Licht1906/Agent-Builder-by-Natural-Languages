@@ -106,7 +106,8 @@ from src.agents.tools.registry import TOOL_REGISTRY
 from src.audit.chain import AuditEntry, AuditKind, AuditMode
 from src.config import get_settings
 from src.datasources.query import AggregateFn, FilterOp, SortDir, StructuredQuery
-from src.datasources.reader import UNREAD_FOR_ASKER, DatabaseReader, QueryOutcome
+from src.datasources.reader import UNREAD_FOR_ASKER, DatabaseReader, QueryOutcome, WriteOutcome
+from src.datasources.write import StructuredWrite, WriteOp, describe_write
 from src.db.models import RunApprovalStatus
 from src.evals.model_json import UnreadableModelReplyError, json_object
 from src.models.model_catalog import ASSIGNABLE_MODELS, default_node_model
@@ -114,6 +115,7 @@ from src.models.node_registry import (
     AgentLlmConfig,
     CollectConfig,
     DataQueryConfig,
+    DataWriteConfig,
     HumanApprovalConfig,
     IfElseConfig,
     KnowledgeSearchConfig,
@@ -182,6 +184,10 @@ KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
 #: The tool name a `data_query` node's call and result travel under (DS-04),
 #: and the name of the function its model fills the structured query into.
 DATA_QUERY_TOOL = "data_query"
+
+#: The tool name a `data_write` node's call, its approval and its result travel
+#: under (ADR-0094) — the `tool` an `action_hash` is computed over.
+DATA_WRITE_TOOL = "data_write"
 
 
 #: What a `WebSearch` node calls itself on the wire. The `TOOL_REGISTRY` name,
@@ -1239,6 +1245,251 @@ def _finding_of(node_id: str, config: DataQueryConfig, outcome: QueryOutcome) ->
     )
 
 
+async def _run_data_write(
+    node: NodeInstance, state: WorkflowState, *, run: WorkflowRunContext, emit: WorkflowEventSink
+) -> NodeOutcome:
+    """Change a Hệ CSDL — add, edit or remove rows — once a person approved exactly this change. ADR-0094.
+
+    `_run_mcp`'s discipline with `_run_data_query`'s gates. **The model never
+    writes SQL**: it fills a structured write (table, operation, values, rows
+    by equality) for the node's own tables. **It never decides scope**: the
+    reader checks the asker's `tables` grant and binds their scope into the
+    statement. **Nothing changes without an approval of this payload**: the
+    `human_approval` in front prepared the write and showed it on its card,
+    and here the payload is hashed again and refused on any difference — the
+    same `_unapproved` an email goes through.
+
+    In a sandbox the change is a mock unless the trial was switched to "Gửi
+    thật" (DS-09), exactly like an email: a rehearsal that changed the
+    creator's staging data unasked would be a side effect nobody approved.
+    """
+    config = DataWriteConfig.model_validate(node.config)
+    approved = state.get("approved_actions", {})
+    approval = approved.get(node.id)
+    outcome = await _write_once(node, config, approval, state, run=run, emit=emit)
+    if node.id in approved:
+        # Used up whether it ran or was refused: one approval, one write.
+        remaining = {key: value for key, value in approved.items() if key != node.id}
+        outcome = replace(outcome, state_update={**outcome.state_update, "approved_actions": remaining})
+    return outcome
+
+
+async def _write_once(
+    node: NodeInstance,
+    config: DataWriteConfig,
+    approval: dict[str, Any] | None,
+    state: WorkflowState,
+    *,
+    run: WorkflowRunContext,
+    emit: WorkflowEventSink,
+) -> NodeOutcome:
+    """`_run_data_write` before the licence is spent: the write, its gates, its approval, then the change or its mock."""
+    reader = run.databases
+    if reader is None:
+        return _data_write_refusal(node, {}, "Lượt chạy này không được nối với Hệ CSDL nào", emit=emit)
+    if approval is not None and len(state["messages"]) == approval["messages_at"]:
+        # Nothing said since the person said yes: the write is the one they
+        # were shown, read back rather than written a second time by a model.
+        payload = dict(approval["args"])
+        write = _write_of_payload(payload)
+        if write is None:
+            return _data_write_refusal(
+                node, payload, "Payload đã duyệt không còn đọc được thành một thao tác ghi", emit=emit
+            )
+    else:
+        write, refusal = await _write_for(config, state, node_id=node.id, run=run, emit=emit)
+        if write is None:
+            return _data_write_refusal(node, {"source_id": config.source_id}, refusal, emit=emit)
+        payload = _write_payload(config, write)
+    checked = reader.authorize(config, write)
+    if not checked.allowed:
+        await _audit_action(
+            run, node.id, DATA_WRITE_TOOL, payload, approval, outcome="denied", reason=checked.transcript_reason
+        )
+        return _data_write_refusal(node, payload, checked.transcript_reason, emit=emit, told=checked.asker_reason)
+    refusal = await _unapproved(node.id, DATA_WRITE_TOOL, payload, approval)
+    if refusal is not None:
+        await _audit_action(run, node.id, DATA_WRITE_TOOL, payload, approval, outcome="refused", reason=refusal)
+        return _data_write_refusal(node, payload, refusal, emit=emit)
+    live = run.sandbox and run.live_sends
+    simulated = run.sandbox and not live
+    call = WorkflowToolCallEvent(node_id=node.id, tool=DATA_WRITE_TOOL, args=payload, simulated=simulated)
+    if live:
+        call["live_in_sandbox"] = True
+    emit(_event("tool", call))
+    if simulated:
+        answer = f"Mô phỏng (chạy thử, chưa ghi thật): sẽ {describe_write(write)}"
+        await _audit_action(run, node.id, DATA_WRITE_TOOL, payload, approval, outcome="simulated")
+        emit(_event("tool_result", _tool_result(node.id, DATA_WRITE_TOOL, ok=True, result=answer, simulated=True)))
+        return NodeOutcome(
+            content=answer, state_update={"messages": [_note(node, answer, tool=DATA_WRITE_TOOL, ok=True)]}
+        )
+    # Inline, `_run_data_query`'s reason: the reader works through this request's own database session.
+    done = reader.write(config, write)
+    if done.affected is None:
+        await _audit_action(
+            run, node.id, DATA_WRITE_TOOL, payload, approval, outcome="failed", live=live, reason=done.transcript_reason
+        )
+        return _data_write_refusal(
+            node, payload, done.transcript_reason, emit=emit, told=done.asker_reason, announced=True, live=live
+        )
+    answer = _written(done)
+    await _audit_action(run, node.id, DATA_WRITE_TOOL, payload, approval, outcome="written", live=live)
+    emit(
+        _event(
+            "tool_result", _tool_result(node.id, DATA_WRITE_TOOL, ok=True, result=answer, simulated=False, live=live)
+        )
+    )
+    return NodeOutcome(content=answer, state_update={"messages": [_note(node, answer, tool=DATA_WRITE_TOOL, ok=True)]})
+
+
+def _written(done: WriteOutcome) -> str:
+    """What a done write is reported as — the change in words and how many rows it touched."""
+    if done.affected == 0:
+        return f"Không có dòng nào khớp nên không có gì thay đổi ({done.source_name}: {done.description})"
+    return f"Đã {done.description} trên {done.source_name} — {done.affected} dòng thay đổi"
+
+
+def _write_payload(config: DataWriteConfig, write: StructuredWrite) -> dict[str, Any]:
+    """The arguments an approval binds: which Hệ CSDL, then the write itself — what the card shows and the hash covers."""
+    return {"source_id": config.source_id, **write.model_dump(mode="json")}
+
+
+def _write_of_payload(payload: Mapping[str, Any]) -> StructuredWrite | None:
+    """`_write_payload`'s inverse — `None` for a payload that no longer parses as a write."""
+    try:
+        return StructuredWrite.model_validate({key: value for key, value in payload.items() if key != "source_id"})
+    except ValidationError:
+        return None
+
+
+def _data_write_refusal(
+    node: NodeInstance,
+    args: dict[str, Any],
+    reason: str,
+    *,
+    emit: WorkflowEventSink,
+    told: str | None = None,
+    announced: bool = False,
+    live: bool = False,
+) -> NodeOutcome:
+    """A write that did not happen, on the timeline and in `messages`: `reason` for the creator, `told` for the asker.
+
+    Both the call and its failure are emitted (`_mcp_refusal`'s reason): a
+    reader scanning for what a run touched must see that a change was
+    attempted. The note the answering node reads says plainly that nothing
+    changed, so it never reports a write that did not happen.
+    """
+    if not announced:
+        emit(_event("tool", WorkflowToolCallEvent(node_id=node.id, tool=DATA_WRITE_TOOL, args=args, simulated=False)))
+    emit(
+        _event(
+            "tool_result", _tool_result(node.id, DATA_WRITE_TOOL, ok=False, result=reason, simulated=False, live=live)
+        )
+    )
+    said = f"Chưa thay đổi dữ liệu: {told or reason}"
+    return NodeOutcome(content=reason, state_update={"messages": [_note(node, said, tool=DATA_WRITE_TOOL, ok=False)]})
+
+
+async def _write_for(
+    config: DataWriteConfig,
+    state: WorkflowState,
+    *,
+    node_id: str,
+    run: WorkflowRunContext,
+    emit: WorkflowEventSink,
+    charged_to: str | None = None,
+) -> tuple[StructuredWrite | None, str]:
+    """The structured write this turn asks for — or `None` and why. `_query_from_model`'s shape for a write.
+
+    `charged_to` is the `human_approval` preparing it for its card (DS-08's
+    `_prepared_actions`), so the model call is billed to the node that made it.
+    """
+    reader = run.databases
+    tables = reader.tables_of(config) if reader is not None else {}
+    if not tables:
+        return None, _NO_WRITABLE_TABLE
+    schema = {
+        "type": "function",
+        "function": {
+            "name": DATA_WRITE_TOOL,
+            "description": "Một thao tác ghi có cấu trúc trên một bảng. Bảng và cột được phép: "
+            + "; ".join(f"{table}({', '.join(names)})" for table, names in tables.items()),
+            "parameters": _write_parameters(tables),
+        },
+    }
+    asked = f"## Hội thoại gần đây\n{_conversation_excerpt(state)}"
+    model_id = default_node_model(list(ASSIGNABLE_MODELS))
+    try:
+        bound = cast(
+            BaseChatModel, run.services.model_factory(model_id).bind_tools([schema], tool_choice=DATA_WRITE_TOOL)
+        )
+        reply = await _answer_within_deadline(
+            bound,
+            [SystemMessage(content=_DATA_WRITE_INSTRUCTION), HumanMessage(content=asked)],
+            node_id=charged_to or node_id,
+            model_id=model_id,
+            run=run,
+            emit=emit,
+            speaks=False,
+        )
+    except BudgetExceededError:
+        raise
+    except Exception:  # noqa: BLE001 — a model that cannot write the change is a refused write, not a failed run
+        return None, "Không soạn được thao tác ghi cho yêu cầu này"
+    call = next(
+        (call for call in getattr(reply, "tool_calls", None) or [] if call.get("name") == DATA_WRITE_TOOL), None
+    )
+    if call is None or not isinstance(call.get("args"), dict):
+        return None, "Model không soạn thao tác ghi nào cho yêu cầu này"
+    try:
+        return StructuredWrite.model_validate(call["args"]), ""
+    except ValidationError as exc:
+        reasons = "; ".join(f"{'.'.join(map(str, error['loc']))}: {error['msg']}" for error in exc.errors())
+        return None, f"Thao tác ghi model soạn không hợp lệ — {reasons}"
+
+
+def _write_parameters(tables: Mapping[str, list[str]]) -> dict[str, Any]:
+    """The structured write's JSON Schema, narrowed to this node's tables and their columns."""
+    names = sorted({name for columns in tables.values() for name in columns})
+    return {
+        "type": "object",
+        "properties": {
+            "table": {"type": "string", "enum": list(tables)},
+            "operation": {"type": "string", "enum": [op.value for op in WriteOp]},
+            "values": {
+                "type": "object",
+                "description": "Cột -> giá trị mới (insert, update). Bỏ trống khi delete.",
+                "additionalProperties": {},
+            },
+            "where": {
+                "type": "array",
+                "description": "Các dòng bị sửa/xoá, mỗi điều kiện là cột = giá trị (update, delete). Bỏ trống khi insert.",
+                "items": {
+                    "type": "object",
+                    "properties": {"column": {"type": "string", "enum": names}, "value": {}},
+                    "required": ["column", "value"],
+                },
+            },
+        },
+        "required": ["table", "operation"],
+    }
+
+
+#: Why a `data_write` node has nothing to write to — said on the transcript.
+_NO_WRITABLE_TABLE = "Hệ CSDL của node này không tồn tại, không thuộc về bạn, hoặc không còn bảng nào được phép ghi"
+
+#: What the write-preparing model is told. Scope is the platform's, as for a
+#: query; and a write it cannot pin to rows by equality is one it must not guess.
+_DATA_WRITE_INSTRUCTION = (
+    "Soạn MỘT thao tác ghi có cấu trúc thực hiện đúng yêu cầu thay đổi dữ liệu mới nhất của người dùng trong "
+    "hội thoại bên dưới. Chỉ dùng bảng và cột được liệt kê; giá trị lấy từ hội thoại hoặc dữ liệu đã đọc, "
+    "không bịa. insert: chỉ values. update: values và where. delete: chỉ where. where chỉ là các điều kiện "
+    "cột = giá trị, đủ để chỉ đúng dòng cần đổi (thường là khoá của dòng). "
+    "Không tự thêm điều kiện theo người hỏi (mã nhân viên, phòng ban…) — nền tảng tự áp phạm vi của người hỏi."
+)
+
+
 async def _run_web_search(
     node: NodeInstance, state: WorkflowState, *, run: WorkflowRunContext, emit: WorkflowEventSink
 ) -> NodeOutcome:
@@ -2089,6 +2340,7 @@ NODE_HANDLERS: dict[NodeType, NodeHandler] = {
     NodeType.AGENT_LLM: _run_agent_llm,
     NodeType.KNOWLEDGE_SEARCH: _run_knowledge_search,
     NodeType.DATA_QUERY: _run_data_query,
+    NodeType.DATA_WRITE: _run_data_write,
     NodeType.WEB_SEARCH: _run_web_search,
     NodeType.COLLECT: _run_collect,
     NodeType.MCP: _run_mcp,
@@ -3173,6 +3425,9 @@ def _guarded_action_nodes(workflow: WorkflowJSON | None, gate_id: str) -> list[N
             config = McpConfig.model_validate(node.config)
             if any(_needs_approval(config, action) for _, action in _invocable_actions(config)):
                 found.append(node)
+        elif node.type is NodeType.DATA_WRITE:
+            # Every write needs a person (ADR-0094) — there is no read-only write to wave through.
+            found.append(node)
         for edge in onward[node.id]:
             if edge.target_node_id not in seen:
                 seen.add(edge.target_node_id)
@@ -3202,6 +3457,11 @@ async def _prepared_actions(
     """
     actions: list[ApprovalAction] = []
     for target in _guarded_action_nodes(run.workflow, gate.id):
+        if target.type is NodeType.DATA_WRITE:
+            prepared = await _prepared_write(target, state, gate_id=gate.id, run=run, emit=emit)
+            if prepared is not None:
+                actions.append(prepared)
+            continue
         config = McpConfig.model_validate(target.config)
         chosen, args = await _action_and_args(config, state, node_id=target.id, run=run, emit=emit, charged_to=gate.id)
         resolved = resolved_action(config.tool_id, chosen)
@@ -3214,6 +3474,30 @@ async def _prepared_actions(
             )
         )
     return actions
+
+
+async def _prepared_write(
+    target: NodeInstance, state: WorkflowState, *, gate_id: str, run: WorkflowRunContext, emit: WorkflowEventSink
+) -> ApprovalAction | None:
+    """The write a `data_write` node would make now, for the card — `None` when there is none to show.
+
+    Only a write the asker may make is put in front of a person: one the gates
+    refuse is left off, and the node reports the refusal itself when it runs —
+    a card asking somebody to approve a change that would be denied anyway is
+    a decision with nothing behind it.
+    """
+    config = DataWriteConfig.model_validate(target.config)
+    write, _ = await _write_for(config, state, node_id=target.id, run=run, emit=emit, charged_to=gate_id)
+    if write is None or run.databases is None or not run.databases.authorize(config, write).allowed:
+        return None
+    payload = _write_payload(config, write)
+    return ApprovalAction(
+        node_id=target.id,
+        tool=DATA_WRITE_TOOL,
+        action=write.operation.value,
+        args=payload,
+        hash=action_hash(DATA_WRITE_TOOL, payload),
+    )
 
 
 async def _unapproved(node_id: str, tool: str, payload: dict[str, Any], approval: dict[str, Any] | None) -> str | None:

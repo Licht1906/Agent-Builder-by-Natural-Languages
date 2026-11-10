@@ -61,6 +61,20 @@ CREATE TABLE IF NOT EXISTS fin_invoice (
     credit_limit_internal numeric(14,2)
 );
 
+-- The one table an agent may change (ADR-0094): a follow-up note per call to a customer — what was said,
+-- and the date they promised to pay. Written by a `data_write` node, only after a person approves the row;
+-- `sales_rep_id`/`department` are what the access rules scope a write by, so a rep only adds notes for their
+-- own customers. Read back through `v_ar_followups`.
+CREATE TABLE IF NOT EXISTS ar_followups (
+    followup_id   serial PRIMARY KEY,
+    customer_id   text NOT NULL REFERENCES crm_customer (customer_id),
+    sales_rep_id  text NOT NULL,
+    department    text NOT NULL,
+    promised_date date,
+    note          text NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
 -- ---------------------------------------------------------------------------
 -- The views a creator ticks
 -- ---------------------------------------------------------------------------
@@ -89,6 +103,10 @@ WHERE i.settled_at IS NULL
 
 COMMENT ON VIEW v_ar_open IS
     'Open receivables. bank_account, tax_id and credit_limit_internal are not projected.';
+
+CREATE OR REPLACE VIEW v_ar_followups AS
+SELECT followup_id, customer_id, sales_rep_id, department, promised_date, note, created_at
+FROM ar_followups;
 
 CREATE OR REPLACE VIEW v_customer_safe AS
 SELECT

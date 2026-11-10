@@ -36,9 +36,10 @@ from src.datasources.dialects.base import (
     QueryRequest,
     QueryRows,
     ViewInfo,
+    WriteRequest,
     pin_address,
 )
-from src.datasources.dialects.sql import select_for
+from src.datasources.dialects.sql import select_for, write_statement
 from src.datasources.query import PLAIN_NAME
 
 #: A person is watching a spinner — UC-1's own "timeout ngắn", and DS-02's
@@ -91,6 +92,18 @@ WHERE table_type = 'BASE TABLE' AND table_schema <> ALL(%s)
 ORDER BY table_schema, table_name
 """
 
+_TABLE_COLUMNS = """
+SELECT c.table_schema, c.table_name, c.column_name
+FROM information_schema.columns c
+JOIN information_schema.tables t ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+WHERE t.table_type = 'BASE TABLE' AND c.table_schema <> ALL(%s)
+ORDER BY c.table_schema, c.table_name, c.ordinal_position
+"""
+
+
+class _TooManyRowsError(Exception):
+    """Raised inside a write's transaction so it rolls back — never leaves `run_write`."""
+
 
 class PostgresDialect:
     """`Dialect` for PostgreSQL, over psycopg 3 — one connection per call, never pooled."""
@@ -103,8 +116,15 @@ class PostgresDialect:
                 _display_name(schema, name)
                 for schema, name in connection.execute(_BASE_TABLES, (list(_SYSTEM_SCHEMAS),))
             )
+            table_columns: dict[str, list[str]] = {}
+            for schema, name, column_name in connection.execute(_TABLE_COLUMNS, (list(_SYSTEM_SCHEMAS),)):
+                table_columns.setdefault(_display_name(schema, name), []).append(column_name)
             views = _counted(connection, columns)
-        return Introspection(views=views, base_tables=tables)
+        return Introspection(
+            views=views,
+            base_tables=tables,
+            table_columns={name: tuple(names) for name, names in table_columns.items()},
+        )
 
     def identity_lookup(self, dsn: str, *, trusted_hosts: frozenset[str]) -> IdentityLookup:
         """The asker's row by one equality, as a parameter — `None` for nobody and for an ambiguous match.
@@ -183,6 +203,48 @@ class PostgresDialect:
             columns = tuple(description.name for description in cursor.description or ())
             return QueryRows(columns=columns, rows=tuple(tuple(row) for row in cursor.fetchall()))
 
+    def run_write(self, dsn: str, request: WriteRequest, *, trusted_hosts: frozenset[str]) -> int:
+        """`request` as one transaction: the asker's attributes set locally, the statement, then the row ceiling.
+
+        The only connection this dialect opens without `default_transaction_read_only`
+        (`_dial_conninfo(read_only=False)`), and only for a write a person
+        approved. The ceiling is checked *inside* the transaction: a write
+        that changed more rows than the node allows raises before the commit,
+        so the database never holds the change even for a moment.
+        """
+        compiled = write_statement(request, default_schema="public").compile(
+            dialect=_SQL_DIALECT, compile_kwargs={"render_postcompile": True}
+        )
+        try:
+            with self._writing(dsn, trusted_hosts) as connection, connection.transaction():
+                connection.execute(
+                    sql.SQL("SET LOCAL statement_timeout = {}").format(sql.Literal(_STATEMENT_TIMEOUT_MS))
+                )
+                for name, value in request.session_attributes.items():
+                    if PLAIN_NAME.match(name.lower()) and value is not None:
+                        connection.execute("SELECT set_config(%s, %s, true)", (f"app.{name.lower()}", str(value)))
+                cursor = connection.execute(str(compiled), compiled.params)
+                if cursor.rowcount > request.max_rows:
+                    raise _TooManyRowsError
+                return cursor.rowcount
+        except _TooManyRowsError:
+            raise DatabaseProbeError(ProbeFailure.TOO_MANY_ROWS) from None
+
+    @contextmanager
+    def _writing(self, dsn: str, trusted_hosts: frozenset[str]) -> Iterator[psycopg.Connection[Any]]:
+        """`_reading` for a write: a writable connection, and a failure named as a failed write, not a failed read."""
+        conninfo = _dial_conninfo(dsn, trusted_hosts, read_only=False)
+        try:
+            connection = psycopg.connect(conninfo, autocommit=True)
+        except psycopg.Error as exc:
+            raise DatabaseProbeError(_failure_of(exc)) from None
+        try:
+            with connection:
+                yield connection
+        except psycopg.Error as exc:
+            reason = _failure_of(exc)
+            raise DatabaseProbeError(_AS_WRITE_FAILURE.get(reason, reason)) from None
+
     @contextmanager
     def _reading(
         self, dsn: str, trusted_hosts: frozenset[str], *, failure: ProbeFailure = ProbeFailure.SERVER_ERROR
@@ -218,8 +280,19 @@ class PostgresDialect:
             yield connection
 
 
-def _dial_conninfo(dsn: str, trusted_hosts: frozenset[str]) -> str:
+#: A write's failures in a write's words: "no permission to *read*" and "error
+#: reading the view list" describe a different act from the one that failed.
+_AS_WRITE_FAILURE = {
+    ProbeFailure.PERMISSION_DENIED: ProbeFailure.WRITE_DENIED,
+    ProbeFailure.SERVER_ERROR: ProbeFailure.WRITE_FAILED,
+}
+
+
+def _dial_conninfo(dsn: str, trusted_hosts: frozenset[str], *, read_only: bool = True) -> str:
     """`dsn` made safe to dial: address checked and pinned, read-only, short timeouts. Raises `DatabaseProbeError`.
+
+    `read_only=False` is `run_write`'s alone — every other connection this
+    module opens is read-only at the session, whatever the account may do.
 
     `hostaddr`, when the DSN sets one, is what libpq actually dials — so it is
     the thing checked, or `host=trusted hostaddr=169.254.169.254` would walk
@@ -239,7 +312,8 @@ def _dial_conninfo(dsn: str, trusted_hosts: frozenset[str]) -> str:
     params["hostaddr"] = _pinned_address(str(params.get("hostaddr") or params.get("host") or ""), trusted_hosts)
     params.setdefault("password", "")
     params["passfile"] = os.devnull
-    params["options"] = f"-c default_transaction_read_only=on -c statement_timeout={_STATEMENT_TIMEOUT_MS}"
+    read_only_option = "-c default_transaction_read_only=on " if read_only else ""
+    params["options"] = f"{read_only_option}-c statement_timeout={_STATEMENT_TIMEOUT_MS}"
     params["connect_timeout"] = _CONNECT_TIMEOUT_SECONDS
     try:
         return make_conninfo(**params)

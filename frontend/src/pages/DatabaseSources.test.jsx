@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import DatabaseSourcesTab from "./DatabaseSources";
+import DatabaseSourcesTab, { dsnOf } from "./DatabaseSources";
 import { LanguageProvider } from "../i18n";
 import * as api from "../lib/api";
 
@@ -76,7 +76,7 @@ describe("the Databases tab", () => {
     expect(await screen.findByText(/No database yet/)).toBeInTheDocument();
   });
 
-  it("adds a database with its DSN in a password box, then tests it straight away", async () => {
+  it("adds a database field by field, composing the DSN, then tests it straight away", async () => {
     const actor = userEvent.setup();
     api.databaseSources.list.mockResolvedValue([]);
     api.databaseSources.create.mockResolvedValue(source({ id: 9, status: "untested", views: [] }));
@@ -85,21 +85,26 @@ describe("the Databases tab", () => {
     await screen.findByText(/No database yet/);
 
     await actor.click(screen.getByRole("button", { name: /Add a database/ }));
-    await actor.type(screen.getByLabelText(/Name/), "ERP staging");
-    const dsn = screen.getByLabelText(/DSN/);
-    expect(dsn).toHaveAttribute("type", "password");
-    await actor.type(dsn, "postgresql://ro:secret@erp:5432/erp");
-    await actor.click(screen.getByRole("button", { name: /Save and test/ }));
+    await actor.type(screen.getByLabelText("Name"), "ERP staging");
+    await actor.type(screen.getByLabelText("Host"), "erp.noibo");
+    await actor.type(screen.getByLabelText("Database name"), "erp");
+    const save = screen.getByRole("button", { name: /Save and test/ });
+    expect(save).toBeDisabled();
+    await actor.type(screen.getByLabelText("Username"), "ro");
+    const password = screen.getByLabelText("Password");
+    expect(password).toHaveAttribute("type", "password");
+    await actor.type(password, "p@ss/w:rd");
+    await actor.click(save);
 
     await waitFor(() => expect(api.databaseSources.test).toHaveBeenCalledWith(9));
     expect(api.databaseSources.create).toHaveBeenCalledWith({
       name: "ERP staging",
       dialect: "postgresql",
-      dsn: "postgresql://ro:secret@erp:5432/erp",
+      dsn: "postgresql://ro:p%40ss%2Fw%3Ard@erp.noibo:5432/erp",
     });
   });
 
-  it("adds a SQL Server database, the DSN box showing the shape that engine takes", async () => {
+  it("adds a SQL Server database by connection string, the box showing the shape that engine takes", async () => {
     const actor = userEvent.setup();
     api.databaseSources.list.mockResolvedValue([]);
     api.databaseSources.create.mockResolvedValue(source({ id: 9, dialect: "sqlserver", status: "untested", views: [] }));
@@ -108,9 +113,12 @@ describe("the Databases tab", () => {
     await screen.findByText(/No database yet/);
 
     await actor.click(screen.getByRole("button", { name: /Add a database/ }));
-    await actor.type(screen.getByLabelText(/Name/), "ERP MSSQL");
-    await actor.selectOptions(screen.getByLabelText(/Database type/), "sqlserver");
-    const dsn = screen.getByLabelText(/DSN/);
+    await actor.type(screen.getByLabelText("Name"), "ERP MSSQL");
+    await actor.click(screen.getByRole("radio", { name: /SQL Server/ }));
+    expect(screen.getByLabelText("Port")).toHaveAttribute("placeholder", "1433");
+    await actor.click(screen.getByRole("radio", { name: "Connection string" }));
+    const dsn = screen.getByLabelText("Connection string (DSN)");
+    expect(dsn).toHaveAttribute("type", "password");
     expect(dsn).toHaveAttribute("placeholder", expect.stringContaining("Server=host,1433"));
     await actor.type(dsn, "Server=erp,1433;Database=erp;User Id=ro;Password=secret");
     await actor.click(screen.getByRole("button", { name: /Save and test/ }));
@@ -134,11 +142,12 @@ describe("the Databases tab", () => {
     expect(within(screen.getByText("ERP PG").closest(".card")).queryByRole("note")).toBeNull();
 
     await actor.click(screen.getByRole("button", { name: /Add a database/ }));
-    const form = screen.getByLabelText(/Database type/).closest("form");
+    const form = screen.getByRole("radiogroup", { name: "Database type" }).closest("form");
     expect(within(form).queryByRole("note")).toBeNull();
-    await actor.selectOptions(screen.getByLabelText(/Database type/), "mysql");
+    await actor.click(screen.getByRole("radio", { name: /MySQL/ }));
     expect(within(form).getByRole("note")).toBeInTheDocument();
-    expect(screen.getByLabelText(/DSN/)).toHaveAttribute("placeholder", expect.stringContaining("mysql://"));
+    await actor.click(screen.getByRole("radio", { name: "Connection string" }));
+    expect(screen.getByLabelText("Connection string (DSN)")).toHaveAttribute("placeholder", expect.stringContaining("mysql://"));
   });
 
   it("saves the views that are ticked", async () => {
@@ -153,33 +162,37 @@ describe("the Databases tab", () => {
     expect(api.databaseSources.update).toHaveBeenCalledWith(4, { allowed_views: ["v_ar_open", "v_customer_safe"] });
   });
 
-  it("opens the DSN box straight away on a source that has none", async () => {
+  it("opens the connection fields straight away on a source that has none", async () => {
     const actor = userEvent.setup();
     api.databaseSources.list.mockResolvedValue([
-      source({ has_dsn: false, status: "needs_dsn", status_detail: "Chưa có DSN cho Hệ CSDL này — nhập lại DSN", views: [] }),
+      source({ dialect: "mysql", has_dsn: false, status: "needs_dsn", status_detail: "Chưa có DSN cho Hệ CSDL này — nhập lại DSN", views: [] }),
     ]);
     api.databaseSources.update.mockResolvedValue(source({ status: "untested" }));
     api.databaseSources.test.mockResolvedValue(source());
     draw();
 
     expect(await screen.findByText(/nhập lại DSN/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Re-enter DSN/ })).toBeNull();
-    await actor.type(screen.getByLabelText(/New DSN/), "postgresql://ro:x@erp/erp");
-    await actor.click(screen.getByRole("button", { name: /Save DSN/ }));
+    expect(screen.queryByRole("button", { name: /Re-enter connection/ })).toBeNull();
+    await actor.type(screen.getByLabelText("Host"), "erp");
+    await actor.type(screen.getByLabelText("Port"), "3307");
+    await actor.type(screen.getByLabelText("Database name"), "erp");
+    await actor.type(screen.getByLabelText("Username"), "ro");
+    await actor.type(screen.getByLabelText("Password"), "x");
+    await actor.click(screen.getByRole("button", { name: /Save and test/ }));
 
-    await waitFor(() => expect(api.databaseSources.update).toHaveBeenCalledWith(4, { dsn: "postgresql://ro:x@erp/erp" }));
+    await waitFor(() => expect(api.databaseSources.update).toHaveBeenCalledWith(4, { dsn: "mysql://ro:x@erp:3307/erp" }));
     await waitFor(() => expect(api.databaseSources.test).toHaveBeenCalledWith(4));
   });
 
-  it("lets a DSN be replaced on a source that already has one", async () => {
+  it("lets a connection be replaced on a source that already has one", async () => {
     const actor = userEvent.setup();
     draw();
     await screen.findByText("ERP staging");
 
-    expect(screen.queryByLabelText(/New DSN/)).toBeNull();
-    await actor.click(screen.getByRole("button", { name: /Re-enter DSN/ }));
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    await actor.click(screen.getByRole("button", { name: /Re-enter connection/ }));
 
-    expect(screen.getByLabelText(/New DSN/)).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "password");
   });
 
   it("opens the access rules of a source that has ticked views", async () => {
@@ -208,5 +221,64 @@ describe("the Databases tab", () => {
     await actor.click(screen.getByRole("button", { name: /Delete/ }));
 
     await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringMatching(/Trợ lý công nợ/), "error"));
+  });
+});
+
+describe("dsnOf", () => {
+  const fields = (overrides) => ({ mode: "fields", host: "erp", port: "", database: "erp", user: "ro", password: "", dsn: "", ...overrides });
+
+  it("uses each dialect's own scheme and default port", () => {
+    expect(dsnOf("postgresql", fields())).toBe("postgresql://ro@erp:5432/erp");
+    expect(dsnOf("sqlserver", fields())).toBe("mssql://ro@erp:1433/erp");
+    expect(dsnOf("mysql", fields({ port: " 3307 " }))).toBe("mysql://ro@erp:3307/erp");
+  });
+
+  it("brackets a bare IPv6 host", () => {
+    expect(dsnOf("postgresql", fields({ host: "fd00::5" }))).toBe("postgresql://ro@[fd00::5]:5432/erp");
+  });
+
+  it("is nothing while a required field is blank or the port is not a number", () => {
+    expect(dsnOf("postgresql", fields({ host: " " }))).toBe("");
+    expect(dsnOf("postgresql", fields({ user: "" }))).toBe("");
+    expect(dsnOf("postgresql", fields({ database: "" }))).toBe("");
+    expect(dsnOf("postgresql", fields({ port: "54x" }))).toBe("");
+  });
+
+  it("passes a connection string through as typed, trimmed", () => {
+    expect(dsnOf("sqlserver", fields({ mode: "dsn", dsn: "  Server=erp;User Id=ro  " }))).toBe("Server=erp;User Id=ro");
+  });
+});
+
+describe("the tables an agent may change (ADR-0094)", () => {
+  const withTables = (overrides) =>
+    source({
+      tables: [
+        { name: "ar_notes", columns: ["id", "customer_id", "note"], writable: false },
+        { name: "fin_invoice", columns: ["id", "amount"], writable: false },
+      ],
+      allowed_write_tables: [],
+      ...overrides,
+    });
+
+  it("ticks a table for writing and saves it", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.list.mockResolvedValue([withTables()]);
+    api.databaseSources.update.mockResolvedValue(withTables({ allowed_write_tables: ["ar_notes"] }));
+    draw();
+
+    const row = (await screen.findByText("ar_notes")).closest("label");
+    expect(screen.getByRole("button", { name: /Save writable tables/ })).toBeDisabled();
+    await actor.click(within(row).getByRole("checkbox"));
+    await actor.click(screen.getByRole("button", { name: /Save writable tables/ }));
+
+    expect(api.databaseSources.update).toHaveBeenCalledWith(4, { allowed_write_tables: ["ar_notes"] });
+    expect(screen.getByText(/only after a person approves the exact change/)).toBeInTheDocument();
+  });
+
+  it("says plainly that an engine other than PostgreSQL cannot be written yet", async () => {
+    api.databaseSources.list.mockResolvedValue([source({ dialect: "mysql", tables: [], allowed_write_tables: [] })]);
+    draw();
+
+    expect(await screen.findByText(/supported on PostgreSQL only/)).toBeInTheDocument();
   });
 });

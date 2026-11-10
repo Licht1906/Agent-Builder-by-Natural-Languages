@@ -19,11 +19,12 @@ second dialect cannot drift from the first.
 
 import socket
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
 from src.datasources.query import StructuredQuery
+from src.datasources.write import StructuredWrite
 from src.services.ssrf_guard import SSRFBlockedError, pin_safe_host
 
 
@@ -42,6 +43,10 @@ class ProbeFailure(StrEnum):
     QUERY_TIMEOUT = "query_timeout"
     DSN_MISSING = "dsn_missing"
     DSN_UNREADABLE = "dsn_unreadable"
+    WRITE_FAILED = "write_failed"
+    WRITE_DENIED = "write_denied"
+    TOO_MANY_ROWS = "too_many_rows"
+    WRITE_UNSUPPORTED = "write_unsupported"
 
 
 #: The one sentence each failure is said in — the whole of what a probe ever
@@ -65,6 +70,15 @@ FAILURE_DETAIL: dict[ProbeFailure, str] = {
     ProbeFailure.QUERY_TIMEOUT: "Truy vấn chạy quá 5 giây nên bị dừng — thu hẹp bộ lọc hoặc giảm số dòng",
     ProbeFailure.DSN_MISSING: "Chưa có DSN cho Hệ CSDL này — nhập lại DSN",
     ProbeFailure.DSN_UNREADABLE: "Không giải mã được DSN đã lưu — nhập lại DSN",
+    ProbeFailure.WRITE_FAILED: (
+        "CSDL không thực hiện được thao tác ghi này — kiểm tra kiểu giá trị và ràng buộc của bảng; "
+        "không có gì bị thay đổi"
+    ),
+    ProbeFailure.WRITE_DENIED: "Tài khoản trong DSN không có quyền ghi vào bảng này — không có gì bị thay đổi",
+    ProbeFailure.TOO_MANY_ROWS: (
+        "Thao tác ghi sẽ đổi nhiều dòng hơn mức node cho phép nên đã bị huỷ — không có gì bị thay đổi"
+    ),
+    ProbeFailure.WRITE_UNSUPPORTED: "Ghi dữ liệu hiện mới hỗ trợ PostgreSQL — không có gì bị thay đổi",
 }
 
 
@@ -91,10 +105,16 @@ class ViewInfo:
 
 @dataclass(frozen=True, slots=True)
 class Introspection:
-    """What one probe found. `base_tables` is there so a table can be refused *as* a table."""
+    """What one probe found. `base_tables` is there so a table can be refused *as* a table.
+
+    `table_columns` is each base table's columns, for the one thing a table
+    may be offered for: being written by a `data_write` node (ADR-0094). Empty
+    from an engine that cannot write yet — no column, no table to tick.
+    """
 
     views: tuple[ViewInfo, ...]
     base_tables: tuple[str, ...]
+    table_columns: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +148,24 @@ class QueryRows:
 
     columns: tuple[str, ...]
     rows: tuple[tuple[Any, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WriteRequest:
+    """One checked, approved write, and everything about the asker the SQL has to carry — ADR-0094.
+
+    `scope` is the asker's `Where` pairs on the table: ANDed into an update's
+    or a delete's `WHERE`, and written into an insert's row, so a change can
+    neither reach a row the asker may not touch nor create one outside their
+    scope. `max_rows` is the node's ceiling: a write that would change more
+    rows is rolled back, not trimmed.
+    """
+
+    write: StructuredWrite
+    table_columns: tuple[str, ...]
+    scope: tuple[tuple[str, Any], ...]
+    session_attributes: Mapping[str, Any]
+    max_rows: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +215,13 @@ class Dialect(Protocol):
 
     def run_query(self, dsn: str, request: QueryRequest, *, trusted_hosts: frozenset[str]) -> QueryRows:
         """`request.query` compiled for this engine — values bound, scope ANDed in, read-only. Raises `DatabaseProbeError`."""
+        ...
+
+    def run_write(self, dsn: str, request: WriteRequest, *, trusted_hosts: frozenset[str]) -> int:
+        """`request.write` in one transaction — committed, or rolled back past `max_rows`. The rows it changed.
+
+        Raises `DatabaseProbeError`; `WRITE_UNSUPPORTED` from an engine that cannot write yet.
+        """
         ...
 
 

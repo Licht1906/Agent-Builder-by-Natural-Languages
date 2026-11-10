@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Bot, Home, Layers, ShieldCheck, SlidersHorizontal, LogOut, RefreshCw,
   Library, Users, Gauge,
-  ScrollText, GitCompare, ClipboardCheck, Coins, UserCheck,
+  ScrollText, GitCompare, ClipboardCheck, Coins, UserCheck, ListChecks,
 } from "lucide-react";
 import { Hint, PageChromeProvider, SettingsMenu } from "./ui";
 import { LogoMark } from "./brand";
@@ -37,6 +37,7 @@ export default function AppLayout({
   openApprovals,
   openSettings,
   openUsers,
+  openEvalLibrary,
   openPm,
   openKnowledgeBases,
   onLogout,
@@ -125,6 +126,7 @@ export default function AppLayout({
     { id: "admin-queue", label: t("Review queue"), icon: <ShieldCheck size={17} />, badge: queueSize, go: openApprovals, active: view === "admin-queue" || view === "admin-dossier" },
     { id: "admin-settings", label: t("Platform settings"), icon: <SlidersHorizontal size={17} />, go: openSettings, active: view === "admin-settings" },
     { id: "admin-users", label: t("Accounts"), icon: <Users size={17} />, go: openUsers, active: view === "admin-users" },
+    { id: "admin-eval-library", label: t("Eval library"), icon: <ListChecks size={17} />, go: openEvalLibrary, active: view === "admin-eval-library" },
   ];
 
   return (

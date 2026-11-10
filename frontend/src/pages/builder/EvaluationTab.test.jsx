@@ -303,4 +303,22 @@ describe("EvaluationTab", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Delete test case/ }));
     await waitFor(() => expect(api.evaluation.removeCase).toHaveBeenCalledWith(7, 13, 3));
   });
+
+  it("edits a case's words in place and sends only what changed", async () => {
+    api.evaluation.updateCase.mockResolvedValue({ ...CASES[0], input_message: "hoàn tiền trong mấy ngày?" });
+    const notify = draw();
+    const row = (await screen.findByText("Trả lời đúng chính sách")).closest(".ab-eval-item");
+
+    await userEvent.click(within(row).getByRole("button", { name: /Edit this test case/ }));
+    const input = within(row).getByLabelText(/Question asked to the agent/);
+    await userEvent.clear(input);
+    await userEvent.type(input, "hoàn tiền trong mấy ngày?");
+    await userEvent.click(within(row).getByRole("button", { name: /Save test case/ }));
+
+    await waitFor(() =>
+      expect(api.evaluation.updateCase).toHaveBeenCalledWith(7, 13, 1, { input_message: "hoàn tiền trong mấy ngày?" })
+    );
+    expect(await within(row).findByText("hoàn tiền trong mấy ngày?")).toBeInTheDocument();
+    expect(notify).toHaveBeenCalledWith("Test case saved");
+  });
 });

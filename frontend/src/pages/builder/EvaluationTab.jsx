@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ListChecks, CheckCircle2, XCircle, Wand2, ShieldAlert, Trash2, Upload, Download,
-  AlertTriangle, X, ChevronDown, Filter, Ruler, Gavel, Unplug, BookOpenCheck, Database, Layers,
+  AlertTriangle, X, ChevronDown, Filter, Ruler, Gavel, Unplug, BookOpenCheck, Database, Layers, Pencil,
 } from "lucide-react";
 import * as api from "../../lib/api";
 import { ErrorNote, Note, PageShell, Section, Spinner } from "../../components/ui";
@@ -216,6 +216,19 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
       setCases((current) => current.map((entry) => (entry.id === saved.id ? saved : entry)));
     } catch (err) {
       notify(err.message, "error");
+    }
+  }
+
+  /** A hand edit of a case's words — the server keeps who made it (EV-05). Returns true when saved. */
+  async function saveText(testCase, patch) {
+    try {
+      const saved = await api.evaluation.updateCase(agentId, versionId, testCase.id, patch);
+      setCases((current) => current.map((entry) => (entry.id === saved.id ? saved : entry)));
+      notify(t("Test case saved"));
+      return true;
+    } catch (err) {
+      notify(err.message, "error");
+      return false;
     }
   }
 
@@ -565,6 +578,7 @@ export default function EvaluationTab({ agentId, versionId, readsDatabase = fals
                     onDelete={() => setDoomed(testCase)}
                     readsDatabase={readsDatabase}
                     onRunAs={(runAs) => saveRunAs(testCase, runAs)}
+                    onSaveText={(patch) => saveText(testCase, patch)}
                     onTriage={(verdict) => triageCase(testCase, verdict)}
                     busy={!!busy}
                   />
@@ -661,8 +675,22 @@ function Meter({ segments, notch, title }) {
 
 /* ── One golden-set case ──────────────────────────────────────────────── */
 
-function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete, readsDatabase, onRunAs, onTriage, busy }) {
+function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete, readsDatabase, onRunAs, onSaveText, onTriage, busy }) {
   const { t } = useLang();
+  // The words being edited, or null when the row only reads.
+  const [draft, setDraft] = useState(null);
+  const [saving, setSaving] = useState(false);
+  async function saveDraft() {
+    const patch = {};
+    for (const key of ["criterion", "input_message", "expected"]) {
+      if (draft[key].trim() && draft[key] !== testCase[key]) patch[key] = draft[key];
+    }
+    if (!Object.keys(patch).length) { setDraft(null); return; }
+    setSaving(true);
+    const saved = await onSaveText(patch);
+    setSaving(false);
+    if (saved) setDraft(null);
+  }
   const ruleBased = Boolean(testCase.expected_check);
   const orphan = verdict?.applicability === "orphan";
   return (
@@ -683,6 +711,16 @@ function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
           <p style={{ flex: 1, minWidth: 0, fontSize: "var(--text-sm)", margin: 0, lineHeight: 1.5 }}>{testCase.criterion}</p>
+          <button
+            className="btn btn-secondary btn-icon"
+            style={{ width: 26, height: 26, padding: "var(--space-1)", flexShrink: 0 }}
+            onClick={() => setDraft(draft ? null : { criterion: testCase.criterion, input_message: testCase.input_message, expected: testCase.expected || "" })}
+            disabled={busy || saving}
+            title={t("Edit this test case")}
+            aria-label={t("Edit this test case")}
+          >
+            <Pencil size={13} />
+          </button>
           <button
             className="btn btn-secondary btn-icon"
             style={{ width: 26, height: 26, padding: "var(--space-1)", flexShrink: 0 }}
@@ -743,9 +781,37 @@ function CaseRow({ testCase, verdict, skippedReason, checked, onToggle, onDelete
             </button>
           </div>
         )}
-        <p style={{ fontSize: "var(--text-sm)", color: muted, margin: "8px 0 0", lineHeight: 1.5 }}>
-          <b>{t("Input:")}</b> {testCase.input_message}
-        </p>
+        {draft ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
+            <div className="field">
+              <label htmlFor={`case-${testCase.id}-criterion`}>{t("Criterion")}</label>
+              <input id={`case-${testCase.id}-criterion`} className="input" value={draft.criterion} onChange={(e) => setDraft({ ...draft, criterion: e.target.value })} />
+            </div>
+            <div className="field">
+              <label htmlFor={`case-${testCase.id}-input`}>{t("Question asked to the agent")}</label>
+              <textarea id={`case-${testCase.id}-input`} className="input" rows={3} value={draft.input_message} onChange={(e) => setDraft({ ...draft, input_message: e.target.value })} />
+            </div>
+            <div className="field">
+              <label htmlFor={`case-${testCase.id}-expected`}>{t("What passing looks like (read by the judge)")}</label>
+              <textarea id={`case-${testCase.id}-expected`} className="input" rows={2} value={draft.expected} onChange={(e) => setDraft({ ...draft, expected: e.target.value })} />
+              {ruleBased && (
+                <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>
+                  {t("This case is also graded by a rule, which cannot be edited by hand — delete the case if the rule is wrong.")}
+                </span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setDraft(null)} disabled={saving}>{t("Cancel")}</button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={saveDraft} disabled={saving}>
+                {saving ? <Spinner size={12} /> : null}{t("Save test case")}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p style={{ fontSize: "var(--text-sm)", color: muted, margin: "8px 0 0", lineHeight: 1.5 }}>
+            <b>{t("Input:")}</b> {testCase.input_message}
+          </p>
+        )}
         {/* A case that passed has already said everything the eye came for
             with its tick: what it did and why the judge was satisfied are
             detail, and they fold. A case that FAILED is the one d81dfe4 opened

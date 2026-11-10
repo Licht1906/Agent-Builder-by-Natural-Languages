@@ -185,8 +185,13 @@ duyệt. Hệ CSDL nghiệp vụ ("kind" database: công nợ, đơn hàng, tồ
 nguồn — hệ thống tự gắn Hệ CSDL và view, và node tự lọc dữ liệu theo đúng người đang hỏi, nên prompt và \
 condition KHÔNG nói gì về phạm vi, quyền xem hay "chỉ khách của mình"; không bao giờ "knowledge_search" hay \
 "mcp" cho một Hệ CSDL. Bài toán vừa đọc Hệ CSDL vừa gửi ra ngoài thì khung là: "collect" → "data_query" → \
-"agent_llm" soạn → "human_approval" → "mcp" → "agent_llm" báo lại → "end". {approval_rule} "human_approval" chỉ đứng ngay trước \
-một node "mcp" WRITE; graph không có "mcp" thì không có "human_approval". Cổng "rejected" phải dẫn tới \
+"agent_llm" soạn → "human_approval" → "mcp" → "agent_llm" báo lại → "end". Bài toán THAY ĐỔI dữ liệu trong \
+Hệ CSDL (ghi chú, cập nhật trạng thái hay ngày hẹn, thêm hoặc xoá dòng) → MỘT node "data_write" cho nguồn đó, \
+LUÔN có "human_approval" ngay trước và chỉ đi tiếp từ cổng "approved" — hệ thống tự gắn Hệ CSDL, bảng và \
+phạm vi người hỏi; khung đọc rồi ghi là: "collect" → "data_query" → "human_approval" → "data_write" → \
+"agent_llm" báo lại → "end". {approval_rule} "human_approval" chỉ đứng ngay trước \
+một node "mcp" WRITE hoặc một node "data_write"; graph không có hai loại node đó thì không có "human_approval". \
+Cổng "rejected" phải dẫn tới \
 một node "agent_llm" nói rõ việc chưa được làm và vì sao, rồi mới tới "end" — không bao giờ nối \
 "rejected" thẳng vào "end". Các node đọc ("knowledge_search", "web_search", "data_query") chỉ nạp bằng chứng, nối \
 tiếp nhau trên một đường; MỘT node "agent_llm" đứng sau tất cả node đọc để trả lời — không vẽ một \
@@ -420,9 +425,7 @@ def _repaired(document: dict[str, Any]) -> dict[str, Any]:
     return document if edges is None else {**document, "edges": edges}
 
 
-def _nodes_out_of_the_edge_list(
-    nodes: list[Any], edges: Any
-) -> tuple[list[Any], list[Any] | None]:
+def _nodes_out_of_the_edge_list(nodes: list[Any], edges: Any) -> tuple[list[Any], list[Any] | None]:
     """A node the model wrote into `"edges"` moved back into `"nodes"` — the second shorthand.
 
     Measured 2026-08-30 on the 13-node reminder-letter graph: three separate
@@ -667,13 +670,29 @@ def _collected(graph: WorkflowJSON, required_from_user: frozenset[str]) -> Workf
     start = graph.start_node_id
     for node in exposed:
         collector_id = _fresh(f"thu_thap_{node.id}")
-        new_nodes.append(NodeInstance(id=collector_id, type=NodeType.COLLECT, config={"action_node": node.id, "agent_writes": []}))
+        new_nodes.append(
+            NodeInstance(id=collector_id, type=NodeType.COLLECT, config={"action_node": node.id, "agent_writes": []})
+        )
         edges = [
             edge.model_copy(update={"target_node_id": collector_id}) if edge.target_node_id == node.id else edge
             for edge in edges
         ]
-        edges.append(Edge(id=_fresh(f"{collector_id}_complete"), source_node_id=collector_id, source_port="complete", target_node_id=node.id))
-        edges.append(Edge(id=_fresh(f"{collector_id}_incomplete"), source_node_id=collector_id, source_port="incomplete", target_node_id=end.id))
+        edges.append(
+            Edge(
+                id=_fresh(f"{collector_id}_complete"),
+                source_node_id=collector_id,
+                source_port="complete",
+                target_node_id=node.id,
+            )
+        )
+        edges.append(
+            Edge(
+                id=_fresh(f"{collector_id}_incomplete"),
+                source_node_id=collector_id,
+                source_port="incomplete",
+                target_node_id=end.id,
+            )
+        )
         if start == node.id:
             start = collector_id
     return graph.model_copy(update={"start_node_id": start, "nodes": [*graph.nodes, *new_nodes], "edges": edges})
@@ -700,7 +719,9 @@ def _relocated_collectors(graph: WorkflowJSON) -> WorkflowJSON:
         target = nodes.get(target_id)
         if target is None or target.type is not NodeType.MCP:
             continue
-        complete = next((e for e in graph.edges if e.source_node_id == collector.id and e.source_port == "complete"), None)
+        complete = next(
+            (e for e in graph.edges if e.source_node_id == collector.id and e.source_port == "complete"), None
+        )
         if complete is None or complete.target_node_id == target_id:
             continue  # already directly in front of its action
         successor = complete.target_node_id
@@ -820,7 +841,9 @@ def _rejected_for(
 #: true`, *"Kết quả node check_complete là 'Đủ'"*), and every one of them is a
 #: sentence the run-time router (`_condition_holds`) cannot decide, because it
 #: is shown the question, the last answer and the evidence — never node ids.
-_CODE_CONDITION = re.compile(r"==|!=|\.found\b|\.done\b|\btrue\b|\bfalse\b|\bnull\b|kết quả node|\bnode\b", re.IGNORECASE)
+_CODE_CONDITION = re.compile(
+    r"==|!=|\.found\b|\.done\b|\btrue\b|\bfalse\b|\bnull\b|kết quả node|\bnode\b", re.IGNORECASE
+)
 
 
 def _shape_complaints(
@@ -863,7 +886,8 @@ def _shape_complaints(
                     f"Node {node.id!r} có condition viết kiểu mã hoặc nhắc tên node ({condition[:80]!r}); "
                     "viết lại thành một câu nghiệp vụ về điều node trước nó vừa kết luận"
                 )
-    has_mcp = any(node.type is NodeType.MCP for node in graph.nodes)
+    # A `data_write` is as much something to approve as an `mcp` WRITE (ADR-0094).
+    has_mcp = any(node.type in (NodeType.MCP, NodeType.DATA_WRITE) for node in graph.nodes)
     if not has_mcp and any(node.type is NodeType.HUMAN_APPROVAL for node in graph.nodes):
         complaints.append("Graph có human_approval nhưng không có node mcp nào để duyệt; hãy bỏ node duyệt")
     for edge in graph.edges:
@@ -985,6 +1009,7 @@ def _shape_complaints(
     types_present = {node.type for node in graph.nodes}
     only_reads = not types_present & {
         NodeType.MCP,
+        NodeType.DATA_WRITE,
         NodeType.COLLECT,
         NodeType.IF_ELSE,
         NodeType.WHILE,
@@ -1029,7 +1054,9 @@ def _shape_complaints(
     web_sources = sum(1 for source in spec.data if source.kind is DataSourceKind.WEB)
     web_nodes = sum(1 for node in graph.nodes if node.type is NodeType.WEB_SEARCH)
     if web_sources and web_nodes > web_sources:
-        complaints.append(f"Graph có {web_nodes} node web_search cho {web_sources} nguồn web; mỗi nguồn web đúng một node")
+        complaints.append(
+            f"Graph có {web_nodes} node web_search cho {web_sources} nguồn web; mỗi nguồn web đúng một node"
+        )
     file_sources = sum(1 for source in spec.data if source.kind is DataSourceKind.UPLOADED_FILE)
     file_nodes = sum(1 for node in graph.nodes if node.type is NodeType.KNOWLEDGE_SEARCH)
     if file_sources and file_nodes > file_sources:
@@ -1048,9 +1075,18 @@ def _shape_complaints(
     database_sources = sum(1 for source in spec.data if source.kind is DataSourceKind.DATABASE)
     query_nodes = sum(1 for node in graph.nodes if node.type is NodeType.DATA_QUERY)
     if database_sources and not query_nodes:
-        complaints.append("Bài toán đọc dữ liệu nghiệp vụ từ Hệ CSDL nhưng graph không có node data_query nào để đọc nó")
+        complaints.append(
+            "Bài toán đọc dữ liệu nghiệp vụ từ Hệ CSDL nhưng graph không có node data_query nào để đọc nó"
+        )
     if not database_sources and query_nodes:
         complaints.append("Bài toán không có Hệ CSDL nào; bỏ node data_query")
+    write_nodes = sum(1 for node in graph.nodes if node.type is NodeType.DATA_WRITE)
+    if not database_sources and write_nodes:
+        complaints.append("Bài toán không có Hệ CSDL nào; bỏ node data_write")
+    if database_sources and write_nodes > database_sources:
+        complaints.append(
+            f"Graph có {write_nodes} node data_write cho {database_sources} Hệ CSDL; mỗi Hệ CSDL nhiều nhất một node ghi"
+        )
     if database_sources and query_nodes > database_sources:
         complaints.append(
             f"Graph có {query_nodes} node data_query cho {database_sources} Hệ CSDL; mỗi Hệ CSDL đúng một node"
@@ -1071,7 +1107,8 @@ def _shape_complaints(
         offenders = [
             node.id
             for node in graph.nodes
-            if node.id in body and node.type in (NodeType.MCP, NodeType.COLLECT, NodeType.HUMAN_APPROVAL)
+            if node.id in body
+            and node.type in (NodeType.MCP, NodeType.DATA_WRITE, NodeType.COLLECT, NodeType.HUMAN_APPROVAL)
         ]
         if offenders:
             complaints.append(
@@ -1184,20 +1221,45 @@ _ACTION_WORDS: dict[str, tuple[str, ...]] = {
     "event": ("sự kiện", "lịch", "event"),
     "message": ("tin nhắn", "message", "thư"),
 }
-_GENERIC_VERBS: frozenset[str] = frozenset({"create", "send", "get", "search", "read", "fetch", "list", "update", "delete", "add", "new"})
+_GENERIC_VERBS: frozenset[str] = frozenset(
+    {"create", "send", "get", "search", "read", "fetch", "list", "update", "delete", "add", "new"}
+)
 
 #: The built-in **read** actions, keyed by (connection, action), with the words a
 #: creator uses when the agent is meant to read that account. Offered only when
 #: one appears; a read that is merely *available* is a read the composer bends
 #: to some other purpose.
 _READ_ACTION_WORDS: dict[tuple[str, str], tuple[str, ...]] = {
-    ("gmail", "search_emails"): ("tìm thư", "tìm email", "tìm mail", "tra thư", "tra email", "lọc thư", "tìm trong hộp thư"),
+    ("gmail", "search_emails"): (
+        "tìm thư",
+        "tìm email",
+        "tìm mail",
+        "tra thư",
+        "tra email",
+        "lọc thư",
+        "tìm trong hộp thư",
+    ),
     ("gmail", "get_recent_emails"): ("thư gần", "thư mới", "hộp thư đến", "inbox", "email gần", "mail gần", "thư vừa"),
     ("gmail", "read_email"): ("đọc thư", "đọc email", "đọc mail", "đọc nội dung thư", "đọc nội dung email"),
     ("gmail", "get_profile"): ("tài khoản nào", "địa chỉ của mình", "profile", "hộp thư của ai"),
-    ("google_drive", "search"): ("tìm tệp", "tìm file", "tìm tài liệu", "tìm trong drive", "tìm trên drive", "tra trên drive"),
+    ("google_drive", "search"): (
+        "tìm tệp",
+        "tìm file",
+        "tìm tài liệu",
+        "tìm trong drive",
+        "tìm trên drive",
+        "tra trên drive",
+    ),
     ("google_drive", "recent_documents"): ("tệp gần", "file gần", "tài liệu gần", "sửa gần", "mới sửa", "gần đây"),
-    ("google_drive", "fetch"): ("đọc tệp", "đọc file", "đọc tài liệu", "nội dung tệp", "nội dung file", "mở tài liệu", "đọc từ drive"),
+    ("google_drive", "fetch"): (
+        "đọc tệp",
+        "đọc file",
+        "đọc tài liệu",
+        "nội dung tệp",
+        "nội dung file",
+        "mở tài liệu",
+        "đọc từ drive",
+    ),
     ("google_drive", "get_profile"): ("tài khoản nào", "drive của ai", "profile"),
 }
 

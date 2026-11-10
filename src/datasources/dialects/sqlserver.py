@@ -58,6 +58,7 @@ from src.datasources.dialects.base import (
     QueryRequest,
     QueryRows,
     ViewInfo,
+    WriteRequest,
     pin_address,
 )
 from src.datasources.dialects.sql import select_for, source_table
@@ -297,6 +298,11 @@ class SqlServerDialect:
                         continue
                     counts[schema, view] = int(row[0]) if row else 0
         return counts
+
+    def run_write(self, dsn: str, request: WriteRequest, *, trusted_hosts: frozenset[str]) -> int:
+        """Not yet (ADR-0094): every connection here is read-only at the session, and stays so until a write
+        path is built and tested against this engine. Refused before anything is dialled."""
+        raise DatabaseProbeError(ProbeFailure.WRITE_UNSUPPORTED)
 
     @contextmanager
     def _reading(

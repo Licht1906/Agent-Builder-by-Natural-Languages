@@ -34,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class NodeType(StrEnum):
-    """The eight ADR-0021 fixed for the MVP, plus `collect` (ADR-0052) and `data_query` (ADR-0059 §5).
+    """The eight ADR-0021 fixed for the MVP, plus `collect` (ADR-0052), `data_query` (ADR-0059 §5) and `data_write` (ADR-0094).
 
     Written snake_case on the wire like every other enum in the platform, rather
     than the `AgentLlm` spelling the ADRs use in prose — a stored document and a
@@ -47,6 +47,7 @@ class NodeType(StrEnum):
     END = "end"
     KNOWLEDGE_SEARCH = "knowledge_search"
     DATA_QUERY = "data_query"
+    DATA_WRITE = "data_write"
     MCP = "mcp"
     WEB_SEARCH = "web_search"
     IF_ELSE = "if_else"
@@ -222,6 +223,38 @@ class DataQueryConfig(NodeConfig):
     )
 
 
+#: A `data_write` node's ceiling on the rows one write may change when nobody chose one.
+DEFAULT_MAX_WRITE_ROWS = 20
+
+
+class DataWriteConfig(NodeConfig):
+    """Which Hệ CSDL this node changes, which of its base tables, and at most how many rows a write — ADR-0094.
+
+    `data_query`'s twin for the other direction, and never a part of it: a
+    node that reads is never also a node that writes, so the canvas shows
+    where a change can happen. Both references are `RESOURCE_REF`, picked by
+    a person; `tables` must stay inside the Hệ CSDL's tables ticked for
+    writing — checked at confirm time and again on every write. **Every write
+    needs a person's approval of its exact payload**: the validator refuses a
+    graph with a path to this node that skips a `human_approval`, and the
+    node refuses a write nobody approved.
+    """
+
+    source_id: str = Field(default="", description="Id của Hệ CSDL node này ghi", json_schema_extra=RESOURCE_REF)
+    tables: list[str] = Field(
+        default_factory=list,
+        description="Các bảng gốc node này được thêm/sửa/xoá — trong số bảng đã tick cho phép ghi",
+        json_schema_extra=RESOURCE_REF,
+    )
+    max_rows: int = Field(
+        default=DEFAULT_MAX_WRITE_ROWS,
+        ge=1,
+        le=500,
+        description="Trần số dòng một lần ghi được đổi — vượt là huỷ cả lần ghi",
+        json_schema_extra=OPTIONAL,
+    )
+
+
 class McpApproval(StrEnum):
     """Whether this node insists on a person, over and above what the platform worked out.
 
@@ -300,8 +333,7 @@ class McpConfig(NodeConfig):
     action_mode: McpActionMode = Field(
         default=McpActionMode.SINGLE,
         description=(
-            "'single': node gọi đúng action đã chọn. "
-            "'full': model tự chọn trong số các action được phép của kết nối"
+            "'single': node gọi đúng action đã chọn. 'full': model tự chọn trong số các action được phép của kết nối"
         ),
         # `OPTIONAL` for `require_approval`'s reason: every MCP node stored
         # before this field existed simply has no key for it, and absent means
@@ -465,6 +497,7 @@ NODE_REGISTRY: dict[NodeType, NodeTypeSpec] = {
     NodeType.END: NodeTypeSpec(NodeType.END, EndConfig, ()),
     NodeType.KNOWLEDGE_SEARCH: NodeTypeSpec(NodeType.KNOWLEDGE_SEARCH, KnowledgeSearchConfig, ("found",)),
     NodeType.DATA_QUERY: NodeTypeSpec(NodeType.DATA_QUERY, DataQueryConfig, ("done",)),
+    NodeType.DATA_WRITE: NodeTypeSpec(NodeType.DATA_WRITE, DataWriteConfig, ("done",)),
     NodeType.COLLECT: NodeTypeSpec(NodeType.COLLECT, CollectConfig, ("complete", "incomplete")),
     NodeType.MCP: NodeTypeSpec(NodeType.MCP, McpConfig, ("done",)),
     NodeType.WEB_SEARCH: NodeTypeSpec(NodeType.WEB_SEARCH, WebSearchConfig, ("done",)),
@@ -503,9 +536,7 @@ def unfilled_fields(node_type: NodeType, config: dict[str, Any]) -> tuple[str, .
     graph that is complete.
     """
     fields = config_model_of(node_type).model_fields
-    waiting = tuple(
-        name for name in fields if not is_optional_field(node_type, name) and _is_blank(config.get(name))
-    )
+    waiting = tuple(name for name in fields if not is_optional_field(node_type, name) and _is_blank(config.get(name)))
     return tuple(name for name in waiting if name not in _answered_by_another_field(node_type, config))
 
 

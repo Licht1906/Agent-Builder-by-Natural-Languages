@@ -1,6 +1,7 @@
-"""A checked structured query as a SQLAlchemy Core statement — the engine-free half of compiling one.
+"""A checked structured query or write as a SQLAlchemy Core statement — the engine-free half of compiling one.
 
-Every dialect compiles the same `Select` with its own SQLAlchemy dialect
+Every dialect compiles the same `Select` (and, for a `data_write`, the same
+`Insert`/`Update`/`Delete`) with its own SQLAlchemy dialect
 (`postgresql`, `mssql`, `mysql`), so the rules live here once:
 
 - **Values are bind parameters, always.** Nothing a model wrote becomes SQL
@@ -17,11 +18,12 @@ Every dialect compiles the same `Select` with its own SQLAlchemy dialect
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import Unicode, and_, cast, column, func, select, table
+from sqlalchemy import Delete, Insert, Unicode, Update, and_, cast, column, delete, func, insert, select, table, update
 from sqlalchemy.sql import ColumnElement, Select, TableClause
 
-from src.datasources.dialects.base import QueryRequest
+from src.datasources.dialects.base import QueryRequest, WriteRequest
 from src.datasources.query import AggregateFn, FilterOp, QueryFilter, SortDir, returned_columns
+from src.datasources.write import WriteOp
 
 _AGGREGATES: dict[AggregateFn, Callable[..., ColumnElement[Any]]] = {
     AggregateFn.SUM: func.sum,
@@ -65,6 +67,26 @@ def select_for(request: QueryRequest, *, default_schema: str | None) -> Select[A
         target = labels[order.column] if order.column in labels else columns[order.column]
         statement = statement.order_by(target.desc() if order.dir is SortDir.DESC else target.asc())
     return statement.limit(request.limit)
+
+
+def write_statement(request: WriteRequest, *, default_schema: str | None) -> Insert | Update | Delete:
+    """The `INSERT`/`UPDATE`/`DELETE` `request` describes — values bound, the asker's scope always in it (ADR-0094).
+
+    An insert carries the scope as values, so the row it creates is one the
+    asker could read back; an update and a delete AND it beside the write's
+    own `where`. Whether the write's values *contradict* the scope (moving a
+    row to another rep) is the reader's refusal, decided before this runs.
+    """
+    write = request.write
+    target = source_table(write.table, request.table_columns, default_schema=default_schema)
+    columns = target.c
+    if write.operation is WriteOp.INSERT:
+        return insert(target).values({**write.values, **dict(request.scope)})
+    conditions = [columns[match.column] == match.value for match in write.where]
+    conditions.extend(columns[column_name] == value for column_name, value in request.scope)
+    if write.operation is WriteOp.UPDATE:
+        return update(target).where(and_(*conditions)).values(dict(write.values))
+    return delete(target).where(and_(*conditions))
 
 
 def _condition(target: ColumnElement[Any], item: QueryFilter) -> ColumnElement[bool]:

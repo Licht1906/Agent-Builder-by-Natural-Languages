@@ -432,8 +432,8 @@ export default function BuilderPage({ agent, versionId, setVersionId, notify }) 
   };
 
   const selectedNode = draft ? draft.workflow.nodes.find((node) => node.id === selectedId) || null : null;
-  // A graph that reads a Hệ CSDL is one a trial or an eval case has to ask as somebody (DS-05).
-  const readsDatabase = Boolean(draft) && draft.workflow.nodes.some((node) => node.type === "data_query");
+  // A graph that reads or writes a Hệ CSDL is one a trial or an eval case has to ask as somebody (DS-05, ADR-0094).
+  const readsDatabase = Boolean(draft) && draft.workflow.nodes.some((node) => node.type === "data_query" || node.type === "data_write");
   const selectedSchema = selectedNode && nodeTypes[selectedNode.type] ? nodeTypes[selectedNode.type].config_schema : null;
 
   /* Any click on the canvas — node or background — settles what the floating

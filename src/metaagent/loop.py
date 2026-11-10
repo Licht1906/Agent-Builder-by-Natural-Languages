@@ -211,6 +211,11 @@ on the draft in front of you.
    ("overdue more than 30 days") is the query's filter, not an `if_else`.
    Reading a database and then sending something out is
    `collect → data_query → agent_llm → human_approval → mcp → agent_llm → end`.
+   Changing rows in a database (a note, a status, a promised date; adding or
+   removing a row) is one `data_write` node per source, ALWAYS right behind a
+   `human_approval` and continuing only from `approved` — the platform binds
+   the database, its writable tables and the asker's scope:
+   `collect → data_query → human_approval → data_write → agent_llm → end`.
    A `(read-only)` action needs no `human_approval`; a `(WRITE,
    risk high)` action MUST have a `human_approval` right before it, continuing
    only from `approved`; medium risk should.

@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.datasources.access import (
+    WRITE_DENIED,
     AccessRules,
     Deny,
     DenyCause,
@@ -28,6 +29,7 @@ from src.datasources.access import (
     Scope,
     access_problems,
     scope_for,
+    scope_for_write,
 )
 from src.datasources.dialects import (
     ColumnRef,
@@ -38,6 +40,7 @@ from src.datasources.dialects import (
     dialect_for,
     schema_problems,
 )
+from src.datasources.write import WriteOp
 from src.db.models import Agent, AgentVersion, DatabaseDialect, DatabaseSource, DatabaseSourceStatus
 from src.models.node_registry import NodeType
 from src.models.solution_spec import AgentSolutionSpecification, DataSourceKind
@@ -46,6 +49,10 @@ from src.services.secret_store import SecretNotFoundError, SecretStore, SecretUn
 
 class AllowedViewsError(ValueError):
     """The views a creator ticked are not all views the last probe saw — one sentence per name, joined."""
+
+
+class AllowedWriteTablesError(ValueError):
+    """The tables a creator ticked for writing are not all base tables the last probe saw columns for."""
 
 
 class ColumnNotReadableError(ValueError):
@@ -134,6 +141,28 @@ def set_allowed_views(db: Session, source: DatabaseSource, views: Sequence[str])
     return _persist(db, source)
 
 
+def set_allowed_write_tables(db: Session, source: DatabaseSource, tables: Sequence[str]) -> DatabaseSource:
+    """Keep the base tables a creator ticked for a `data_write` node to change (ADR-0094).
+
+    Checked against the snapshot like `set_allowed_views`: only a base table
+    the last probe listed *with its columns* — an engine that cannot write yet
+    lists none, so nothing on it can be ticked. A view is refused here as a
+    table is refused for reading: the two lists never borrow from each other.
+    """
+    if not source.view_columns and not source.base_tables:
+        raise AllowedWriteTablesError("Kiểm tra kết nối trước để thấy danh sách bảng rồi mới chọn")
+    problems = []
+    for table in tables:
+        if table in source.view_columns:
+            problems.append(f"{table} là view, không phải bảng gốc — chỉ bảng gốc mới được ghi")
+        elif table not in source.table_columns:
+            problems.append(f"không có bảng {table} (hoặc loại CSDL này chưa hỗ trợ ghi)")
+    if problems:
+        raise AllowedWriteTablesError("; ".join(problems))
+    source.allowed_write_tables = list(dict.fromkeys(tables))
+    return _persist(db, source)
+
+
 def delete_database_source(db: Session, source: DatabaseSource, *, secret_store: SecretStore) -> None:
     """Remove `source` and its DSN — refused while any agent's spec still names it."""
     using = _agents_reading_from(db, source)
@@ -172,7 +201,11 @@ def snapshot_of(source: DatabaseSource) -> Introspection:
         ViewInfo(name=name, columns=tuple(columns), row_count=source.view_row_counts.get(name))
         for name, columns in source.view_columns.items()
     )
-    return Introspection(views=views, base_tables=tuple(source.base_tables))
+    return Introspection(
+        views=views,
+        base_tables=tuple(source.base_tables),
+        table_columns={name: tuple(columns) for name, columns in (source.table_columns or {}).items()},
+    )
 
 
 def access_rules_of(source: DatabaseSource) -> AccessRules | None:
@@ -212,6 +245,28 @@ def scope_on(source: DatabaseSource, principal: Principal | None, view: str) -> 
     return scope_for(rules, principal, view)
 
 
+def scope_on_write(source: DatabaseSource, principal: Principal | None, table: str, operation: WriteOp) -> Scope:
+    """`scope_on` for a write (ADR-0094): what rows of `table` `principal` may change by `operation`. Deny by default."""
+    closed = closed_write_deny(source, table)
+    if closed is not None:
+        return closed
+    rules = access_rules_of(source)
+    assert rules is not None  # `closed_write_deny` denies a source without rules
+    return scope_for_write(rules, principal, table, operation)
+
+
+def closed_write_deny(source: DatabaseSource, table: str) -> Deny | None:
+    """`closed_deny` for a table: no rules, rules out of step, or a table not ticked for writing."""
+    rules = access_rules_of(source)
+    if rules is None:
+        return Deny(cause=DenyCause.NO_RULES, reason=WRITE_DENIED)
+    if _problems_with(source, rules):
+        return Deny(cause=DenyCause.RULES_OUT_OF_DATE, reason=WRITE_DENIED)
+    if table not in source.allowed_write_tables:
+        return Deny(cause=DenyCause.TABLE_NOT_ALLOWED, reason=WRITE_DENIED)
+    return None
+
+
 def closed_deny(source: DatabaseSource, view: str) -> Deny | None:
     """The `Deny` `scope_on` gives before it ever looks at an asker — or `None` if `view` is open to rules at all.
 
@@ -221,7 +276,7 @@ def closed_deny(source: DatabaseSource, view: str) -> Deny | None:
     rules = access_rules_of(source)
     if rules is None:
         return Deny(cause=DenyCause.NO_RULES)
-    if _problems_with(source, rules):
+    if _read_problems_with(source, rules):
         return Deny(cause=DenyCause.RULES_OUT_OF_DATE)
     if view not in source.allowed_views:
         return Deny(cause=DenyCause.VIEW_NOT_ALLOWED)
@@ -292,9 +347,19 @@ def views_built_on(db: Session, owner_id: int, workflow: dict[str, Any] | None) 
     return schema
 
 
+def _read_problems_with(source: DatabaseSource, rules: AccessRules) -> list[str]:
+    """`_problems_with` minus the `tables` grants — what closes *reading*. A write table unticked closes writing only."""
+    return access_problems(rules, allowed_views=source.allowed_views, snapshot=snapshot_of(source))
+
+
 def _problems_with(source: DatabaseSource, rules: AccessRules) -> list[str]:
     """`access_problems` against this row's ticked views and last probe — the one way the check is asked."""
-    return access_problems(rules, allowed_views=source.allowed_views, snapshot=snapshot_of(source))
+    return access_problems(
+        rules,
+        allowed_views=source.allowed_views,
+        snapshot=snapshot_of(source),
+        allowed_tables=source.allowed_write_tables or [],
+    )
 
 
 def dsn_of(source: DatabaseSource, secret_store: SecretStore) -> str:
@@ -320,12 +385,22 @@ def _keep_snapshot(source: DatabaseSource, found: Introspection) -> None:
     source.view_columns = {view.name: list(view.columns) for view in found.views}
     source.view_row_counts = {view.name: view.row_count for view in found.views if view.row_count is not None}
     source.base_tables = list(found.base_tables)
+    source.table_columns = {name: list(columns) for name, columns in found.table_columns.items()}
     still_views = [name for name in source.allowed_views if name in source.view_columns]
     dropped = [name for name in source.allowed_views if name not in source.view_columns]
     source.allowed_views = still_views
+    # A table ticked for writing that the probe no longer lists with columns —
+    # dropped, turned into a view, or an engine that cannot write — is unticked
+    # the same way, and said the same way.
+    written = source.allowed_write_tables or []
+    still_tables = [name for name in written if name in source.table_columns]
+    dropped_tables = [name for name in written if name not in source.table_columns]
+    source.allowed_write_tables = still_tables
     detail = f"Kết nối thành công — {len(found.views)} view"
     if dropped:
         detail += f"; đã bỏ chọn {', '.join(dropped)} vì không còn là view"
+    if dropped_tables:
+        detail += f"; đã bỏ quyền ghi {', '.join(dropped_tables)} vì không còn là bảng gốc"
     _apply(source, DatabaseSourceStatus.CONNECTED, reason=None, detail=detail)
 
 
@@ -349,7 +424,7 @@ def _agents_reading_from(db: Session, source: DatabaseSource) -> list[str]:
     """The names of `source`'s owner's agents with any version whose spec has a `database` source naming it.
 
     Two places name one: a spec's `database` source `ref`, and a `data_query`
-    node's `source_id` (DS-04). The spec is read off the stored JSON rather
+    or `data_write` node's `source_id` (DS-04, ADR-0094). The spec is read off the stored JSON rather
     than `AgentSolutionSpecification` — a version mid-interview holds a
     partial spec that would not validate, and it still names this source.
     """
@@ -377,7 +452,7 @@ def _names_source(spec: dict[str, Any] | None, workflow: dict[str, Any] | None, 
         return True
     return any(
         isinstance(node, dict)
-        and node.get("type") == NodeType.DATA_QUERY
+        and node.get("type") in (NodeType.DATA_QUERY, NodeType.DATA_WRITE)
         and isinstance(node.get("config"), dict)
         and str(node["config"].get("source_id", "")) == ref
         for node in (workflow or {}).get("nodes", [])

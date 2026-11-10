@@ -200,3 +200,70 @@ describe("the access rules editor", () => {
     });
   });
 });
+
+describe("the write grants (ADR-0094)", () => {
+  const writable = {
+    ...source,
+    allowed_write_tables: ["ar_notes"],
+    tables: [{ name: "ar_notes", columns: ["id", "customer_id", "sales_rep_id", "note"], writable: true }],
+  };
+  const drawWritable = () => render(<LanguageProvider><AccessRulesEditor source={writable} notify={notify} /></LanguageProvider>);
+
+  it("shows no write matrix on a source with no table ticked for writing", async () => {
+    draw();
+    await waitFor(() => expect(cell("Kế toán trưởng", "v_ar_open")).toBeInTheDocument());
+
+    expect(screen.queryByText(/Who may change what|Ai được thay đổi gì/)).toBeNull();
+  });
+
+  it("saves a write grant as operations on the asker's own rows", async () => {
+    const actor = userEvent.setup();
+    drawWritable();
+    await waitFor(() => expect(cell("Kế toán trưởng", "v_ar_open")).toBeInTheDocument());
+
+    await actor.click(screen.getByLabelText("Nhân viên KD — ar_notes — Add"));
+    await actor.click(screen.getByLabelText("Nhân viên KD — ar_notes — Edit"));
+    const filter = screen.getByTestId("write-where-Nhân viên KD-ar_notes");
+    await actor.selectOptions(within(filter).getByLabelText(/Table column/), "sales_rep_id");
+    await actor.selectOptions(within(filter).getByLabelText(/Asker attribute/), "employee_code");
+    await actor.click(screen.getByRole("button", { name: /Save access rules/ }));
+
+    await waitFor(() => expect(api.databaseSources.saveAccessRules).toHaveBeenCalledTimes(1));
+    const [, saved] = api.databaseSources.saveAccessRules.mock.calls[0];
+    expect(saved.rules[0]).toEqual({
+      position: "Nhân viên KD",
+      views: { v_ar_open: { where: { sales_rep_id: "employee_code" } } },
+      tables: { ar_notes: { operations: ["insert", "update"], where: { sales_rep_id: "employee_code" } } },
+    });
+    expect(saved.rules[1]).toEqual({ position: "Kế toán trưởng", views: { v_ar_open: "all" } });
+  });
+
+  it("will not save a write grant with no complete condition", async () => {
+    const actor = userEvent.setup();
+    drawWritable();
+    await waitFor(() => expect(cell("Kế toán trưởng", "v_ar_open")).toBeInTheDocument());
+
+    await actor.click(screen.getByLabelText("Kế toán trưởng — ar_notes — Delete"));
+    await actor.click(screen.getByRole("button", { name: /Save access rules/ }));
+
+    expect(api.databaseSources.saveAccessRules).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Kế toán trưởng — ar_notes/)).toBeInTheDocument();
+  });
+
+  it("saves every row when chosen, and reads it back", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.accessRules.mockResolvedValue({
+      rules: { ...SAVED, rules: [{ position: "Kế toán trưởng", tables: { ar_notes: { operations: ["delete"], all_rows: true } } }] },
+      problems: [],
+    });
+    drawWritable();
+
+    await waitFor(() => expect(screen.getByLabelText("Kế toán trưởng — ar_notes — Delete")).toBeChecked());
+    expect(screen.getByLabelText("Kế toán trưởng — ar_notes — Rows")).toHaveValue("all");
+    await actor.click(screen.getByRole("button", { name: /Save access rules/ }));
+
+    await waitFor(() => expect(api.databaseSources.saveAccessRules).toHaveBeenCalledTimes(1));
+    const [, saved] = api.databaseSources.saveAccessRules.mock.calls[0];
+    expect(saved.rules).toEqual([{ position: "Kế toán trưởng", views: {}, tables: { ar_notes: { operations: ["delete"], all_rows: true } } }]);
+  });
+});

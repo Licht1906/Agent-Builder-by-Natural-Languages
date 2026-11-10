@@ -332,13 +332,24 @@ class DatabaseSourceCreateRequest(BaseModel):
 
 
 class DatabaseSourceUpdateRequest(BaseModel):
-    """Any of a name, a new DSN, or the ticked views. `None` leaves that part alone."""
+    """Any of a name, a new DSN, the ticked views, or the tables ticked for writing. `None` leaves that part alone."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1)
     dsn: str | None = Field(default=None, min_length=1, description="DSN mới — thay DSN cũ trong secret store")
     allowed_views: list[str] | None = Field(default=None, description="Các view agent được phép đọc")
+    allowed_write_tables: list[str] | None = Field(
+        default=None, description="Các bảng gốc agent được phép ghi (thêm/sửa/xoá) — mọi lần ghi đều cần người duyệt"
+    )
+
+
+class DatabaseTableResponse(BaseModel):
+    """One base table the last probe saw with its columns, and whether the creator ticked it for writing (ADR-0094)."""
+
+    name: str
+    columns: list[str]
+    writable: bool
 
 
 class DatabaseViewResponse(BaseModel):
@@ -369,7 +380,11 @@ class DatabaseSourceResponse(BaseModel):
     last_probed_at: UtcTimestamp | None = None
     allowed_views: list[str]
     views: list[DatabaseViewResponse] = Field(..., description="Các view lần kiểm tra gần nhất thấy")
-    base_tables: list[str] = Field(..., description="Bảng gốc lần kiểm tra gần nhất thấy — không chọn được")
+    base_tables: list[str] = Field(..., description="Bảng gốc lần kiểm tra gần nhất thấy — không đọc trực tiếp được")
+    allowed_write_tables: list[str] = Field(default_factory=list, description="Các bảng gốc agent được phép ghi")
+    tables: list[DatabaseTableResponse] = Field(
+        default_factory=list, description="Bảng gốc kèm cột — rỗng với loại CSDL chưa hỗ trợ ghi"
+    )
     created_at: UtcTimestamp
 
 
@@ -391,14 +406,18 @@ class AccessRulesDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     description: str = Field(..., min_length=1, max_length=4000, description="Người tạo mô tả ai được xem gì")
-    identity: Identity = Field(..., description="Phần identity đang có trên form — view nhân viên, cột khớp, thuộc tính")
+    identity: Identity = Field(
+        ..., description="Phần identity đang có trên form — view nhân viên, cột khớp, thuộc tính"
+    )
 
 
 class AccessRulesDraftResponse(BaseModel):
     """A draft for the DS-03 form to show — **not saved**. `dropped` names everything cut out to make it fit."""
 
     rules: AccessRules
-    dropped: list[str] = Field(..., description="Chức vụ, view, cột hay thuộc tính model nhắc tới mà không có — đã loại")
+    dropped: list[str] = Field(
+        ..., description="Chức vụ, view, cột hay thuộc tính model nhắc tới mà không có — đã loại"
+    )
     problems: list[str] = Field(..., description="Chỗ nháp còn không khớp Hệ CSDL; rỗng khi lưu được ngay")
 
 
@@ -406,7 +425,6 @@ class DistinctValuesResponse(BaseModel):
     """The distinct values of one column — the positions the access form offers (DS-03)."""
 
     values: list[Any]
-
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -806,7 +824,6 @@ class ApprovalActionResponse(BaseModel):
     hash: str = Field(..., description="Hash chuẩn hoá của payload đã hiển thị")
 
 
-
 class AuditEventResponse(BaseModel):
     """One link of the audit chain, as an admin reads it — DS-10. Never row content."""
 
@@ -819,7 +836,9 @@ class AuditEventResponse(BaseModel):
     trace_id: str
     run_id: str
     node_id: str
-    details: dict[str, Any] = Field(..., description="Người hỏi, Hệ CSDL, view, phạm vi, số dòng — hoặc hash payload, người duyệt, kết quả")
+    details: dict[str, Any] = Field(
+        ..., description="Người hỏi, Hệ CSDL, view, phạm vi, số dòng — hoặc hash payload, người duyệt, kết quả"
+    )
     prev_hash: str
     entry_hash: str
 
@@ -831,6 +850,7 @@ class AuditChainVerdictResponse(BaseModel):
     checked: int = Field(..., description="Số bản ghi còn nguyên trước chỗ đứt (hoặc cả chuỗi)")
     broken_at: int | None = Field(default=None, description="seq đầu tiên chuỗi không còn đúng")
     reason: str | None = None
+
 
 class ThreadHistoryResponse(BaseModel):
     """A thread read back for tracing — empty `turns` for a thread never used."""
@@ -1223,7 +1243,9 @@ class EvalCaseResponse(BaseModel):
     zone: str | None = Field(default=None, description="Di sản lưới tình huống (ADR-0065) — chỉ hàng cũ mới có")
     created_at: UtcTimestamp
     updated_at: UtcTimestamp
-    retired_in_version_id: int | None = Field(default=None, description="Version đã retire case này (EV-05); null = còn trong suite")
+    retired_in_version_id: int | None = Field(
+        default=None, description="Version đã retire case này (EV-05); null = còn trong suite"
+    )
     retired_reason: str | None = None
     retired_failing_at_baseline: bool = False
     triage: "CaseTriageResponse | None" = Field(default=None, description="Lần người tạo đọc case rớt gần nhất (EV-05)")
@@ -1382,6 +1404,48 @@ class EvalSuiteBuildResponse(BaseModel):
     live_count: int = Field(..., description="Số case live của suite sau khi dựng")
     target: int
     retired: int = Field(default=0, description="Case hệ thống retire vì spec/graph của version này đã khác (EV-05)")
+
+
+class LibraryTemplateResponse(BaseModel):
+    """One template of the shared eval library, as the admin screen shows it (ADR-0093)."""
+
+    file: str = Field(..., description="File trong eval/library/ chứa template này")
+    id: str
+    tags: list[str]
+    applies_when: list[str]
+    input: str
+    criterion: str
+    expected_check: dict[str, Any]
+    category: str | None = None
+    run_as: str | None = None
+    used_by_cases: int = Field(0, description="Số case live trong các bộ đề đã dựng từ template này")
+
+
+class LibraryProblemResponse(BaseModel):
+    where: str
+    reason: str
+
+
+class EvalLibraryResponse(BaseModel):
+    """The whole library, and what a template may be written with."""
+
+    templates: list[LibraryTemplateResponse]
+    problems: list[LibraryProblemResponse] = Field(default_factory=list, description="Dòng không phải template")
+    files: list[str]
+    tags: list[str]
+    capabilities: list[str]
+    slots: dict[str, str | None] = Field(..., description="Slot → năng lực bảo đảm điền được (None = luôn điền)")
+    run_as: list[str]
+    categories: list[str]
+
+
+class LibraryTemplateWriteRequest(BaseModel):
+    """A template to add or to put in place of one. Validated by `src.evals.library_store.checked`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template: dict[str, Any]
+    file: str | None = Field(default=None, description="Chỉ khi thêm mới: file đích; bỏ trống = theo tag đầu tiên")
 
 
 class CassetteProblemResponse(BaseModel):

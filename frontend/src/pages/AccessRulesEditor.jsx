@@ -13,6 +13,11 @@ import { useLang } from "../i18n";
    cell — and `toRules` turns it into exactly the `access.yaml` model the API
    checks. "Deny" is never written down: a position whose every cell is deny
    has no rule, which is what deny-by-default means.
+
+   Writing (ADR-0094) is a second matrix over the tables ticked for writing:
+   which of add / edit / delete a position may do, and on which rows — the
+   same filter of `table column = asker attribute`, or every row. Nothing in
+   it is implied by the first matrix: seeing a view never grants changing it.
    ============================================================ */
 
 const POSITION = "position";
@@ -23,12 +28,19 @@ const GRANTS = [
   { id: "where", label: "Filter" },
 ];
 
+const OPERATIONS = [
+  { id: "insert", label: "Add" },
+  { id: "update", label: "Edit" },
+  { id: "delete", label: "Delete" },
+];
+
 const emptyDraft = (source) => ({
   view: source.allowed_views[0] || "",
   matchBy: "",
   attributes: [{ name: POSITION, column: "" }],
   positions: [],
   grants: {},
+  tableGrants: {},
 });
 
 /** The saved model → the editable draft. */
@@ -36,11 +48,25 @@ function draftOf(rules) {
   const grants = {};
   for (const rule of rules.rules) {
     grants[rule.position] = Object.fromEntries(
-      Object.entries(rule.views).map(([view, grant]) => [
+      // A rule that only writes comes back with no `views` at all (ADR-0094).
+      Object.entries(rule.views || {}).map(([view, grant]) => [
         view,
         grant === "all"
           ? { mode: "all", pairs: [] }
           : { mode: "where", pairs: Object.entries(grant.where).map(([column, attribute]) => ({ column, attribute })) },
+      ]),
+    );
+  }
+  const tableGrants = {};
+  for (const rule of rules.rules) {
+    tableGrants[rule.position] = Object.fromEntries(
+      Object.entries(rule.tables || {}).map(([table, grant]) => [
+        table,
+        {
+          ops: grant.operations,
+          mode: grant.all_rows ? "all" : "where",
+          pairs: Object.entries(grant.where || {}).map(([column, attribute]) => ({ column, attribute })),
+        },
       ]),
     );
   }
@@ -50,11 +76,22 @@ function draftOf(rules) {
     attributes: Object.entries(rules.identity.attributes).map(([name, column]) => ({ name, column })),
     positions: rules.rules.map((rule) => rule.position),
     grants,
+    tableGrants,
   };
 }
 
+/** One position's write grant on one table as the API's `TableGrant`, or `null` for none (no operation, or no complete filter). */
+function tableGrantOf(grant) {
+  if (!grant || grant.ops.length === 0) return null;
+  if (grant.mode === "all") return { operations: grant.ops, all_rows: true };
+  const where = Object.fromEntries(
+    grant.pairs.filter((pair) => pair.column && pair.attribute).map((pair) => [pair.column, pair.attribute]),
+  );
+  return Object.keys(where).length ? { operations: grant.ops, where } : null;
+}
+
 /** The draft → the `access.yaml` model. Deny cells and incomplete filter pairs are simply not written. */
-function toRules(draft, grantViews) {
+function toRules(draft, grantViews, grantTables = []) {
   const attributes = Object.fromEntries(
     draft.attributes.filter((row) => row.name.trim() && row.column).map((row) => [row.name.trim(), row.column]),
   );
@@ -71,22 +108,37 @@ function toRules(draft, grantViews) {
           if (Object.keys(where).length) views[view] = { where };
         }
       }
-      return { position, views };
+      const tables = {};
+      for (const table of grantTables) {
+        const grant = tableGrantOf(draft.tableGrants?.[position]?.[table]);
+        if (grant) tables[table] = grant;
+      }
+      return Object.keys(tables).length ? { position, views, tables } : { position, views };
     })
-    .filter((rule) => Object.keys(rule.views).length > 0);
+    .filter((rule) => Object.keys(rule.views).length > 0 || Object.keys(rule.tables || {}).length > 0);
   return { identity: { view: draft.view, match_by: draft.matchBy, attributes }, rules };
 }
 
-/** Every `[position, view]` set to Filter with no complete pair. `toRules` would drop it — a deny nobody chose. */
-function incompleteFilters(draft, grantViews) {
-  return draft.positions.flatMap((position) =>
+/** Every `[position, view or table]` set to Filter with no complete pair. `toRules` would drop it — a deny nobody chose. */
+function incompleteFilters(draft, grantViews, grantTables = []) {
+  const complete = (grant) => grant.pairs.some((pair) => pair.column && pair.attribute);
+  const views = draft.positions.flatMap((position) =>
     grantViews
       .filter((view) => {
         const grant = draft.grants[position]?.[view];
-        return grant?.mode === "where" && !grant.pairs.some((pair) => pair.column && pair.attribute);
+        return grant?.mode === "where" && !complete(grant);
       })
       .map((view) => [position, view]),
   );
+  const tables = draft.positions.flatMap((position) =>
+    grantTables
+      .filter((table) => {
+        const grant = draft.tableGrants?.[position]?.[table];
+        return grant && grant.ops.length > 0 && grant.mode === "where" && !complete(grant);
+      })
+      .map((table) => [position, table]),
+  );
+  return [...views, ...tables];
 }
 
 /** A refusal's problems, whichever of the API's two 422 shapes it came in. */
@@ -127,6 +179,8 @@ export default function AccessRulesEditor({ source, notify }) {
 
   const columnsOf = (view) => source.views.find((entry) => entry.name === view)?.columns || [];
   const grantViews = source.allowed_views.filter((view) => view !== draft.view);
+  const grantTables = source.allowed_write_tables || [];
+  const tableColumnsOf = (table) => (source.tables || []).find((entry) => entry.name === table)?.columns || [];
   const attributeNames = draft.attributes.map((row) => row.name.trim()).filter(Boolean);
   const positionColumn = draft.attributes.find((row) => row.name === POSITION)?.column;
   const edit = (fields) => setDraft((current) => ({ ...current, ...fields }));
@@ -135,6 +189,13 @@ export default function AccessRulesEditor({ source, notify }) {
     setDraft((current) => ({
       ...current,
       grants: { ...current.grants, [position]: { ...current.grants[position], [view]: grant } },
+    }));
+  }
+
+  function setTableGrant(position, table, grant) {
+    setDraft((current) => ({
+      ...current,
+      tableGrants: { ...current.tableGrants, [position]: { ...current.tableGrants?.[position], [table]: grant } },
     }));
   }
 
@@ -153,12 +214,14 @@ export default function AccessRulesEditor({ source, notify }) {
   async function suggest() {
     setDrafting(true);
     try {
-      const result = await api.databaseSources.draftAccessRules(source.id, description.trim(), toRules(draft, grantViews).identity);
+      const result = await api.databaseSources.draftAccessRules(source.id, description.trim(), toRules(draft, grantViews, grantTables).identity);
       const proposed = draftOf(result.rules);
       // Positions already on the form stay — a position the draft has no rule for is simply denied.
+      // The draft is about reading; write grants already on the form are kept as they are.
       setDraft((current) => ({
         ...proposed,
         positions: [...proposed.positions, ...current.positions.filter((position) => !proposed.positions.includes(position))],
+        tableGrants: current.tableGrants,
       }));
       setDropped(result.dropped || []);
       setProblems(result.problems || []);
@@ -173,7 +236,7 @@ export default function AccessRulesEditor({ source, notify }) {
   }
 
   async function save() {
-    const incomplete = incompleteFilters(draft, grantViews).map(([position, view]) =>
+    const incomplete = incompleteFilters(draft, grantViews, grantTables).map(([position, view]) =>
       t("{position} — {view}: the filter has no complete condition. Pick a view column and an asker attribute, or choose Deny.", { position, view }),
     );
     if (incomplete.length) {
@@ -182,7 +245,7 @@ export default function AccessRulesEditor({ source, notify }) {
     }
     setSaving(true);
     try {
-      const saved = await api.databaseSources.saveAccessRules(source.id, toRules(draft, grantViews));
+      const saved = await api.databaseSources.saveAccessRules(source.id, toRules(draft, grantViews, grantTables));
       setProblems(saved.problems || []);
       setYamlText(null);
       setDrafted(false);
@@ -207,7 +270,7 @@ export default function AccessRulesEditor({ source, notify }) {
 
   if (loading) return <Spinner size={14} />;
 
-  const nothingGranted = toRules(draft, grantViews).rules.length === 0;
+  const nothingGranted = toRules(draft, grantViews, grantTables).rules.length === 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -271,6 +334,22 @@ export default function AccessRulesEditor({ source, notify }) {
           />
         )}
       </div>
+
+      {grantTables.length > 0 && draft.positions.length > 0 && (
+        <div>
+          <strong style={{ fontSize: "var(--text-sm)", display: "block", marginBottom: 4 }}>{t("Who may change what")}</strong>
+          <p className="text-muted" style={{ margin: "0 0 6px", fontSize: "var(--text-xs)" }}>
+            {t("Every change an agent makes waits for a person to approve the exact change first. Nobody may change anything unless ticked here.")}
+          </p>
+          <WriteGrantMatrix
+            draft={draft}
+            grantTables={grantTables}
+            columnsOf={tableColumnsOf}
+            attributeNames={attributeNames}
+            setTableGrant={setTableGrant}
+          />
+        </div>
+      )}
 
       {problems.length > 0 && (
         <ul style={{ margin: 0, paddingLeft: 18, color: "#a12626", fontSize: "var(--text-sm)" }}>
@@ -421,7 +500,87 @@ function GrantMatrix({ draft, grantViews, columnsOf, attributeNames, setGrant })
   );
 }
 
-function WherePairs({ testId, pairs, columns, attributeNames, onChange }) {
+/** One row per position, one column per writable table: which of add / edit / delete, and on which rows. */
+function WriteGrantMatrix({ draft, grantTables, columnsOf, attributeNames, setTableGrant }) {
+  const { t } = useLang();
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table className="table" style={{ fontSize: "var(--text-sm)" }}>
+        <thead>
+          <tr>
+            <th>{t("Position")}</th>
+            {grantTables.map((table) => <th key={table} className="ab-mono">{table}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {draft.positions.map((position) => (
+            <tr key={position}>
+              <td>{position}</td>
+              {grantTables.map((table) => {
+                const grant = draft.tableGrants?.[position]?.[table] || { ops: [], mode: "where", pairs: [] };
+                const toggle = (op) => {
+                  const ops = grant.ops.includes(op) ? grant.ops.filter((entry) => entry !== op) : [...grant.ops, op];
+                  const pairs = grant.mode === "where" && grant.pairs.length === 0 ? [{ column: "", attribute: "" }] : grant.pairs;
+                  setTableGrant(position, table, { ...grant, ops: OPERATIONS.map((entry) => entry.id).filter((id) => ops.includes(id)), pairs });
+                };
+                return (
+                  <td key={table} style={{ verticalAlign: "top" }} data-testid={`write-${position}-${table}`}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {OPERATIONS.map((op) => (
+                        <label key={op.id} style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <input
+                            type="checkbox"
+                            aria-label={`${position} — ${table} — ${t(op.label)}`}
+                            checked={grant.ops.includes(op.id)}
+                            onChange={() => toggle(op.id)}
+                          />
+                          {t(op.label)}
+                        </label>
+                      ))}
+                    </div>
+                    {grant.ops.length > 0 && (
+                      <>
+                        <select
+                          className="input"
+                          style={{ marginTop: 4 }}
+                          aria-label={`${position} — ${table} — ${t("Rows")}`}
+                          value={grant.mode}
+                          onChange={(e) =>
+                            setTableGrant(position, table, {
+                              ...grant,
+                              mode: e.target.value,
+                              pairs: e.target.value === "where" && grant.pairs.length === 0 ? [{ column: "", attribute: "" }] : grant.pairs,
+                            })
+                          }
+                        >
+                          <option value="where">{t("Only rows matching")}</option>
+                          <option value="all">{t("Every row")}</option>
+                        </select>
+                        {grant.mode === "where" && (
+                          <WherePairs
+                            testId={`write-where-${position}-${table}`}
+                            pairs={grant.pairs}
+                            columns={columnsOf(table)}
+                            attributeNames={attributeNames}
+                            columnLabel={t("Table column")}
+                            onChange={(pairs) => setTableGrant(position, table, { ...grant, pairs })}
+                          />
+                        )}
+                      </>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function WherePairs({ testId, pairs, columns, attributeNames, onChange, columnLabel }) {
   const { t } = useLang();
   const setPair = (index, fields) => onChange(pairs.map((pair, position) => (position === index ? { ...pair, ...fields } : pair)));
 
@@ -429,7 +588,7 @@ function WherePairs({ testId, pairs, columns, attributeNames, onChange }) {
     <div data-testid={testId} style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
       {pairs.map((pair, index) => (
         <div key={index} style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <select className="input" aria-label={t("View column")} value={pair.column} onChange={(e) => setPair(index, { column: e.target.value })}>
+          <select className="input" aria-label={columnLabel || t("View column")} value={pair.column} onChange={(e) => setPair(index, { column: e.target.value })}>
             <option value="">—</option>
             {columns.map((column) => <option key={column} value={column}>{column}</option>)}
           </select>

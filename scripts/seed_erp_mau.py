@@ -178,6 +178,7 @@ def seed(conn: psycopg.Connection, *, mailbox: str, today: date | None = None) -
             row = cur.fetchone()
             today = row[0] if row is not None else date.today()
         cur.execute(SCHEMA.read_text(encoding="utf-8"))
+        cur.execute("DELETE FROM ar_followups WHERE customer_id LIKE 'KH-%'")
         cur.execute("DELETE FROM fin_invoice WHERE invoice_id LIKE 'HD-%'")
         cur.execute("DELETE FROM crm_customer WHERE customer_id LIKE 'KH-%'")
         cur.execute("DELETE FROM orders WHERE order_id LIKE 'DH-%'")

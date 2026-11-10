@@ -194,6 +194,9 @@ services:
         condition: service_started
     volumes:
       - ./data:/app/data
+      # ADR-0093: admin edits to the eval template library land in the repo's
+      # files (a `git diff` to commit), not in a container layer a rebuild drops.
+      - ./eval/library:/app/eval/library
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

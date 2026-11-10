@@ -39,11 +39,12 @@ from src.datasources.access import Deny, DenyCause
 from src.datasources.dialects.base import QueryRows
 from src.datasources.in_memory import run_in_memory
 from src.datasources.query import StructuredQuery, effective_limit, query_problems
-from src.datasources.reader import Asker, DatabaseReader, QueryOutcome, describe
+from src.datasources.reader import Asker, DatabaseReader, QueryOutcome, WriteOutcome, describe
+from src.datasources.write import StructuredWrite, describe_write
 from src.db.models import DatabaseSource, EvalCase, EvalCassette
 from src.evals.checks import trivial_answer
 from src.models.eval_check import AnswersFromQuery, check_of
-from src.models.node_registry import DataQueryConfig, NodeType
+from src.models.node_registry import DataQueryConfig, DataWriteConfig, NodeType
 from src.models.workflow import WorkflowJSON
 
 #: The most rows one view is frozen with. A larger view is refused rather than
@@ -358,5 +359,26 @@ class CassetteReader:
             scope=scope,
         )
 
+    def tables_of(self, config: DataWriteConfig) -> dict[str, list[str]]:
+        """Nothing to write to: an eval reads frozen rows and must never change a database (ADR-0094)."""
+        return {}
+
+    def authorize(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
+        return _not_in_eval(write)
+
+    def write(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
+        return _not_in_eval(write)
+
     def _for(self, source_id: str) -> list[_Frozen]:
         return [item for item in self.frozen if item.source_id == str(source_id)]
+
+
+def _not_in_eval(write: StructuredWrite) -> WriteOutcome:
+    """Every write an eval run asks for: refused, so a case can never change the creator's database."""
+    return WriteOutcome(
+        affected=None,
+        source_name="",
+        table=write.table,
+        description=describe_write(write),
+        refusal="Lượt eval không ghi vào Hệ CSDL",
+    )

@@ -150,13 +150,13 @@ def assemble_package(
 
 
 def _sources(db: Session, owner_id: int, workflow: dict[str, Any] | None) -> list[PackageSource]:
-    """Every Hệ CSDL a `data_query` node reads, owned by `owner_id` — refused if one has no rules to ship."""
+    """Every Hệ CSDL a `data_query` node reads or a `data_write` node changes, owned by `owner_id` — refused if one has no rules to ship."""
     wanted = sorted(
         {
             str(node["config"].get("source_id", ""))
             for node in (workflow or {}).get("nodes", [])
             if isinstance(node, dict)
-            and node.get("type") == NodeType.DATA_QUERY
+            and node.get("type") in (NodeType.DATA_QUERY, NodeType.DATA_WRITE)
             and isinstance(node.get("config"), dict)
         }
     )

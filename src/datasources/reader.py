@@ -17,6 +17,13 @@ is the security argument:
    — nobody asking is no query;
 4. `scope_on` for that asker — `Deny` stops here; `All`/`Where` reach the
    dialect, the `Where` pairs ANDed into SQL the code builds.
+
+**A write goes through the same four gates** (ADR-0094) — against the tables
+ticked for writing and the rule's `tables` grants instead of views — plus one:
+a value the write sets on a scope column must be the asker's own, so nobody
+moves a row out of their scope or creates one in somebody else's. `authorize`
+asks the gates without changing anything (what an approval card is prepared
+from); `write` asks them again, fresh, and only then changes the database.
 """
 
 from collections.abc import Sequence
@@ -27,21 +34,41 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
-from src.datasources.access import POSITION, All, Deny, DenyCause, Principal, Where, asker_of, resolve_principal
+from src.datasources.access import (
+    POSITION,
+    WRITE_DENIED,
+    All,
+    Deny,
+    DenyCause,
+    Principal,
+    Where,
+    asker_of,
+    resolve_principal,
+)
 from src.datasources.dialects import (
     ColumnRef,
     DatabaseProbeError,
     IdentitySearch,
     QueryRequest,
     QueryRows,
+    WriteRequest,
     dialect_for,
 )
 from src.datasources.graph import owned_source
 from src.datasources.query import StructuredQuery, effective_limit, query_problems
-from src.datasources.sources import access_rules_of, closed_deny, current_access_problems, dsn_of, scope_on
+from src.datasources.sources import (
+    access_rules_of,
+    closed_deny,
+    closed_write_deny,
+    current_access_problems,
+    dsn_of,
+    scope_on,
+    scope_on_write,
+)
+from src.datasources.write import StructuredWrite, describe_write, write_problems
 from src.db.base import get_db
 from src.db.models import Agent, DatabaseSource
-from src.models.node_registry import DataQueryConfig
+from src.models.node_registry import DataQueryConfig, DataWriteConfig
 from src.services.secret_store import SecretStore, get_secret_store
 
 #: What an asker hears about a read that failed for any reason but permission.
@@ -88,6 +115,46 @@ class QueryOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class WriteOutcome:
+    """One write — authorized, done, or why not: a refusal of the write, or a deny of the asker (ADR-0094).
+
+    `affected` is the rows the database changed, `None` for a write that did
+    not happen (refused, denied, or only authorized). `description` is the
+    write in words, the line a transcript and an approval card read.
+    """
+
+    affected: int | None
+    source_name: str
+    table: str
+    description: str
+    refusal: str | None = None
+    denied: Deny | None = None
+    #: The asker's scope bound into the write — `()` for `all_rows`, `None` when it never got that far.
+    scope: tuple[tuple[str, Any], ...] | None = None
+
+    @property
+    def allowed(self) -> bool:
+        """Whether every gate let this write through — the answer `authorize` exists to give."""
+        return self.refusal is None and self.denied is None
+
+    @property
+    def transcript_reason(self) -> str:
+        """Why nothing changed, for the creator's transcript — the refusal in full, or the deny's own sentence."""
+        if self.denied is not None:
+            return self.denied.reason
+        return f"Không ghi được vào {self.table}: {self.refusal}"
+
+    @property
+    def asker_reason(self) -> str:
+        """What the asker may hear: "không có quyền" for a deny, nothing technical otherwise."""
+        return self.denied.reason if self.denied is not None else UNWRITTEN_FOR_ASKER
+
+
+#: What an asker hears about a write that failed for any reason but permission.
+UNWRITTEN_FOR_ASKER = "Không thực hiện được thay đổi dữ liệu này lúc này — chưa có gì bị thay đổi."
+
+
+@dataclass(frozen=True, slots=True)
 class Asker:
     """Somebody a creator can run a trial as: the value matched against a sign-in, and their position."""
 
@@ -128,6 +195,18 @@ class DatabaseReader(Protocol):
 
     def read(self, config: DataQueryConfig, query: StructuredQuery) -> QueryOutcome:
         """Run `query` for whoever this reader was built for. Never raises a database failure — it refuses."""
+        ...
+
+    def tables_of(self, config: DataWriteConfig) -> dict[str, list[str]]:
+        """`{table: columns}` the node may write — what the model's write schema offers. Empty for none (ADR-0094)."""
+        ...
+
+    def authorize(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
+        """Every gate `write` would pass, changing nothing — `allowed` or why not."""
+        ...
+
+    def write(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
+        """The gates again, then the change. Never raises a database failure — it refuses."""
         ...
 
 
@@ -222,8 +301,90 @@ class PlatformDatabaseReader:
             scope=tuple(request.scope),
         )
 
+    def tables_of(self, config: DataWriteConfig) -> dict[str, list[str]]:
+        """The node's tables still ticked for writing on its source, with their columns — `{}` for no source."""
+        source = self._source(config.source_id)
+        if source is None:
+            return {}
+        return {table: list((source.table_columns or {}).get(table, [])) for table in _writable_tables(source, config)}
+
+    def authorize(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
+        """The gates, and nothing else — what a `human_approval` asks before it shows a write on its card."""
+        checked = self._checked_write(config, write)
+        if isinstance(checked, WriteOutcome):
+            return checked
+        return _write_outcome(checked.source, write, scope=checked.request.scope)
+
+    def write(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
+        """The gates, asked again now — a rule may have changed since the card — then one transaction."""
+        checked = self._checked_write(config, write)
+        if isinstance(checked, WriteOutcome):
+            return checked
+        try:
+            affected = dialect_for(checked.source.dialect).run_write(
+                checked.dsn, checked.request, trusted_hosts=self.trusted_hosts
+            )
+        except DatabaseProbeError as exc:
+            return _write_outcome(checked.source, write, refusal=str(exc))
+        return WriteOutcome(
+            affected=affected,
+            source_name=checked.source.name,
+            table=write.table,
+            description=describe_write(write),
+            scope=checked.request.scope,
+        )
+
+    def _checked_write(self, config: DataWriteConfig, write: StructuredWrite) -> "WriteOutcome | _ClearedWrite":
+        """The module docstring's gates for a write, in order; the first that refuses is the outcome."""
+        source = self._source(config.source_id)
+        if source is None:
+            return WriteOutcome(
+                affected=None, source_name="", table=write.table, description=describe_write(write), refusal=_NO_SOURCE
+            )
+        problems = write_problems(
+            write, tables=_writable_tables(source, config), columns_by_table=source.table_columns or {}
+        )
+        if problems:
+            return _write_outcome(source, write, refusal="; ".join(problems))
+        closed = closed_write_deny(source, write.table)
+        if closed is not None:
+            return _write_outcome(source, write, denied=closed)
+        if not self.asker:
+            return _write_outcome(source, write, denied=Deny(cause=DenyCause.UNKNOWN_ASKER, reason=WRITE_DENIED))
+        rules = access_rules_of(source)
+        assert rules is not None  # `closed_write_deny` already denied a source without rules
+        try:
+            dsn = dsn_of(source, self.secret_store)
+            lookup = dialect_for(source.dialect).identity_lookup(dsn, trusted_hosts=self.trusted_hosts)
+            principal = resolve_principal(rules, self.asker, lookup=lookup)
+        except DatabaseProbeError as exc:
+            return _write_outcome(source, write, refusal=str(exc))
+        scope = scope_on_write(source, principal, write.table, write.operation)
+        if isinstance(scope, Deny):
+            return _write_outcome(source, write, denied=scope)
+        pairs = scope.pairs if isinstance(scope, Where) else ()
+        if any(column in write.values and str(write.values[column]) != str(value) for column, value in pairs):
+            return _write_outcome(source, write, denied=Deny(cause=DenyCause.OUT_OF_SCOPE_VALUE, reason=WRITE_DENIED))
+        request = WriteRequest(
+            write=write,
+            table_columns=tuple((source.table_columns or {}).get(write.table, [])),
+            scope=pairs,
+            session_attributes=dict(principal.attributes) if principal else {},
+            max_rows=config.max_rows,
+        )
+        return _ClearedWrite(source=source, dsn=dsn, request=request)
+
     def _source(self, source_id: str) -> DatabaseSource | None:
         return owned_source(self.db, source_id, self.owner_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _ClearedWrite:
+    """A write every gate let through: the source, its DSN, and the request a dialect runs. Never leaves this module."""
+
+    source: DatabaseSource
+    dsn: str
+    request: WriteRequest
 
 
 def get_database_reader(
@@ -274,6 +435,30 @@ def _shown(value: object) -> str:
 def _readable_views(source: DatabaseSource, config: DataQueryConfig) -> list[str]:
     """The node's views that are still ticked on the source — a view unticked since confirm is not readable."""
     return [view for view in config.views if view in source.allowed_views]
+
+
+def _writable_tables(source: DatabaseSource, config: DataWriteConfig) -> list[str]:
+    """The node's tables that are still ticked for writing — a table unticked since confirm is not writable."""
+    return [table for table in config.tables if table in (source.allowed_write_tables or [])]
+
+
+def _write_outcome(
+    source: DatabaseSource,
+    write: StructuredWrite,
+    *,
+    refusal: str | None = None,
+    denied: Deny | None = None,
+    scope: tuple[tuple[str, Any], ...] | None = None,
+) -> WriteOutcome:
+    return WriteOutcome(
+        affected=None,
+        source_name=source.name,
+        table=write.table,
+        description=describe_write(write),
+        refusal=refusal,
+        denied=denied,
+        scope=scope,
+    )
 
 
 def _request(
