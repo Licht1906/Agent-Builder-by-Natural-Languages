@@ -5,7 +5,13 @@ import * as api from "../lib/api";
 import { ErrorNote, Spinner } from "./ui";
 
 /* ============================================================
-   Add MCP server — the port of Agent Builder's own two-step flow.
+   Choose a tool — the port of Agent Builder's own two-step flow.
+
+   Two kinds of tool, said apart everywhere on this screen: **built-in**
+   connectors the platform calls straight through their own APIs (Gmail and
+   Drive, signed in per person — no server to run), and **MCP servers**,
+   anything that speaks the Model Context Protocol, registered by URL and
+   approved by an admin before it can be picked.
 
    Step one is a **gallery**, not a form: cards for the connectors this platform
    maintains, then the ones creators registered themselves, then `+ Server` for
@@ -33,16 +39,32 @@ export const BUILT_IN_LOOK = {
 };
 
 const AUTH_MODES = [
-  { id: "none", label: "No auth", kind: "none" },
+  { id: "none", label: "Không cần xác thực", kind: "none" },
   { id: "token", label: "Access token / API key", kind: "secret_reference" },
-  { id: "headers", label: "Custom headers", kind: "custom_headers" },
+  { id: "headers", label: "Header tuỳ chỉnh", kind: "custom_headers" },
 ];
 
 const TABS = [
   { id: "all", label: "Tất cả" },
-  { id: "platform", label: "Của nền tảng" },
-  { id: "others", label: "Bên thứ ba" },
+  { id: "platform", label: "Cài sẵn" },
+  { id: "others", label: "MCP server" },
 ];
+
+//: What a registration the creator sent is waiting on, in their words — shown on its card.
+const REGISTRATION_STATUS = {
+  pending: "đang chờ admin duyệt",
+  rejected: "bị từ chối",
+  disabled: "admin đã tắt",
+};
+
+/** The small label every card and connect screen carries: which of the two kinds this tool is. */
+function KindBadge({ builtIn }) {
+  return (
+    <span className={`tag ${builtIn ? "" : "tag-accent"}`} style={{ fontSize: "var(--text-xs)" }}>
+      {builtIn ? "Cài sẵn" : "MCP"}
+    </span>
+  );
+}
 
 /** `X-Api-Key: abc` per line — the shape a person copies out of a server's own
  *  docs, rather than JSON whose braces they would have to get right. */
@@ -56,10 +78,17 @@ function parseHeaders(text) {
   );
 }
 
-function ConnectorCard({ look, name, subtitle, onClick }) {
+function ConnectorCard({ look, name, subtitle, onClick, disabled = false, title }) {
   const Icon = look.icon || Server;
   return (
-    <button type="button" className="mcp-card" onClick={onClick}>
+    <button
+      type="button"
+      className="mcp-card"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={disabled ? { opacity: 0.55, cursor: "default" } : undefined}
+    >
       <span className="mcp-card-icon" style={{ color: look.color || "var(--color-accent)" }}>
         <Icon size={20} />
       </span>
@@ -76,8 +105,8 @@ function AddCard({ onClick }) {
   return (
     <button type="button" className="mcp-card mcp-card-add" onClick={onClick}>
       <span className="mcp-card-icon"><Plus size={20} /></span>
-      <span className="mcp-card-name">Server khác</span>
-      <span className="mcp-card-sub">thêm bằng địa chỉ</span>
+      <span className="mcp-card-name">Thêm MCP server</span>
+      <span className="mcp-card-sub">dán địa chỉ của server</span>
     </button>
   );
 }
@@ -89,12 +118,20 @@ export default function AddMcpServer({ open, onClose, onRegistered, onPick, noti
   const [chosen, setChosen] = useState(null);
   const [tools, setTools] = useState([]);
   const [googleLink, setGoogleLink] = useState(null);
+  // The caller's own registrations, so one waiting on an admin is on screen
+  // rather than vanishing between "Kết nối" and the approval.
+  const [mine, setMine] = useState([]);
 
   const load = useCallback(async () => {
     try {
       setTools(await api.workflow.tools());
     } catch {
       setTools([]);
+    }
+    try {
+      setMine(await api.mcpConnections.mine());
+    } catch {
+      setMine([]);
     }
     try {
       const links = await api.userConnections.list();
@@ -151,13 +188,17 @@ export default function AddMcpServer({ open, onClose, onRegistered, onPick, noti
 
   const builtIn = tools.filter((tool) => tool.source === "built_in");
   const registered = tools.filter((tool) => tool.source !== "built_in");
+  const waiting = mine.filter((row) => row.status !== "approved");
   const showPlatform = tab === "all" || tab === "platform";
   const showOthers = tab === "all" || tab === "others";
+  const googleStatus = googleLink && googleLink.connected
+    ? (googleLink.status === "needs_reconnect" ? "cần đăng nhập lại" : `đã nối ${googleLink.account_email || ""}`.trim())
+    : "chưa đăng nhập";
 
   return overlay(
     <div className="mcp-panel">
       <div className="ab-row" style={{ justifyContent: "space-between", gap: 10 }}>
-        <p className="card-title" style={{ margin: 0 }}>Chọn MCP server</p>
+        <p className="card-title" style={{ margin: 0 }}>Chọn công cụ</p>
         <button type="button" className="btn btn-secondary btn-sm" onClick={close}>Đóng</button>
       </div>
 
@@ -177,7 +218,7 @@ export default function AddMcpServer({ open, onClose, onRegistered, onPick, noti
       {showPlatform && (
         <>
           <p className="mcp-section">
-            Kết nối của nền tảng <span className="text-muted">— do đội này viết và vận hành</span>
+            Cài sẵn <span className="text-muted">— nền tảng tự vận hành, chỉ cần đăng nhập tài khoản</span>
           </p>
           <div className="mcp-grid">
             {builtIn.map((tool) => (
@@ -185,14 +226,10 @@ export default function AddMcpServer({ open, onClose, onRegistered, onPick, noti
                 key={tool.id}
                 look={BUILT_IN_LOOK[tool.id] || {}}
                 name={(BUILT_IN_LOOK[tool.id] || {}).label || tool.name}
-                subtitle={`${tool.actions.length} action`}
+                subtitle={`${tool.actions.length} hành động · ${BUILT_IN_LOOK[tool.id] ? googleStatus : "cài sẵn"}`}
                 onClick={() => setChosen({ entry: tool })}
               />
             ))}
-            {/* Level with the connectors rather than off in a corner: bringing
-                your own server is one of the choices on this shelf, not a
-                different kind of act. */}
-            <AddCard onClick={() => setChosen({ custom: true })} />
           </div>
         </>
       )}
@@ -200,7 +237,7 @@ export default function AddMcpServer({ open, onClose, onRegistered, onPick, noti
       {showOthers && (
         <>
           <p className="mcp-section">
-            Server bên thứ ba <span className="text-muted">— do người khác viết và vận hành</span>
+            MCP server <span className="text-muted">— dịch vụ bên ngoài nói giao thức MCP, admin duyệt trước khi dùng</span>
           </p>
           <div className="mcp-grid">
             {registered.map((tool) => (
@@ -208,14 +245,29 @@ export default function AddMcpServer({ open, onClose, onRegistered, onPick, noti
                 key={tool.id}
                 look={{}}
                 name={tool.name}
-                subtitle={`${tool.actions.length} action · đã duyệt`}
+                subtitle={`${tool.actions.length} hành động · đã duyệt`}
                 onClick={() => setChosen({ entry: tool })}
               />
             ))}
-            {/* Only when the platform grid is not on screen to carry it — two
-                identical add-cards in one view would read as two doors. */}
-            {!showPlatform && <AddCard onClick={() => setChosen({ custom: true })} />}
+            {waiting.map((row) => (
+              <ConnectorCard
+                key={`registration-${row.id}`}
+                look={{}}
+                name={row.name}
+                subtitle={REGISTRATION_STATUS[row.status] || row.status}
+                title={row.rejection_reason ? `Lý do: ${row.rejection_reason}` : row.server_url}
+                disabled
+              />
+            ))}
+            {/* The one door for bringing a server — in the MCP section, which is what it adds to. */}
+            <AddCard onClick={() => setChosen({ custom: true })} />
           </div>
+          {registered.length === 0 && waiting.length === 0 && (
+            <p className="text-muted" data-testid="mcp-empty" style={{ fontSize: "var(--text-xs)", margin: 0, lineHeight: 1.55 }}>
+              Chưa có MCP server nào. Không cần tự dựng server: nhiều dịch vụ đã có sẵn MCP server do chính họ vận
+              hành, chỉ cần dán địa chỉ. Gmail và Google Drive ở trên chạy sẵn, không cần MCP.
+            </p>
+          )}
         </>
       )}
     </div>
@@ -296,14 +348,17 @@ export function ConnectorScreen({ tool, link, onBack, onUse, onConnected, notify
         <Icon size={26} />
       </span>
       <p className="mcp-connect-title">Kết nối {look.label || tool.name}</p>
-      <p className="ab-mono text-muted" style={{ fontSize: "var(--text-xs)", margin: 0 }}>{tool.id}</p>
+      <p className="text-muted" style={{ fontSize: "var(--text-xs)", margin: 0, display: "flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
+        <KindBadge builtIn={perUser} />
+        {perUser ? "nền tảng gọi thẳng API của Google bằng tài khoản bạn đăng nhập" : "gọi qua giao thức MCP — đã được admin duyệt"}
+      </p>
 
       <div className="mcp-abilities">
         {tool.actions.map((action) => (
           <span key={action.name} className="mcp-ability">
             <Check size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
             <span className="ab-mono">{action.name}</span>
-            {action.risk_level === "high" && <span className="tag tag-danger" style={{ marginLeft: "auto" }}>high</span>}
+            {action.risk_level === "high" && <span className="tag tag-danger" style={{ marginLeft: "auto" }}>cần người duyệt</span>}
           </span>
         ))}
       </div>
@@ -430,13 +485,16 @@ function CustomServerForm({ onBack, onDone, notify }) {
   return (
     <div className="mcp-panel mcp-connect">
       <span className="mcp-connect-icon"><Server size={26} /></span>
-      <p className="mcp-connect-title">Kết nối MCP server của bạn</p>
+      <p className="mcp-connect-title">Thêm MCP server</p>
+      <p className="text-muted" style={{ fontSize: "var(--text-xs)", margin: 0, lineHeight: 1.55 }}>
+        Dán địa chỉ của một server nói giao thức MCP (Streamable HTTP) — của một dịch vụ có sẵn hoặc do công ty bạn chạy.
+      </p>
 
-      <input className="input" placeholder="https://.../mcp" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
-      <input className="input" placeholder="Tên kết nối — ví dụ ERP Kinh doanh" value={name} onChange={(e) => setName(e.target.value)} />
-      <input className="input" placeholder="Mô tả (không bắt buộc)" value={description} onChange={(e) => setDescription(e.target.value)} />
+      <input className="input" aria-label="Địa chỉ server" placeholder="https://.../mcp" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
+      <input className="input" aria-label="Tên kết nối" placeholder="Tên kết nối — ví dụ ERP Kinh doanh" value={name} onChange={(e) => setName(e.target.value)} />
+      <input className="input" aria-label="Mô tả" placeholder="Mô tả (không bắt buộc)" value={description} onChange={(e) => setDescription(e.target.value)} />
 
-      <select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
+      <select className="input" aria-label="Cách xác thực" value={mode} onChange={(e) => setMode(e.target.value)}>
         {AUTH_MODES.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
       </select>
 
@@ -468,8 +526,9 @@ function CustomServerForm({ onBack, onDone, notify }) {
       )}
 
       <p className="text-muted" style={{ fontSize: "var(--text-xs)", margin: 0, lineHeight: 1.55 }}>
-        Bấm Kết nối là hệ thống gọi <span className="ab-mono">tools/list</span> của server để lấy danh sách action.
-        Credential vào thẳng kho mã hoá — không lưu trên bản ghi, không đọc lại được.
+        Bấm Kết nối là hệ thống gọi <span className="ab-mono">tools/list</span> của server để lấy danh sách hành động
+        — không ai phải gõ tay. Credential vào thẳng kho mã hoá, không đọc lại được. Server cần admin duyệt (xem từng
+        hành động, đặt mức rủi ro) rồi mới chọn được cho bước này.
       </p>
 
       <ErrorNote>{error}</ErrorNote>

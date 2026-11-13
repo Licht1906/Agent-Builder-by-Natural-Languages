@@ -342,6 +342,13 @@ class DatabaseSourceUpdateRequest(BaseModel):
     allowed_write_tables: list[str] | None = Field(
         default=None, description="Các bảng gốc agent được phép ghi (thêm/sửa/xoá) — mọi lần ghi đều cần người duyệt"
     )
+    agent_notes: str | None = Field(
+        default=None, max_length=4000, description="Mô tả Hệ CSDL cho agent — view nào chứa gì, quy ước nghiệp vụ"
+    )
+    write_dsn: str | None = Field(
+        default=None,
+        description="DSN của tài khoản chỉ dùng để GHI — chuỗi rỗng để gỡ, khi đó ghi bằng DSN chính",
+    )
 
 
 class DatabaseTableResponse(BaseModel):
@@ -382,6 +389,8 @@ class DatabaseSourceResponse(BaseModel):
     views: list[DatabaseViewResponse] = Field(..., description="Các view lần kiểm tra gần nhất thấy")
     base_tables: list[str] = Field(..., description="Bảng gốc lần kiểm tra gần nhất thấy — không đọc trực tiếp được")
     allowed_write_tables: list[str] = Field(default_factory=list, description="Các bảng gốc agent được phép ghi")
+    has_write_dsn: bool = Field(default=False, description="True nếu có DSN ghi riêng — không bao giờ là chính DSN")
+    agent_notes: str = Field(default="", description="Mô tả Hệ CSDL cho agent")
     tables: list[DatabaseTableResponse] = Field(
         default_factory=list, description="Bảng gốc kèm cột — rỗng với loại CSDL chưa hỗ trợ ghi"
     )

@@ -1933,6 +1933,17 @@ class DatabaseSource(Base):
     table_columns: Mapped[dict[str, list[str]]] = mapped_column(
         JSON, default=dict, doc="{bảng gốc: [cột, …]} của lần kiểm tra gần nhất"
     )
+    #: Optional second account, used for writes only — so `dsn_secret_ref` can
+    #: stay a truly read-only login. Empty: writes go through the main DSN.
+    write_dsn_secret_ref: Mapped[str] = mapped_column(
+        default="", doc="Khoá secret store giữ DSN của tài khoản GHI — rỗng thì ghi bằng DSN chính"
+    )
+    #: ADR-0095: what the creator tells the agent about this database in their
+    #: own words — which view holds what, how tables relate, business rules.
+    #: Read by the model that writes each query or write; never a permission.
+    agent_notes: Mapped[str] = mapped_column(
+        default="", doc="Mô tả Hệ CSDL cho agent — view nào chứa gì, quy ước nghiệp vụ"
+    )
     last_probe_status: Mapped[DatabaseSourceStatus] = mapped_column(default=DatabaseSourceStatus.UNTESTED)
     last_probe_reason: Mapped[str | None] = mapped_column(
         default=None, doc="ProbeFailure của lần kiểm tra gần nhất — để UI viết lời khuyên, không phải lời của driver"

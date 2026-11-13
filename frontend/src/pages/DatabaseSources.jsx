@@ -316,6 +316,8 @@ function DatabaseSourceCard({ source, onChanged, onRemove, notify }) {
 
       {source.status === "connected" && <WriteTablePicker source={source} onChanged={onChanged} notify={notify} />}
 
+      {source.status === "connected" && <AgentNotes source={source} onChanged={onChanged} notify={notify} />}
+
       {source.allowed_views.length > 0 && (
         <div style={{ borderTop: "1px solid var(--color-divider)", paddingTop: 10 }}>
           <button type="button" className="btn btn-ghost btn-sm" aria-expanded={editingAccess} onClick={() => setEditingAccess(!editingAccess)}>
@@ -406,9 +408,7 @@ function WriteTablePicker({ source, onChanged, notify }) {
       <p style={{ margin: "0 0 4px", fontSize: "var(--text-sm)", fontWeight: 600 }}>{t("Tables an agent may change")}</p>
       {tables.length === 0 ? (
         <p className="text-muted" style={{ margin: 0, fontSize: "var(--text-xs)" }}>
-          {source.dialect === "postgresql"
-            ? t("No base table found on this database.")
-            : t("Changing data is supported on PostgreSQL only for now.")}
+          {t("No base table found on this database.")}
         </p>
       ) : (
         <>
@@ -430,7 +430,108 @@ function WriteTablePicker({ source, onChanged, notify }) {
               {saving ? <Spinner size={12} /> : <Check size={12} />}{t("Save writable tables")}
             </button>
           </div>
+          <WriteAccount source={source} onChanged={onChanged} notify={notify} />
         </>
+      )}
+    </div>
+  );
+}
+
+/** What the creator tells the agent about this database (ADR-0095): read by every query and write it writes. */
+function AgentNotes({ source, onChanged, notify }) {
+  const { t } = useLang();
+  const [text, setText] = useState(source.agent_notes || "");
+  const [saving, setSaving] = useState(false);
+  const id = `ds-notes-${source.id}`;
+
+  useEffect(() => { setText(source.agent_notes || ""); }, [source.agent_notes]);
+
+  async function save() {
+    setSaving(true);
+    try {
+      onChanged(await api.databaseSources.update(source.id, { agent_notes: text }));
+      notify(t("Description saved"));
+    } catch (err) {
+      notify(err.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="field" style={{ borderTop: "1px solid var(--color-divider)", paddingTop: 10, margin: 0 }}>
+      <label htmlFor={id}>{t("Describe this database for the agent")}</label>
+      <textarea
+        id={id}
+        className="input"
+        rows={3}
+        value={text}
+        placeholder={t("Which view holds what, how they relate, business rules — e.g. “v_ar_open is unpaid invoices; days_overdue counts from due_date; amounts are VND”.")}
+        onChange={(event) => setText(event.target.value)}
+      />
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={save} disabled={saving || text.trim() === (source.agent_notes || "")}>
+          {saving ? <Spinner size={12} /> : <Check size={12} />}{t("Save description")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The optional second account a write commits through (ADR-0094), so the main connection can stay read-only. */
+function WriteAccount({ source, onChanged, notify }) {
+  const { t } = useLang();
+  const [entering, setEntering] = useState(false);
+  const [connection, setConnection] = useState(EMPTY_CONNECTION);
+  const [busy, setBusy] = useState(false);
+  const dsn = dsnOf(source.dialect, connection);
+
+  async function send(writeDsn, done) {
+    setBusy(true);
+    try {
+      onChanged(await api.databaseSources.update(source.id, { write_dsn: writeDsn }));
+      setEntering(false);
+      setConnection(EMPTY_CONNECTION);
+      notify(done);
+    } catch (err) {
+      notify(err.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 10 }} data-testid={`write-account-${source.id}`}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: "var(--text-sm)", flex: "1 1 200px" }}>
+          {source.has_write_dsn
+            ? t("Changes go through a separate write account.")
+            : t("Changes go through the main connection. A separate write account lets the main one stay read-only.")}
+        </span>
+        {!entering && (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEntering(true)}>
+            <KeyRound size={12} />{source.has_write_dsn ? t("Replace write account") : t("Set a write account")}
+          </button>
+        )}
+        {source.has_write_dsn && !entering && (
+          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => send("", t("Write account removed"))}>
+            <Trash2 size={12} />{t("Remove write account")}
+          </button>
+        )}
+      </div>
+      {entering && (
+        <form
+          onSubmit={(event) => { event.preventDefault(); if (dsn) send(dsn, t("Write account saved")); }}
+          style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}
+        >
+          <ConnectionFields idPrefix={`ds-write-${source.id}`} dialect={source.dialect} value={connection} onChange={setConnection} />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEntering(false)}>{t("Cancel")}</button>
+            <button type="submit" className="btn btn-primary btn-sm" disabled={busy || !dsn}>
+              {busy ? <Spinner size={12} /> : <Check size={12} />}{t("Save write account")}
+            </button>
+          </div>
+        </form>
       )}
     </div>
   );

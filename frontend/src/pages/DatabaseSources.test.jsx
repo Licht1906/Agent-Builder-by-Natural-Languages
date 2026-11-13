@@ -275,10 +275,48 @@ describe("the tables an agent may change (ADR-0094)", () => {
     expect(screen.getByText(/only after a person approves the exact change/)).toBeInTheDocument();
   });
 
-  it("says plainly that an engine other than PostgreSQL cannot be written yet", async () => {
-    api.databaseSources.list.mockResolvedValue([source({ dialect: "mysql", tables: [], allowed_write_tables: [] })]);
+  it("sets a separate write account field by field, and removes it", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.list.mockResolvedValue([withTables()]);
+    api.databaseSources.update.mockResolvedValue(withTables({ has_write_dsn: true }));
+    draw();
+    await screen.findByText("ar_notes");
+
+    await actor.click(screen.getByRole("button", { name: /Set a write account/ }));
+    const form = screen.getByTestId("write-account-4");
+    await actor.type(within(form).getByLabelText("Host"), "erp");
+    await actor.type(within(form).getByLabelText("Database name"), "erp");
+    await actor.type(within(form).getByLabelText("Username"), "writer");
+    await actor.type(within(form).getByLabelText("Password"), "w");
+    await actor.click(within(form).getByRole("button", { name: /Save write account/ }));
+
+    await waitFor(() =>
+      expect(api.databaseSources.update).toHaveBeenCalledWith(4, { write_dsn: "postgresql://writer:w@erp:5432/erp" }),
+    );
+    expect(await screen.findByText(/separate write account\./)).toBeInTheDocument();
+
+    await actor.click(screen.getByRole("button", { name: /Remove write account/ }));
+    await waitFor(() => expect(api.databaseSources.update).toHaveBeenCalledWith(4, { write_dsn: "" }));
+  });
+
+  it("says so when the database has no base table to offer", async () => {
+    api.databaseSources.list.mockResolvedValue([source({ tables: [], allowed_write_tables: [] })]);
     draw();
 
-    expect(await screen.findByText(/supported on PostgreSQL only/)).toBeInTheDocument();
+    expect(await screen.findByText(/No base table found/)).toBeInTheDocument();
+  });
+});
+
+describe("the description for the agent (ADR-0095)", () => {
+  it("saves what the creator writes about the database", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.update.mockResolvedValue(source({ agent_notes: "v_ar_open là hoá đơn chưa trả" }));
+    draw();
+    await screen.findByText("ERP staging");
+
+    await actor.type(screen.getByLabelText(/Describe this database for the agent/), "v_ar_open là hoá đơn chưa trả");
+    await actor.click(screen.getByRole("button", { name: /Save description/ }));
+
+    expect(api.databaseSources.update).toHaveBeenCalledWith(4, { agent_notes: "v_ar_open là hoá đơn chưa trả" });
   });
 });

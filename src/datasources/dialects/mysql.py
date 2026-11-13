@@ -25,7 +25,7 @@ never as the server's sentence — which names the user and the host.
 
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
@@ -33,7 +33,6 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 import pymysql
 from sqlalchemy import Unicode, cast, func, or_, select
 from sqlalchemy.dialects import mysql
-from sqlalchemy.sql import Select
 
 from src.datasources.dialects.base import (
     ColumnRef,
@@ -48,7 +47,7 @@ from src.datasources.dialects.base import (
     WriteRequest,
     pin_address,
 )
-from src.datasources.dialects.sql import select_for, source_table
+from src.datasources.dialects.sql import select_for, source_table, write_statement
 
 #: DS-02's "lỗi dễ hiểu trong ≤ 5 s". The socket timeouts are a backstop
 #: behind `MAX_EXECUTION_TIME`, which only ever stops a `SELECT`.
@@ -100,6 +99,21 @@ ORDER BY TABLE_NAME
 """
 
 
+_TABLE_COLUMNS = """
+SELECT c.TABLE_NAME, c.COLUMN_NAME
+FROM information_schema.COLUMNS c
+JOIN information_schema.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+WHERE t.TABLE_TYPE = 'BASE TABLE' AND c.TABLE_SCHEMA = DATABASE()
+ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION
+"""
+
+#: A write's failures in a write's words (`postgresql._AS_WRITE_FAILURE`'s reason).
+_AS_WRITE_FAILURE = {
+    ProbeFailure.PERMISSION_DENIED: ProbeFailure.WRITE_DENIED,
+    ProbeFailure.SERVER_ERROR: ProbeFailure.WRITE_FAILED,
+}
+
+
 @dataclass(frozen=True, slots=True)
 class MySqlTarget:
     """A MySQL DSN, parsed: what to dial and how to sign in. Never logged, never echoed."""
@@ -124,11 +138,19 @@ class MySqlDialect:
                 columns.setdefault(view, []).append(column_name)
             cursor.execute(_BASE_TABLES)
             tables = tuple(row[0] for row in cursor.fetchall())
+            cursor.execute(_TABLE_COLUMNS)
+            table_columns: dict[str, list[str]] = {}
+            for table_name, column_name in cursor.fetchall():
+                table_columns.setdefault(table_name, []).append(column_name)
             counts = _counted(cursor, list(columns))
         views = tuple(
             ViewInfo(name=name, columns=tuple(names), row_count=counts.get(name)) for name, names in columns.items()
         )
-        return Introspection(views=views, base_tables=tables)
+        return Introspection(
+            views=views,
+            base_tables=tables,
+            table_columns={name: tuple(names) for name, names in table_columns.items()},
+        )
 
     def identity_lookup(self, dsn: str, *, trusted_hosts: frozenset[str]) -> IdentityLookup:
         """The asker's row by one equality, as a parameter — `None` for nobody and for an ambiguous match.
@@ -194,9 +216,34 @@ class MySqlDialect:
                 cursor.execute("ROLLBACK")
 
     def run_write(self, dsn: str, request: WriteRequest, *, trusted_hosts: frozenset[str]) -> int:
-        """Not yet (ADR-0094): every connection here is read-only at the session, and stays so until a write
-        path is built and tested against this engine. Refused before anything is dialled."""
-        raise DatabaseProbeError(ProbeFailure.WRITE_UNSUPPORTED)
+        """`request` in one read-write transaction: the statement, then the row ceiling, then commit or roll back.
+
+        The session `_dial` opens is read-only; this is the one place it is
+        switched back, for the one transaction of a write a person approved
+        (ADR-0094). The ceiling is checked before the commit, so a write past
+        it never lands. MySQL counts rows *changed*: an update that sets a
+        row to what it already holds counts nothing.
+        """
+        statement = write_statement(request, default_schema=None)
+        try:
+            with self.connect(dsn, trusted_hosts=trusted_hosts) as connection:
+                cursor = connection.cursor()
+                cursor.execute("SET SESSION TRANSACTION READ WRITE")
+                cursor.execute("START TRANSACTION READ WRITE")
+                try:
+                    _execute(cursor, statement)
+                    affected = int(cursor.rowcount)
+                    if affected > request.max_rows:
+                        raise DatabaseProbeError(ProbeFailure.TOO_MANY_ROWS)
+                    cursor.execute("COMMIT")
+                    return affected
+                except BaseException:
+                    with suppress(pymysql.Error):
+                        cursor.execute("ROLLBACK")
+                    raise
+        except pymysql.Error as exc:
+            reason = _failure_of(exc)
+            raise DatabaseProbeError(_AS_WRITE_FAILURE.get(reason, reason)) from None
 
     @contextmanager
     def _reading(
@@ -336,7 +383,7 @@ def _counted(cursor: Any, views: list[str]) -> dict[str, int | None]:
     return counts
 
 
-def _execute(cursor: Any, statement: Select[Any]) -> Any:
+def _execute(cursor: Any, statement: Any) -> Any:
     """`statement` compiled for MySQL and run on `cursor` — every value a PyMySQL parameter."""
     compiled = statement.compile(dialect=_SQL_DIALECT, compile_kwargs={"render_postcompile": True})
     cursor.execute(str(compiled), compiled.params)

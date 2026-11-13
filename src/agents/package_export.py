@@ -62,6 +62,7 @@ class PackageSource:
     name: str
     dialect: str
     access_rules: dict[str, Any]
+    agent_notes: str = ""
 
     @property
     def dsn_secret(self) -> str:
@@ -177,6 +178,7 @@ def _sources(db: Session, owner_id: int, workflow: dict[str, Any] | None) -> lis
             name=rows[ref].name,
             dialect=rows[ref].dialect.value,
             access_rules=dict(rows[ref].access_rules or {}),
+            agent_notes=rows[ref].agent_notes or "",
         )
         for ref in wanted
     ]
@@ -258,7 +260,9 @@ def runtime_yaml(
                 f"  - id: {_yaml_string(source.id)}",
                 f"    name: {_yaml_string(source.name)}",
                 f"    dialect: {source.dialect}",
+                *([f"    agent_notes: {_yaml_string(source.agent_notes)}"] if source.agent_notes else []),
                 f"    dsn_secret: {source.dsn_secret}",
+                f"    # write_dsn_secret: {source.dsn_secret}_write   # tuỳ chọn: tài khoản riêng chỉ để GHI (data_write)",
                 f"    access: {access_files[source.id]}",
             ]
         lines.append("")

@@ -346,6 +346,7 @@ _PHRASES: Mapping[str, str] = {
     "share_file": "chia sẻ tài liệu ra ngoài",
     "delete_file": "xoá tài liệu",
     "create_event": "tạo lịch họp",
+    "data_write": "thay đổi dữ liệu trong hệ thống",
 }
 
 

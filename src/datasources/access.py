@@ -163,12 +163,38 @@ class Identity(BaseModel):
 
 
 class AccessRules(BaseModel):
-    """`identity` + `rules`, exactly the spec's `access.yaml`."""
+    """`identity` + `rules`, exactly the spec's `access.yaml` — or `open: true`, written out on its own.
+
+    `open` is the database that needs no permissions (ADR-0095): everyone who
+    uses the agent sees every ticked view and may change every ticked table
+    the same way, so there is no employee view to name and no rule to write.
+    It is a rule set of its own, saved on purpose — never what *no* rules
+    mean, which stays "deny everyone".
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    identity: Identity
+    identity: Identity | None = None
     rules: list[Rule] = Field(default_factory=list)
+    open: bool = False
+
+    @model_serializer(mode="wrap")
+    def _as_written(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """`{open: true}` alone for an open database; `identity` + `rules` otherwise, with no `open: false` noise."""
+        if self.open:
+            return {"open": True}
+        return {key: value for key, value in handler(self).items() if key != "open"}
+
+    @model_validator(mode="after")
+    def _open_or_identified(self) -> "AccessRules":
+        """Exactly one of the two shapes: open with nothing else, or an identity the rules are read against."""
+        if self.open and (self.identity is not None or self.rules):
+            raise ValueError("open: true không đi kèm identity hay rules — mọi người dùng đều như nhau")
+        if not self.open and self.identity is None:
+            raise ValueError(
+                "cần identity (view nhân viên, cột khớp, thuộc tính) — hoặc open: true nếu không phân quyền"
+            )
+        return self
 
     @model_validator(mode="after")
     def _rules_are_coherent(self) -> "AccessRules":
@@ -185,8 +211,9 @@ class AccessRules(BaseModel):
             seen.add(rule.position)
             filters = [(view, grant.where) for view, grant in rule.views.items() if isinstance(grant, WhereGrant)]
             filters.extend((table, grant.where) for table, grant in rule.tables.items() if grant.where)
+            attributes = self.identity.attributes if self.identity is not None else {}
             for target, where in filters:
-                unknown = [name for name in where.values() if name not in self.identity.attributes]
+                unknown = [name for name in where.values() if name not in attributes]
                 if unknown:
                     raise ValueError(
                         f"rule của {rule.position!r} trên {target} lọc theo thuộc tính chưa khai trong identity: "
@@ -255,6 +282,8 @@ def scope_for(rules: AccessRules, principal: Principal | None, view: str) -> Sco
     a Hệ CSDL asks `src.datasources.sources.scope_on`, which also denies when
     the rules have fallen out of step with the ticked views.
     """
+    if rules.open:
+        return All()
     if principal is None:
         return Deny(cause=DenyCause.UNKNOWN_ASKER)
     position = _filter_value(principal.attributes.get(POSITION))
@@ -283,6 +312,8 @@ def scope_for_write(rules: AccessRules, principal: Principal | None, table: str,
     `scope_for`'s branches, in its order, with one more: the table may be
     granted but not this operation. Every deny carries `WRITE_DENIED`.
     """
+    if rules.open:
+        return All()
     if principal is None:
         return Deny(cause=DenyCause.UNKNOWN_ASKER, reason=WRITE_DENIED)
     position = _filter_value(principal.attributes.get(POSITION))
@@ -319,7 +350,7 @@ def resolve_principal(rules: AccessRules, match_value: str, *, lookup: IdentityL
     row on `''` would hand an anonymous caller whoever has an empty email.
     """
     value = (match_value or "").strip()
-    if not value:
+    if not value or rules.identity is None:
         return None
     identity = rules.identity
     columns = tuple(dict.fromkeys(identity.attributes.values()))
@@ -380,6 +411,9 @@ def access_problems(
     """
     views = {view.name: view for view in snapshot.views}
     allowed = set(allowed_views)
+    if rules.open:
+        return []
+    assert rules.identity is not None  # the model refuses a closed rule set without one
     problems = _identity_problems(rules.identity, allowed, views)
     for rule in rules.rules:
         for view, grant in rule.views.items():

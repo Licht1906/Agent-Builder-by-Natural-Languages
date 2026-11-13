@@ -1099,7 +1099,7 @@ async def _query_from_model(
             "parameters": _query_parameters(columns, max_rows=config.max_rows),
         },
     }
-    asked = f"## Hội thoại gần đây\n{_conversation_excerpt(state)}"
+    asked = _asked_with_notes(run, config.source_id, state)
     model_id = default_node_model(list(ASSIGNABLE_MODELS))
     try:
         # `bind_tools` answers a `Runnable`; it is still the chat model `_answer_within_deadline` streams.
@@ -1129,6 +1129,19 @@ async def _query_from_model(
     except ValidationError as exc:
         reasons = "; ".join(f"{'.'.join(map(str, error['loc']))}: {error['msg']}" for error in exc.errors())
         return None, f"Truy vấn model viết không hợp lệ — {reasons}"
+
+
+def _asked_with_notes(run: WorkflowRunContext, source_id: str, state: WorkflowState) -> str:
+    """The conversation a query or write is written from, after the creator's notes on the Hệ CSDL (ADR-0095).
+
+    The notes say what the columns alone cannot — which view holds what, how
+    two relate, which rows count — and are the creator's own words, so they
+    sit above the conversation as context, never as permission: scope is the
+    reader's, whatever the notes say.
+    """
+    notes = run.databases.notes_of(source_id).strip() if run.databases is not None else ""
+    conversation = f"## Hội thoại gần đây\n{_conversation_excerpt(state)}"
+    return f"## Ghi chú của người tạo về Hệ CSDL này\n{notes}\n\n{conversation}" if notes else conversation
 
 
 def _query_parameters(columns: Mapping[str, list[str]], *, max_rows: int) -> dict[str, Any]:
@@ -1418,7 +1431,7 @@ async def _write_for(
             "parameters": _write_parameters(tables),
         },
     }
-    asked = f"## Hội thoại gần đây\n{_conversation_excerpt(state)}"
+    asked = _asked_with_notes(run, config.source_id, state)
     model_id = default_node_model(list(ASSIGNABLE_MODELS))
     try:
         bound = cast(
@@ -3324,6 +3337,9 @@ def side_effecting_actions(workflow: WorkflowJSON) -> tuple[str, ...]:
             name = wire_name(tool.id, action.name)
             if action.sandbox_behavior is SandboxBehavior.MOCK and name not in names:
                 names.append(name)
+    # A `data_write` is mocked in every rehearsal (ADR-0094), under its own tool name.
+    if workflow.nodes_of_type(NodeType.DATA_WRITE):
+        names.append(DATA_WRITE_TOOL)
     return tuple(names)
 
 

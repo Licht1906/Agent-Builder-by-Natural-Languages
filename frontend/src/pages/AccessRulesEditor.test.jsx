@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import AccessRulesEditor from "./AccessRulesEditor";
+import AccessRulesEditor, { suggestIdentity } from "./AccessRulesEditor";
 import { LanguageProvider } from "../i18n";
 import * as api from "../lib/api";
 
@@ -265,5 +265,56 @@ describe("the write grants (ADR-0094)", () => {
     await waitFor(() => expect(api.databaseSources.saveAccessRules).toHaveBeenCalledTimes(1));
     const [, saved] = api.databaseSources.saveAccessRules.mock.calls[0];
     expect(saved.rules).toEqual([{ position: "Kế toán trưởng", views: {}, tables: { ar_notes: { operations: ["delete"], all_rows: true } } }]);
+  });
+});
+
+describe("no permissions — everyone the same (ADR-0095)", () => {
+  it("saves open rules with no employee view and no matrix", async () => {
+    const actor = userEvent.setup();
+    api.databaseSources.accessRules.mockResolvedValue({ rules: null, problems: [] });
+    draw();
+    await screen.findByText(/Nobody can read anything yet/);
+
+    await actor.click(screen.getByRole("radio", { name: /Everyone the same/ }));
+    expect(screen.queryByText(/Employee view/)).toBeNull();
+    await actor.click(screen.getByRole("button", { name: /Save access rules/ }));
+
+    await waitFor(() => expect(api.databaseSources.saveAccessRules).toHaveBeenCalledWith(4, { open: true }));
+  });
+
+  it("opens on the open mode when that is what was saved", async () => {
+    api.databaseSources.accessRules.mockResolvedValue({ rules: { open: true }, problems: [] });
+    draw();
+
+    expect(await screen.findByRole("radio", { name: /Everyone the same/ })).toBeChecked();
+  });
+});
+
+describe("the identity guessed from the columns (ADR-0095)", () => {
+  it("finds the employee view by its email and position columns, and the attributes it knows", () => {
+    const guessed = suggestIdentity({
+      allowed_views: ["v_ar_followups", "v_employees"],
+      views: [
+        { name: "v_ar_followups", columns: ["customer_id", "note"] },
+        { name: "v_employees", columns: ["Email", "employee_code", "full_name", "department", "position"] },
+      ],
+    });
+    expect(guessed).toEqual({
+      view: "v_employees",
+      matchBy: "Email",
+      attributes: [
+        { name: "position", column: "position" },
+        { name: "employee_code", column: "employee_code" },
+        { name: "department", column: "department" },
+      ],
+    });
+  });
+
+  it("falls back to the first view, blank, when nothing looks like a staff list", () => {
+    expect(suggestIdentity({ allowed_views: ["v_a"], views: [{ name: "v_a", columns: ["x"] }] })).toEqual({
+      view: "v_a",
+      matchBy: "",
+      attributes: [{ name: "position", column: "" }],
+    });
   });
 });

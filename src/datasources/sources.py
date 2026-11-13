@@ -141,6 +141,12 @@ def set_allowed_views(db: Session, source: DatabaseSource, views: Sequence[str])
     return _persist(db, source)
 
 
+def set_agent_notes(db: Session, source: DatabaseSource, notes: str) -> DatabaseSource:
+    """Keep the creator's description of this database for the agent (ADR-0095) — text, trimmed, never checked."""
+    source.agent_notes = notes.strip()
+    return _persist(db, source)
+
+
 def set_allowed_write_tables(db: Session, source: DatabaseSource, tables: Sequence[str]) -> DatabaseSource:
     """Keep the base tables a creator ticked for a `data_write` node to change (ADR-0094).
 
@@ -170,6 +176,8 @@ def delete_database_source(db: Session, source: DatabaseSource, *, secret_store:
         raise DatabaseSourceInUseError(using)
     if source.dsn_secret_ref:
         secret_store.delete(source.dsn_secret_ref)
+    if source.write_dsn_secret_ref:
+        secret_store.delete(source.write_dsn_secret_ref)
     db.delete(source)
     db.commit()
 
@@ -374,6 +382,38 @@ def dsn_of(source: DatabaseSource, secret_store: SecretStore) -> str:
         raise DatabaseProbeError(ProbeFailure.DSN_UNREADABLE) from None
 
 
+def replace_write_dsn(
+    db: Session, source: DatabaseSource, dsn: str | None, *, secret_store: SecretStore
+) -> DatabaseSource:
+    """Set, replace or (blank) remove the write-only DSN — the account a `data_write` commits through (ADR-0094).
+
+    Kept apart from the main DSN so that one can be a read-only login: with a
+    write DSN set, the account every probe and read uses never needs a single
+    write privilege. Not probed here; a write that cannot sign in says so
+    when it is tried, and changes nothing.
+    """
+    if dsn and dsn.strip():
+        if not source.write_dsn_secret_ref:
+            source.write_dsn_secret_ref = f"database_source:{source.id}:write_dsn"
+        secret_store.put(source.write_dsn_secret_ref, dsn.strip())
+    elif source.write_dsn_secret_ref:
+        secret_store.delete(source.write_dsn_secret_ref)
+        source.write_dsn_secret_ref = ""
+    return _persist(db, source)
+
+
+def write_dsn_of(source: DatabaseSource, secret_store: SecretStore) -> str:
+    """The DSN a write commits through: the write-only one when set, else the main one. Raises `DatabaseProbeError`."""
+    if not source.write_dsn_secret_ref:
+        return dsn_of(source, secret_store)
+    try:
+        return secret_store.get(source.write_dsn_secret_ref)
+    except SecretNotFoundError:
+        raise DatabaseProbeError(ProbeFailure.DSN_MISSING) from None
+    except SecretUnreadableError:
+        raise DatabaseProbeError(ProbeFailure.DSN_UNREADABLE) from None
+
+
 def _keep_snapshot(source: DatabaseSource, found: Introspection) -> None:
     """Record a successful probe — and untick whatever it shows is no longer a view.
 
@@ -388,7 +428,12 @@ def _keep_snapshot(source: DatabaseSource, found: Introspection) -> None:
     source.table_columns = {name: list(columns) for name, columns in found.table_columns.items()}
     still_views = [name for name in source.allowed_views if name in source.view_columns]
     dropped = [name for name in source.allowed_views if name not in source.view_columns]
-    source.allowed_views = still_views
+    # ADR-0095: the first probe that finds views ticks them all, as a creator
+    # almost always would — views are the database's own curated windows, and
+    # nobody reads anything until access rules (or `open`) say who may. Never
+    # again after: a view a creator unticked stays unticked.
+    first_ticks = not source.allowed_views and source.last_probe_status != DatabaseSourceStatus.CONNECTED
+    source.allowed_views = list(source.view_columns) if first_ticks else still_views
     # A table ticked for writing that the probe no longer lists with columns —
     # dropped, turned into a view, or an engine that cannot write — is unticked
     # the same way, and said the same way.
@@ -397,6 +442,8 @@ def _keep_snapshot(source: DatabaseSource, found: Introspection) -> None:
     dropped_tables = [name for name in written if name not in source.table_columns]
     source.allowed_write_tables = still_tables
     detail = f"Kết nối thành công — {len(found.views)} view"
+    if first_ticks and found.views:
+        detail += " (đã tự chọn tất cả — bỏ chọn view nào agent không nên đọc)"
     if dropped:
         detail += f"; đã bỏ chọn {', '.join(dropped)} vì không còn là view"
     if dropped_tables:

@@ -40,7 +40,9 @@ and `rules` (position → view → `all` or `where` view column = principal
 attribute), and per table which of `insert`/`update`/`delete` a position may
 make on which rows (`tables`, ADR-0094 — never implied by a view grant). Deny
 by default. Applied in code to every query and write; a model never chooses a
-scope.
+scope. `open: true` instead is a Database with nothing to keep apart —
+everyone the same, no employee view, chosen on purpose (ADR-0095); no rules
+at all still denies everyone.
 _Vietnamese_: quy tắc truy cập
 _Avoid_: data_scope, RLS policy, authz
 

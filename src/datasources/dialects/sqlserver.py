@@ -46,7 +46,6 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 import pymssql
 from sqlalchemy import Unicode, cast, func, literal_column, or_, select, table
 from sqlalchemy.dialects import mssql
-from sqlalchemy.sql import Select
 
 from src.datasources.dialects.base import (
     ColumnRef,
@@ -61,7 +60,7 @@ from src.datasources.dialects.base import (
     WriteRequest,
     pin_address,
 )
-from src.datasources.dialects.sql import select_for, source_table
+from src.datasources.dialects.sql import select_for, source_table, write_statement
 from src.datasources.query import PLAIN_NAME
 
 #: DS-02's "lỗi dễ hiểu trong ≤ 5 s" — for the login, and for every statement.
@@ -154,6 +153,20 @@ WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCH
 ORDER BY TABLE_SCHEMA, TABLE_NAME
 """
 
+_TABLE_COLUMNS = """
+SELECT c.TABLE_SCHEMA, c.TABLE_NAME, c.COLUMN_NAME
+FROM INFORMATION_SCHEMA.COLUMNS c
+JOIN INFORMATION_SCHEMA.TABLES t ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+WHERE t.TABLE_TYPE = 'BASE TABLE' AND c.TABLE_SCHEMA NOT IN ('sys', 'INFORMATION_SCHEMA')
+ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION
+"""
+
+#: A write's failures in a write's words (`postgresql._AS_WRITE_FAILURE`'s reason).
+_AS_WRITE_FAILURE = {
+    ProbeFailure.PERMISSION_DENIED: ProbeFailure.WRITE_DENIED,
+    ProbeFailure.SERVER_ERROR: ProbeFailure.WRITE_FAILED,
+}
+
 #: Run on every connection before anything else. `SET` inside `IF` still
 #: lasts the session; snapshot only where the database has it switched on,
 #: since asking for it elsewhere fails the first read.
@@ -193,12 +206,20 @@ class SqlServerDialect:
                 columns.setdefault((schema, view), []).append(column_name)
             cursor.execute(_BASE_TABLES)
             tables = tuple(_display_name(schema, name) for schema, name in cursor.fetchall())
+            cursor.execute(_TABLE_COLUMNS)
+            table_columns: dict[str, list[str]] = {}
+            for schema, name, column_name in cursor.fetchall():
+                table_columns.setdefault(_display_name(schema, name), []).append(column_name)
         counts = self._counted(dsn, trusted_hosts, list(columns))
         views = tuple(
             ViewInfo(name=_display_name(*key), columns=tuple(names), row_count=counts.get(key))
             for key, names in columns.items()
         )
-        return Introspection(views=views, base_tables=tables)
+        return Introspection(
+            views=views,
+            base_tables=tables,
+            table_columns={name: tuple(names) for name, names in table_columns.items()},
+        )
 
     def identity_lookup(self, dsn: str, *, trusted_hosts: frozenset[str]) -> IdentityLookup:
         """The asker's row by one equality, as a parameter — `None` for nobody and for an ambiguous match.
@@ -300,9 +321,34 @@ class SqlServerDialect:
         return counts
 
     def run_write(self, dsn: str, request: WriteRequest, *, trusted_hosts: frozenset[str]) -> int:
-        """Not yet (ADR-0094): every connection here is read-only at the session, and stays so until a write
-        path is built and tested against this engine. Refused before anything is dialled."""
-        raise DatabaseProbeError(ProbeFailure.WRITE_UNSUPPORTED)
+        """`request` in the one transaction of this dialect that is committed — after the row ceiling is checked.
+
+        Every other connection here ends in `connect`'s rollback. This one
+        (ADR-0094) carries a write a person approved: the asker's attributes
+        on the session as for a read, the statement, then `COMMIT` only if it
+        changed no more rows than the node allows. Anything else leaves by
+        `connect`'s rollback, so a failed or oversized write never lands.
+        """
+        statement = write_statement(request, default_schema=_DEFAULT_SCHEMA)
+        attributes = {
+            name.lower(): str(value)
+            for name, value in request.session_attributes.items()
+            if PLAIN_NAME.match(name.lower()) and value is not None
+        }
+        try:
+            with self.connect(dsn, trusted_hosts=trusted_hosts) as connection:
+                cursor = connection.cursor()
+                for name, value in attributes.items():
+                    cursor.execute("EXEC sp_set_session_context @key = %s, @value = %s, @read_only = 1", (name, value))
+                _execute(cursor, statement)
+                affected = int(cursor.rowcount)
+                if affected > request.max_rows:
+                    raise DatabaseProbeError(ProbeFailure.TOO_MANY_ROWS)
+                cursor.execute("COMMIT TRANSACTION")
+                return affected
+        except pymssql.Error as exc:
+            reason = _failure_of(exc)
+            raise DatabaseProbeError(_AS_WRITE_FAILURE.get(reason, reason)) from None
 
     @contextmanager
     def _reading(
@@ -539,7 +585,7 @@ def _instance_port(address: str, instance: str) -> int:
     return int(port)
 
 
-def _execute(cursor: Any, statement: Select[Any]) -> Any:
+def _execute(cursor: Any, statement: Any) -> Any:
     """`statement` compiled for SQL Server and run on `cursor` — every value a pymssql parameter."""
     compiled = statement.compile(dialect=_SQL_DIALECT, compile_kwargs={"render_postcompile": True})
     cursor.execute(str(compiled), compiled.params)

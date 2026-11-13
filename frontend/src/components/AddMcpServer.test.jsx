@@ -2,13 +2,15 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import * as api from "../lib/api";
-import { ConnectorScreen, describeLifetime } from "./AddMcpServer";
+import AddMcpServer, { ConnectorScreen, describeLifetime } from "./AddMcpServer";
 
 vi.mock("../lib/api", async () => {
   const actual = await vi.importActual("../lib/api");
   return {
     ...actual,
-    userConnections: { ...actual.userConnections, connectGoogleWithToken: vi.fn(), startGoogle: vi.fn() },
+    userConnections: { ...actual.userConnections, connectGoogleWithToken: vi.fn(), startGoogle: vi.fn(), list: vi.fn() },
+    workflow: { ...actual.workflow, tools: vi.fn() },
+    mcpConnections: { ...actual.mcpConnections, mine: vi.fn() },
   };
 });
 
@@ -84,5 +86,57 @@ describe("ConnectorScreen — per-user connector", () => {
 
     expect(screen.getByText(/token đã hết hạn/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Dán access token")).toBeInTheDocument();
+  });
+});
+
+/* The picker says which of the two kinds a tool is: built-in (Gmail, Drive —
+ * the platform calls their API, no server to run) or an MCP server an admin
+ * approved. A server the creator sent stays on screen while it waits. */
+describe("the tool picker", () => {
+  const gmailTool = { id: "gmail", name: "Gmail", source: "built_in", actions: [{ name: "send_email" }, { name: "search" }] };
+  const crm = { id: "mcp_crm", name: "CRM nội bộ", source: "registered", actions: [{ name: "find_customer" }] };
+
+  function arm({ tools = [gmailTool], mine = [], link = { provider: "google", connected: false } } = {}) {
+    api.workflow.tools.mockResolvedValue(tools);
+    api.mcpConnections.mine.mockResolvedValue(mine);
+    api.userConnections.list.mockResolvedValue([link]);
+  }
+
+  it("names both kinds and says whether Google is signed in", async () => {
+    arm({ link: { provider: "google", connected: true, account_email: "an@gmail.com", status: "connected" } });
+    render(<AddMcpServer open onClose={() => {}} />);
+
+    expect(await screen.findByText("Chọn công cụ")).toBeInTheDocument();
+    expect(screen.getByText("Cài sẵn", { selector: "p, p *" })).toBeInTheDocument();
+    expect(await screen.findByText("2 hành động · đã nối an@gmail.com")).toBeInTheDocument();
+    expect(screen.getByText("MCP server", { selector: "p, p *" })).toBeInTheDocument();
+  });
+
+  it("explains, with no MCP server yet, that none has to be built", async () => {
+    arm();
+    render(<AddMcpServer open onClose={() => {}} />);
+
+    expect(await screen.findByTestId("mcp-empty")).toHaveTextContent(/Không cần tự dựng server/);
+  });
+
+  it("shows an approved server to pick and one still waiting on an admin, which cannot be picked", async () => {
+    arm({
+      tools: [gmailTool, crm],
+      mine: [{ id: 3, name: "Kho nội bộ", status: "pending", server_url: "https://kho/mcp" }, { id: 4, name: "CRM nội bộ", status: "approved" }],
+    });
+    render(<AddMcpServer open onClose={() => {}} />);
+
+    expect(await screen.findByText("1 hành động · đã duyệt")).toBeInTheDocument();
+    const waiting = (await screen.findByText("đang chờ admin duyệt")).closest("button");
+    expect(waiting).toBeDisabled();
+    expect(waiting).toHaveTextContent("Kho nội bộ");
+    expect(screen.queryByTestId("mcp-empty")).toBeNull();
+  });
+
+  it("labels a connect screen with its kind", () => {
+    render(<ConnectorScreen tool={crm} link={null} onBack={() => {}} onUse={() => {}} onConnected={() => {}} notify={() => {}} />);
+
+    expect(screen.getByText("MCP")).toBeInTheDocument();
+    expect(screen.getByText(/gọi qua giao thức MCP/)).toBeInTheDocument();
   });
 });

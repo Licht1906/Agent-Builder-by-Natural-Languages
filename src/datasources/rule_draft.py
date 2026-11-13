@@ -18,6 +18,11 @@ out of the draft and named in `dropped`. A filter cut down to nothing drops
 its whole grant: it is **never** widened to `all`, because a rule that lost
 its condition is a rule that would show more, and the one safe direction to
 be wrong in is less.
+
+**Write grants are drafted the same way, and more grudgingly** (ADR-0094).
+Only when the Hệ CSDL has tables ticked for writing, only the operations the
+description names, and `all_rows` only when it says so in so many words — a
+write grant that lost its filter is dropped, never widened.
 """
 
 import unicodedata
@@ -25,7 +30,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.datasources.access import AccessRules, Identity, Rule, WhereGrant
+from src.datasources.access import AccessRules, Identity, Rule, TableGrant, WhereGrant
+from src.datasources.write import WriteOp
 from src.db.models import PlatformCallPurpose
 from src.evals.model_json import UnreadableModelReplyError, json_object
 from src.services.llm import ChatModelFactory
@@ -53,7 +59,7 @@ Các CHỨC VỤ có thật trong view nhân viên — chỉ được dùng đú
 Các VIEW được phép đọc, với cột của từng view:
 {views}
 
-Mỗi rule gán cho MỘT chức vụ, trên từng view, một trong hai quyền:
+{tables_section}Mỗi rule gán cho MỘT chức vụ, trên từng view, một trong hai quyền:
 - "all": xem mọi dòng của view — CHỈ khi mô tả nói rõ chức vụ đó xem hết, xem toàn bộ, không giới hạn.
 - {{"where": {{"<cột của view>": "<tên thuộc tính của người hỏi>"}}}}: chỉ xem dòng mà cột đó bằng đúng thuộc \
 tính của người hỏi. "Khách mình phụ trách" là cột người phụ trách của view bằng mã nhân viên của người hỏi; \
@@ -66,8 +72,23 @@ Quy tắc:
 - Không bao giờ viết SQL, điều kiện so sánh khác bằng, hay giá trị cố định.
 
 Chỉ trả lời bằng một JSON object, không kèm giải thích:
-{{"rules": [{{"position": "...", "views": {{"<view>": "all"}}}}]}}
+{{"rules": [{{"position": "...", "views": {{"<view>": "all"}}{tables_example}}}]}}
 """
+
+_TABLES_SECTION = """\
+Các BẢNG được phép GHI (thay đổi dữ liệu), với cột của từng bảng:
+{tables}
+
+Quyền GHI khai riêng trong "tables" của rule, KHÔNG suy ra từ quyền xem: chỉ viết khi mô tả nói rõ chức vụ đó \
+được thêm, sửa, ghi lại, cập nhật hay xoá. Mỗi bảng: {{"operations": [...], "where": {{"<cột của bảng>": \
+"<tên thuộc tính của người hỏi>"}}}} — "operations" chỉ gồm những thao tác mô tả cho phép trong "insert" (thêm, \
+ghi lại), "update" (sửa, cập nhật), "delete" (xoá); "where" giới hạn những dòng được ghi, y như quyền xem. Chỉ \
+khi mô tả nói rõ được ghi MỌI dòng mới dùng {{"operations": [...], "all_rows": true}} thay cho "where". Mọi lần \
+ghi vẫn phải có người duyệt — đó là việc của nền tảng, không ghi vào đây.
+
+"""
+
+_TABLES_EXAMPLE = ', "tables": {{"<bảng>": {{"operations": ["insert"], "where": {{"<cột>": "<thuộc tính>"}}}}}}'
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +106,7 @@ async def draft_access_rules(
     positions: Sequence[str],
     view_columns: Mapping[str, Sequence[str]],
     model_factory: ChatModelFactory,
+    table_columns: Mapping[str, Sequence[str]] | None = None,
 ) -> RulesDraft:
     """`description` as draft rules over `identity`, `positions` and `view_columns` — never saved here.
 
@@ -94,7 +116,17 @@ async def draft_access_rules(
     do not exist is not — those are dropped and reported, because asking a
     model to try again does not make a position exist.
     """
+    tables = dict(table_columns or {})
+    tables_section = (
+        _TABLES_SECTION.format(
+            tables="\n".join(f"- {table}: {', '.join(columns)}" for table, columns in tables.items())
+        )
+        if tables
+        else ""
+    )
     prompt = _PROMPT.format(
+        tables_section=tables_section,
+        tables_example=_TABLES_EXAMPLE.format() if tables else "",
         description=description.strip(),
         identity_view=identity.view,
         attributes="\n".join(f"- {name} → cột {column}" for name, column in identity.attributes.items()),
@@ -104,7 +136,11 @@ async def draft_access_rules(
     return await write_document(
         build_prompt=lambda: prompt,
         parse=lambda reply: fitted_draft(
-            json_object(reply), identity=identity, positions=positions, view_columns=view_columns
+            json_object(reply),
+            identity=identity,
+            positions=positions,
+            view_columns=view_columns,
+            table_columns=tables,
         ),
         model_factory=model_factory,
         purpose=PlatformCallPurpose.ACCESS_RULES_DRAFT,
@@ -119,6 +155,7 @@ def fitted_draft(
     identity: Identity,
     positions: Sequence[str],
     view_columns: Mapping[str, Sequence[str]],
+    table_columns: Mapping[str, Sequence[str]] | None = None,
 ) -> RulesDraft:
     """The model's `{"rules": [...]}` cut down to what exists, and a sentence for every cut. Pure."""
     real = {_key(position): str(position) for position in positions}
@@ -137,11 +174,14 @@ def fitted_draft(
             dropped.append(f"chức vụ {position!r} được đề xuất hai lần — giữ lần đầu")
             continue
         views = _fitted_views(raw.get("views"), position, identity=identity, view_columns=view_columns, dropped=dropped)
-        if not views:
+        tables = _fitted_tables(
+            raw.get("tables"), position, identity=identity, table_columns=table_columns or {}, dropped=dropped
+        )
+        if not views and not tables:
             dropped.append(f"chức vụ {position!r} không còn quyền xem view nào hợp lệ — bỏ rule, chức vụ này bị cấm")
             continue
         seen.add(position)
-        rules.append(Rule(position=position, views=views))
+        rules.append(Rule(position=position, views=views, tables=tables))
     if not rules and not dropped:
         dropped.append("mô tả không cho chức vụ nào xem gì — mọi người hỏi đều bị cấm cho tới khi có rule")
     return RulesDraft(rules=AccessRules(identity=identity, rules=rules), dropped=dropped)
@@ -188,6 +228,62 @@ def _fitted_views(
             # Never widened to "all": a filter that lost its condition would show more, not less.
             dropped.append(f"quyền của {position} trên {view} không còn điều kiện lọc nào hợp lệ — bỏ quyền này")
     return views
+
+
+def _fitted_tables(
+    raw: object,
+    position: str,
+    *,
+    identity: Identity,
+    table_columns: Mapping[str, Sequence[str]],
+    dropped: list[str],
+) -> dict[str, TableGrant]:
+    """One rule's `tables` (ADR-0094), each write grant kept only as far as the Hệ CSDL and the identity carry it."""
+    if not isinstance(raw, Mapping):
+        return {}
+    tables: dict[str, TableGrant] = {}
+    known = {op.value: op for op in WriteOp}
+    for table, grant in raw.items():
+        table = str(table)
+        if table not in table_columns:
+            dropped.append(f"bảng {table!r} không được phép ghi (quy tắc của {position}) — bỏ quyền ghi này")
+            continue
+        if not isinstance(grant, Mapping):
+            dropped.append(f"quyền ghi của {position} trên {table} không đúng dạng — bỏ quyền ghi này")
+            continue
+        written = [str(op) for op in grant.get("operations") or []]
+        operations = [known[op] for op in dict.fromkeys(written) if op in known]
+        dropped.extend(
+            f"thao tác {op!r} không phải insert/update/delete (quy tắc của {position} trên {table}) — bỏ thao tác này"
+            for op in written
+            if op not in known
+        )
+        if not operations:
+            dropped.append(f"quyền ghi của {position} trên {table} không còn thao tác nào hợp lệ — bỏ quyền ghi này")
+            continue
+        if grant.get("all_rows") is True and not grant.get("where"):
+            tables[table] = TableGrant(operations=operations, all_rows=True)
+            continue
+        where = grant.get("where")
+        kept: dict[str, str] = {}
+        for column, attribute in where.items() if isinstance(where, Mapping) else ():
+            column, attribute = str(column), str(attribute)
+            if column not in table_columns[table]:
+                dropped.append(f"bảng {table} không có cột {column!r} (quy tắc của {position}) — bỏ điều kiện này")
+            elif attribute not in identity.attributes:
+                dropped.append(
+                    f"người hỏi không có thuộc tính {attribute!r} (quy tắc của {position} trên {table}) — bỏ điều kiện này"
+                )
+            else:
+                kept[column] = attribute
+        if kept:
+            tables[table] = TableGrant(operations=operations, where=kept)
+        else:
+            # Never widened to every row: a write grant that lost its filter would let more be changed.
+            dropped.append(
+                f"quyền ghi của {position} trên {table} không còn điều kiện lọc nào hợp lệ — bỏ quyền ghi này"
+            )
+    return tables
 
 
 def _key(position: str) -> str:

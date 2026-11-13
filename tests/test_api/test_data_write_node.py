@@ -21,15 +21,20 @@ from sqlalchemy.orm import Session
 
 from src.config import get_settings
 from src.datasources.access import AccessRules
+from src.datasources.reader import PlatformDatabaseReader
 from src.datasources.sources import (
     create_database_source,
+    replace_dsn,
+    replace_write_dsn,
     run_database_test,
     save_access_rules,
     set_allowed_views,
     set_allowed_write_tables,
 )
+from src.datasources.write import StructuredWrite
 from src.db.base import engine
 from src.db.models import AgentVersion, DatabaseDialect, DatabaseSource, SecretStoreEntry, User, VersionStatus
+from src.models.node_registry import DataWriteConfig
 from src.models.workflow import WorkflowJSON
 from src.services.secret_store import EncryptedDbSecretStore
 from src.workflow.validation import graph_problems
@@ -337,3 +342,48 @@ async def test_a_graph_with_a_path_to_a_write_that_skips_approval_cannot_be_conf
     assert any("data_write" in problem.message and problem.node_id == "write" for problem in exposed)
     guarded = graph_problems(WorkflowJSON.model_validate(_workflow("7")))
     assert not any(problem.node_id == "write" for problem in guarded)
+
+
+async def test_with_a_write_account_the_main_connection_can_be_a_read_only_login(
+    db_session: Session, seeded_creator: User, source: DatabaseSource
+) -> None:
+    """ADR-0094: the write DSN is the only account that needs a write privilege — and without it the database says no."""
+    with engine.begin() as connection:
+        connection.execute(text("DROP ROLE IF EXISTS dwn_readonly"))
+        connection.execute(text("CREATE ROLE dwn_readonly LOGIN PASSWORD 'ro-pass'"))
+        connection.execute(text("GRANT SELECT ON v_dwn_staff, t_dwn_notes TO dwn_readonly"))
+    store = EncryptedDbSecretStore(db=db_session)
+    owner_dsn = engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
+    read_only_dsn = engine.url.set(
+        drivername="postgresql", username="dwn_readonly", password="ro-pass"
+    ).render_as_string(hide_password=False)
+    try:
+        replace_dsn(db_session, source, read_only_dsn, secret_store=store)
+        reader = PlatformDatabaseReader(
+            db=db_session,
+            owner_id=seeded_creator.id,
+            asker="an@cty.vn",
+            secret_store=store,
+            trusted_hosts=frozenset({TRUSTED}),
+        )
+        config = DataWriteConfig(source_id=str(source.id), tables=["t_dwn_notes"])
+        write = StructuredWrite.model_validate(NOTE)
+
+        refused = reader.write(config, write)
+        assert refused.affected is None and "không có quyền ghi" in (refused.refusal or "")
+
+        replace_write_dsn(db_session, source, owner_dsn, secret_store=store)
+        assert reader.write(config, write).affected == 1
+
+        replace_write_dsn(db_session, source, "", secret_store=store)
+        assert source.write_dsn_secret_ref == ""
+        assert reader.write(config, write).affected is None
+        assert _notes() == [("C3", "E200", "c"), ("C1", "E102", "hẹn trả 20/11")]
+    finally:
+        db_session.query(SecretStoreEntry).filter(SecretStoreEntry.key.like(f"database_source:{source.id}:%")).delete(
+            synchronize_session=False
+        )
+        db_session.commit()
+        with engine.begin() as connection:
+            connection.execute(text("DROP OWNED BY dwn_readonly"))
+            connection.execute(text("DROP ROLE IF EXISTS dwn_readonly"))

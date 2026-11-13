@@ -201,7 +201,7 @@ def bound_databases(
             nodes.append(node)
             continue
         rules = access_rules_of(source)
-        identity_view = rules.identity.view if rules is not None else None
+        identity_view = rules.identity.view if rules is not None and rules.identity is not None else None
         views = [view for view in source.allowed_views if view != identity_view]
         nodes.append(node.model_copy(update={"config": {**node.config, "source_id": str(ref), "views": views}}))
     return workflow.model_copy(update={"nodes": nodes})

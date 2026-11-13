@@ -212,6 +212,8 @@ def load_package(config: RuntimeConfig, secrets: Mapping[str, str], *, base: Pat
             name=declared_source.name,
             dialect=dialect,
             dsn_secret_ref=declared_source.dsn_secret,
+            write_dsn_secret_ref=declared_source.write_dsn_secret or "",
+            agent_notes=declared_source.agent_notes,
             allowed_views=list(check.view_columns),
             view_columns=check.view_columns,
             view_row_counts={},
@@ -298,7 +300,8 @@ def check_schema(
     for view in read:
         expect(view, built_on.get(view, ()))
     identity = rules.identity
-    expect(identity.view, [identity.match_by, *identity.attributes.values()])
+    if identity is not None:
+        expect(identity.view, [identity.match_by, *identity.attributes.values()])
     for rule in rules.rules:
         for view, grant in rule.views.items():
             expect(view, grant.where if isinstance(grant, WhereGrant) else ())

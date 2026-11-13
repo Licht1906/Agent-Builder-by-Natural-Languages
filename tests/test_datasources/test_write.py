@@ -2,9 +2,8 @@
 
 The structured write the model fills in, the rules' `tables` grants and
 `scope_for_write`, the statement a write compiles to, and `run_write` against
-the suite's own Postgres: what lands, what the asker's scope keeps out, and
-the row ceiling that rolls a write back. SQL Server and MySQL refuse to write
-before dialling anything.
+every engine (`backend`): what lands, what the asker's scope keeps out, and
+the row ceiling that rolls a write back.
 """
 
 from collections.abc import Iterator
@@ -12,7 +11,6 @@ from typing import Any
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 
 from src.datasources.access import (
@@ -26,12 +24,11 @@ from src.datasources.access import (
     access_problems,
     scope_for_write,
 )
-from src.datasources.dialects import DatabaseProbeError, Introspection, ProbeFailure, WriteRequest, dialect_for
+from src.datasources.dialects import DatabaseProbeError, Introspection, ProbeFailure, WriteRequest
 from src.datasources.dialects.sql import write_statement
 from src.datasources.write import StructuredWrite, WriteOp, describe_write, write_problems
-from src.db.base import engine
 from src.db.models import DatabaseDialect
-from tests.test_datasources.backends import postgres_backend
+from tests.test_datasources.backends import Backend
 
 RULES = AccessRules.model_validate(
     {
@@ -273,16 +270,17 @@ def test_an_insert_writes_the_askers_scope_into_the_new_row() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# `run_write` for real
+# `run_write` for real — once per engine
 # --------------------------------------------------------------------------- #
+
+TABLE_COLUMNS = ("customer_id", "sales_rep_id", "note")
 
 
 @pytest.fixture
-def notes() -> Iterator[None]:
-    backend = postgres_backend()
+def notes(backend: Backend) -> Iterator[None]:
     backend.execute("DROP TABLE IF EXISTS t_write_notes")
     backend.execute(
-        "CREATE TABLE t_write_notes (id serial PRIMARY KEY, customer_id text NOT NULL, sales_rep_id text, note text)"
+        "CREATE TABLE t_write_notes (customer_id varchar(20) NOT NULL, sales_rep_id varchar(20), note varchar(200))"
     )
     backend.execute(
         "INSERT INTO t_write_notes (customer_id, sales_rep_id, note) VALUES "
@@ -292,13 +290,14 @@ def notes() -> Iterator[None]:
     backend.execute("DROP TABLE IF EXISTS t_write_notes")
 
 
-def _run(write: StructuredWrite, *, scope: tuple[tuple[str, Any], ...] = (), max_rows: int = 5) -> int:
-    backend = postgres_backend()
+def _run(
+    backend: Backend, write: StructuredWrite, *, scope: tuple[tuple[str, Any], ...] = (), max_rows: int = 5
+) -> int:
     return backend.dialect.run_write(
         backend.dsn,
         WriteRequest(
             write=write,
-            table_columns=("id", "customer_id", "sales_rep_id", "note"),
+            table_columns=TABLE_COLUMNS,
             scope=scope,
             session_attributes={"employee_code": "E102"},
             max_rows=max_rows,
@@ -307,71 +306,74 @@ def _run(write: StructuredWrite, *, scope: tuple[tuple[str, Any], ...] = (), max
     )
 
 
-def _rows() -> list[tuple[str, str | None, str | None]]:
-    with engine.begin() as connection:
-        return [
-            tuple(row)
-            for row in connection.execute(text("SELECT customer_id, sales_rep_id, note FROM t_write_notes ORDER BY id"))
-        ]
+def _count(backend: Backend, where: str = "1 = 1") -> int:
+    return int(backend.scalar(f"SELECT count(*) FROM t_write_notes WHERE {where}"))
 
 
 @pytest.mark.usefixtures("notes")
-def test_an_insert_lands_with_the_askers_scope_written_in() -> None:
-    assert (
-        _run(
-            _write(table="t_write_notes", operation="insert", values={"customer_id": "C9", "note": "mới"}),
-            scope=(("sales_rep_id", "E102"),),
+def test_an_insert_lands_with_the_askers_scope_written_in(backend: Backend) -> None:
+    write = _write(table="t_write_notes", operation="insert", values={"customer_id": "C9", "note": "moi"})
+    assert _run(backend, write, scope=(("sales_rep_id", "E102"),)) == 1
+    assert _count(backend, "customer_id = 'C9' AND sales_rep_id = 'E102' AND note = 'moi'") == 1
+
+
+@pytest.mark.usefixtures("notes")
+def test_an_update_changes_the_askers_row_and_never_one_outside_their_scope(backend: Backend) -> None:
+    def update(customer: str) -> StructuredWrite:
+        return _write(
+            table="t_write_notes",
+            operation="update",
+            values={"note": "da goi"},
+            where=[{"column": "customer_id", "value": customer}],
         )
-        == 1
-    )
-    assert _rows()[-1] == ("C9", "E102", "mới")
+
+    assert _run(backend, update("C1"), scope=(("sales_rep_id", "E102"),)) == 1
+    assert _run(backend, update("C3"), scope=(("sales_rep_id", "E102"),)) == 0
+    assert _count(backend, "note = 'da goi'") == 1
+    assert _count(backend, "customer_id = 'C3' AND note = 'c'") == 1
 
 
 @pytest.mark.usefixtures("notes")
-def test_an_update_never_reaches_a_row_outside_the_askers_scope() -> None:
-    write = _write(
-        table="t_write_notes",
-        operation="update",
-        values={"note": "đã gọi"},
-        where=[{"column": "customer_id", "value": "C3"}],
-    )
-    assert _run(write, scope=(("sales_rep_id", "E102"),)) == 0
-    assert _rows()[2] == ("C3", "E200", "c")
+def test_a_delete_removes_exactly_the_named_rows(backend: Backend) -> None:
+    write = _write(table="t_write_notes", operation="delete", where=[{"column": "customer_id", "value": "C2"}])
+    assert _run(backend, write, scope=(("sales_rep_id", "E102"),)) == 1
+    assert _count(backend) == 2
 
 
 @pytest.mark.usefixtures("notes")
-def test_a_write_over_the_row_ceiling_is_rolled_back_whole() -> None:
+def test_a_write_over_the_row_ceiling_is_rolled_back_whole(backend: Backend) -> None:
     write = _write(table="t_write_notes", operation="delete", where=[{"column": "sales_rep_id", "value": "E102"}])
     with pytest.raises(DatabaseProbeError) as caught:
-        _run(write, max_rows=1)
+        _run(backend, write, max_rows=1)
     assert caught.value.reason is ProbeFailure.TOO_MANY_ROWS
-    assert len(_rows()) == 3
+    assert _count(backend) == 3
 
 
 @pytest.mark.usefixtures("notes")
-def test_a_write_the_database_refuses_changes_nothing_and_says_so_in_its_own_words() -> None:
-    write = _write(table="t_write_notes", operation="insert", values={"note": "thiếu khách"})
+def test_a_write_the_database_refuses_changes_nothing_and_says_so_in_its_own_words(backend: Backend) -> None:
+    write = _write(table="t_write_notes", operation="insert", values={"customer_id": None, "note": "thieu khach"})
     with pytest.raises(DatabaseProbeError) as caught:
-        _run(write)
+        _run(backend, write)
     assert caught.value.reason is ProbeFailure.WRITE_FAILED
-    assert len(_rows()) == 3
+    assert _count(backend) == 3
 
 
-def test_the_probe_lists_each_base_tables_columns(notes: None) -> None:
-    backend = postgres_backend()
+@pytest.mark.usefixtures("notes")
+def test_the_probe_lists_each_base_tables_columns(backend: Backend) -> None:
     found = backend.dialect.introspect(backend.dsn, trusted_hosts=backend.trusted)
-    assert found.table_columns["t_write_notes"] == ("id", "customer_id", "sales_rep_id", "note")
+    assert found.table_columns["t_write_notes"] == TABLE_COLUMNS
 
 
-@pytest.mark.parametrize("kind", [DatabaseDialect.SQLSERVER, DatabaseDialect.MYSQL])
-def test_an_engine_that_cannot_write_yet_refuses_before_dialling(kind: DatabaseDialect) -> None:
-    request = WriteRequest(
-        write=_write(table="t", operation="delete", where=[{"column": "id", "value": 1}]),
-        table_columns=("id",),
-        scope=(),
-        session_attributes={},
-        max_rows=1,
-    )
-    with pytest.raises(DatabaseProbeError) as caught:
-        dialect_for(kind).run_write("not even a dsn", request, trusted_hosts=frozenset())
-    assert caught.value.reason is ProbeFailure.WRITE_UNSUPPORTED
+@pytest.mark.usefixtures("notes")
+def test_a_read_connection_still_cannot_write_after_a_write_ran(backend: Backend) -> None:
+    """The write path lifts read-only for its own transaction only — every other door stays shut."""
+    insert = _write(table="t_write_notes", operation="insert", values={"customer_id": "C9"})
+    _run(backend, insert)
+    with pytest.raises(Exception):  # noqa: B017, PT011 — each driver has its own error for a refused write
+        with backend.dialect.connect(backend.dsn, trusted_hosts=backend.trusted) as connection:
+            cursor = connection.cursor()
+            cursor.execute("DELETE FROM t_write_notes")
+            if backend.kind is DatabaseDialect.SQLSERVER:
+                # No read-only transaction on SQL Server: the door is the rollback `connect` always ends in.
+                raise RuntimeError("rolled back on exit")
+    assert _count(backend) == 4

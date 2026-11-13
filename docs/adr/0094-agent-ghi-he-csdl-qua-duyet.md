@@ -25,12 +25,15 @@ Theo ADR-0059, agent chỉ đọc được Hệ CSDL qua view. Người dùng c�
 6. **Một transaction, có trần số dòng** (`max_rows`, mặc định 20). Vượt trần thì rollback toàn bộ. Sau khi duyệt, các cổng kiểm tra được hỏi lại một lần nữa trước khi ghi.
 7. **Sandbox mô phỏng việc ghi**, trừ khi lượt chạy bật "Gửi thật" (DS-09), giống hệt cách xử lý email. Eval không bao giờ ghi.
 8. **Mỗi lần ghi vào audit chain** (DS-10), dạng `action`, tool `data_write`, kèm hash của payload và người duyệt.
-9. **Đợt này chỉ PostgreSQL ghi được.** SQL Server và MySQL vẫn khoá read-only ở tầng phiên kết nối. `run_write` của hai loại này từ chối với `WRITE_UNSUPPORTED` trước khi kết nối, và khi probe không liệt kê bảng nào để tick.
+9. **Cả ba loại DB đều ghi được**: PostgreSQL, SQL Server và MySQL, cùng một bộ test chạy trên từng loại. Mọi kết nối khác vẫn read-only; chỉ transaction của một lần ghi đã duyệt mới được commit. MySQL đếm số dòng *thực sự đổi*, nên sửa một dòng thành đúng giá trị nó đang có được tính là 0 dòng.
 10. **Bỏ tick một bảng ghi chỉ chặn việc ghi**, không đóng việc đọc của cả Hệ CSDL. Khi lưu quy tắc thì vẫn kiểm tra đầy đủ.
+
+11. **DSN ghi riêng, tuỳ chọn.** Một Hệ CSDL có thể khai thêm một tài khoản chỉ dùng cho `data_write`. Khi có, DSN chính chỉ cần quyền đọc: tra người hỏi và mọi lần đọc đi qua DSN chính, riêng transaction ghi đi qua DSN ghi. Gói xuất ra khai bằng `data_sources[].write_dsn_secret`.
+12. **Meta-agent nháp cả quyền ghi.** Khi Hệ CSDL có bảng được tick cho phép ghi, bản nháp quy tắc gồm cả `tables`. Chỉ những thao tác mô tả nêu rõ mới được viết; quyền ghi mất điều kiện lọc bị bỏ, không bao giờ nới thành mọi dòng. Người tạo vẫn rà và lưu.
+13. **Eval đóng băng quyền ghi.** Cassette của một case lưu thêm, cho mỗi bảng node ghi dùng, danh sách cột và quyền của người hỏi theo từng thao tác (không lưu dòng nào). Lượt eval soạn và kiểm quyền thao tác ghi từ đó; việc ghi luôn là mô phỏng. `data_write` được tính là hành động có tác dụng phụ, nên các template về duyệt và "không được hành động" áp dụng cho agent có node ghi.
 
 ## Hệ quả
 
-- Ràng buộc C4 của UC-1 không còn tuyệt đối. Bảo đảm thay thế gồm: bảng được tick riêng, quyền ghi khai riêng, người duyệt đúng payload, trần số dòng, và audit.
-- Nên dùng tài khoản DB có quyền ghi **chỉ** trên các bảng được tick. Hiện nền tảng dùng chung một DSN cho đọc và ghi; DSN ghi riêng là việc để sau.
-- Meta-agent biết vẽ `collect → data_query → human_approval → data_write → agent_llm → end`, nhưng chưa tự đề xuất nháp quyền ghi; người tạo khai quyền ghi trên form.
+- Ràng buộc C4 của UC-1 không còn tuyệt đối. Bảo đảm thay thế gồm: bảng được tick riêng, quyền ghi khai riêng, người duyệt đúng payload, trần số dòng, tài khoản ghi riêng, và audit.
 - ERP mẫu có thêm bảng `ar_followups` (ghi chú nhắc nợ, ngày hẹn trả) và view `v_ar_followups` để demo.
+- Prompt mới của composer (vẽ `data_write` sau `human_approval`) mới được kiểm bằng model giả lập; chưa có lượt chạy với LLM thật.

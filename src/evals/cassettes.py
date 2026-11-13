@@ -35,12 +35,13 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from src.datasources.access import Deny, DenyCause
+from src.datasources.access import WRITE_DENIED, Deny, DenyCause
 from src.datasources.dialects.base import QueryRows
 from src.datasources.in_memory import run_in_memory
 from src.datasources.query import StructuredQuery, effective_limit, query_problems
 from src.datasources.reader import Asker, DatabaseReader, QueryOutcome, WriteOutcome, describe
-from src.datasources.write import StructuredWrite, describe_write
+from src.datasources.sources import access_rules_of
+from src.datasources.write import StructuredWrite, describe_write, write_problems
 from src.db.models import DatabaseSource, EvalCase, EvalCassette
 from src.evals.checks import trivial_answer
 from src.models.eval_check import AnswersFromQuery, check_of
@@ -68,6 +69,20 @@ def data_reads(workflow: WorkflowJSON) -> list[tuple[str, str]]:
     return list(dict.fromkeys(pair for pair in pairs if pair[0]))
 
 
+#: How a frozen *table* is keyed in `eval_cassettes.view` (ADR-0094) — apart from every view name.
+TABLE_PREFIX = "table:"
+
+
+def data_writes(workflow: WorkflowJSON) -> list[tuple[str, str]]:
+    """Every `(source_id, table)` a `data_write` node of `workflow` may change, in graph order."""
+    pairs = [
+        (str(node.config.get("source_id") or ""), str(table))
+        for node in workflow.nodes_of_type(NodeType.DATA_WRITE)
+        for table in node.config.get("tables") or []
+    ]
+    return list(dict.fromkeys(pair for pair in pairs if pair[0]))
+
+
 # --------------------------------------------------------------------------- #
 # Recording
 # --------------------------------------------------------------------------- #
@@ -90,7 +105,7 @@ def record_case(db: Session, case: EvalCase, workflow: WorkflowJSON, reader: Dat
     the reason rather than run on half its data.
     """
     db.execute(delete(EvalCassette).where(EvalCassette.case_id == case.id))
-    if not case.run_as:
+    if not case.run_as and not _open_everywhere(_sources(db, workflow)):
         db.commit()
         return None
     asker = reader.asked_by(case.run_as)
@@ -109,7 +124,24 @@ def record_case(db: Session, case: EvalCase, workflow: WorkflowJSON, reader: Dat
                 view=view,
                 run_as=case.run_as,
                 schema_hash=schema_hash(columns),
-                payload=_frozen(outcome, columns),
+                payload={**_frozen(outcome, columns), "notes": asker.notes_of(source_id)},
+            )
+        )
+    # ADR-0094: what the asker may do to each table a `data_write` changes — the grant, never a row.
+    for source_id, table in data_writes(workflow):
+        write_config = DataWriteConfig.model_construct(source_id=source_id, tables=[table], max_rows=1)
+        frozen_table = asker.write_grants(write_config).get(table)
+        if frozen_table is None:
+            problems.append(f"Hệ CSDL {source_id} không cho ghi bảng {table}")
+            continue
+        db.add(
+            EvalCassette(
+                case_id=case.id,
+                source_id=int(source_id),
+                view=TABLE_PREFIX + table,
+                run_as=case.run_as,
+                schema_hash=schema_hash(frozen_table["columns"]),
+                payload={"table": table, **frozen_table},
             )
         )
     db.commit()
@@ -125,7 +157,7 @@ def record_missing(
     dữ liệu đóng băng" calls for the whole suite. A graph that reads no Hệ CSDL
     records nothing.
     """
-    if not data_reads(workflow):
+    if not data_reads(workflow) and not data_writes(workflow):
         return RecordReport()
     sources = _sources(db, workflow)
     recorded = 0
@@ -189,9 +221,19 @@ def cassette_problem(
     (or correcting the case's query), not rewriting the agent.
     """
     reads = data_reads(workflow)
-    if not reads or not case.run_as:
+    writes = data_writes(workflow)
+    if (not reads and not writes) or (not case.run_as and not _open_everywhere(sources)):
         return None
     by_key = {(str(cassette.source_id), cassette.view): cassette for cassette in cassettes}
+    for source_id, table in writes:
+        cassette = by_key.get((source_id, TABLE_PREFIX + table))
+        if cassette is None or cassette.run_as != case.run_as:
+            return f"Chưa có quyền ghi đóng băng của bảng {table} cho {case.run_as} — bấm “Ghi lại dữ liệu đóng băng”"
+        source = sources.get(source_id)
+        if source is None:
+            return f"Hệ CSDL {source_id} của bảng {table} không còn — không có dữ liệu để chấm"
+        if cassette.schema_hash != schema_hash((source.table_columns or {}).get(table, [])):
+            return f"Cấu trúc bảng {table} đã đổi từ lúc đóng băng dữ liệu — bấm “Ghi lại dữ liệu đóng băng”"
     for source_id, view in reads:
         cassette = by_key.get((source_id, view))
         if cassette is None or cassette.run_as != case.run_as:
@@ -236,7 +278,7 @@ def answer_key(check: AnswersFromQuery, cassettes: Sequence[EvalCassette], *, ru
 def _needs_recording(
     case: EvalCase, workflow: WorkflowJSON, cassettes: Sequence[EvalCassette], sources: Mapping[str, DatabaseSource]
 ) -> bool:
-    if not case.run_as:
+    if not case.run_as and not _open_everywhere(sources):
         return False
     by_key = {(str(cassette.source_id), cassette.view): cassette for cassette in cassettes}
     for source_id, view in data_reads(workflow):
@@ -246,7 +288,25 @@ def _needs_recording(
             return True
         if cassette.schema_hash != schema_hash(source.view_columns.get(view, [])):
             return True
+    for source_id, table in data_writes(workflow):
+        cassette = by_key.get((source_id, TABLE_PREFIX + table))
+        source = sources.get(source_id)
+        if cassette is None or cassette.run_as != case.run_as or source is None:
+            return True
+        if cassette.schema_hash != schema_hash((source.table_columns or {}).get(table, [])):
+            return True
     return False
+
+
+def _open_everywhere(sources: Mapping[str, DatabaseSource]) -> bool:
+    """Whether every Hệ CSDL a graph touches is open (ADR-0095) — then a case needs nobody to ask as."""
+    if not sources:
+        return False
+    for source in sources.values():
+        rules = access_rules_of(source)
+        if rules is None or not rules.open:
+            return False
+    return True
 
 
 def _cassettes_of(db: Session, case_ids: Sequence[int]) -> dict[int, list[EvalCassette]]:
@@ -260,7 +320,7 @@ def _cassettes_of(db: Session, case_ids: Sequence[int]) -> dict[int, list[EvalCa
 
 def _sources(db: Session, workflow: WorkflowJSON) -> dict[str, DatabaseSource]:
     found: dict[str, DatabaseSource] = {}
-    for source_id, _ in data_reads(workflow):
+    for source_id, _ in [*data_reads(workflow), *data_writes(workflow)]:
         if source_id in found:
             continue
         try:
@@ -325,11 +385,12 @@ class CassetteReader:
         }
 
     def read(self, config: DataQueryConfig, query: StructuredQuery) -> QueryOutcome:
-        if not self.asker:
+        frozen = {item.view: item for item in self._for(config.source_id) if item.run_as == self.asker}
+        if not self.asker and not frozen:
+            # Nothing frozen for nobody: the source was not open when the case was recorded.
             return QueryOutcome(
                 rows=None, source_name="", view=query.view, description="", denied=Deny(cause=DenyCause.UNKNOWN_ASKER)
             )
-        frozen = {item.view: item for item in self._for(config.source_id) if item.run_as == self.asker}
         name = next(iter(frozen.values())).payload.get("source_name", "") if frozen else ""
         columns = {view: list(item.payload.get("columns", [])) for view, item in frozen.items()}
         problems = query_problems(
@@ -359,12 +420,61 @@ class CassetteReader:
             scope=scope,
         )
 
+    def notes_of(self, source_id: str) -> str:
+        """The source's notes as they were when the case was recorded — the prompt a live run would have had."""
+        return next(
+            (str(item.payload.get("notes") or "") for item in self._for(source_id) if item.payload.get("notes")), ""
+        )
+
     def tables_of(self, config: DataWriteConfig) -> dict[str, list[str]]:
-        """Nothing to write to: an eval reads frozen rows and must never change a database (ADR-0094)."""
-        return {}
+        """The node's tables as they were frozen for this asker — columns only; an eval never holds a table's rows."""
+        return {
+            table: list(item.payload.get("columns", []))
+            for table, item in self._tables(config.source_id).items()
+            if table in config.tables
+        }
 
     def authorize(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
-        return _not_in_eval(write)
+        """The live gates' answer, from the frozen grant: the write's shape, the operation's grant, the scope's values.
+
+        Enough for a case to reach — and be held to — its approval gate. The
+        change itself never happens: an eval run is a rehearsal, so the node
+        mocks it, and `write` below refuses outright.
+        """
+        tables = {table: item for table, item in self._tables(config.source_id).items() if table in config.tables}
+        problems = write_problems(
+            write,
+            tables=list(tables),
+            columns_by_table={table: item.payload.get("columns", []) for table, item in tables.items()},
+        )
+        outcome = _not_in_eval(write)
+        if problems:
+            return replace(outcome, refusal="; ".join(problems))
+        grant = tables[write.table].payload.get("grants", {}).get(write.operation.value) or {}
+        if "denied" in grant or "scope" not in grant:
+            denied = grant.get("denied") or {"cause": DenyCause.UNKNOWN_ASKER.value, "reason": WRITE_DENIED}
+            return replace(
+                outcome, refusal=None, denied=Deny(cause=DenyCause(denied["cause"]), reason=denied["reason"])
+            )
+        scope = tuple((str(column), value) for column, value in grant["scope"])
+        if any(column in write.values and str(write.values[column]) != str(value) for column, value in scope):
+            return replace(outcome, refusal=None, denied=Deny(cause=DenyCause.OUT_OF_SCOPE_VALUE, reason=WRITE_DENIED))
+        return replace(outcome, refusal=None, scope=scope)
+
+    def write_grants(self, config: DataWriteConfig) -> dict[str, dict[str, Any]]:
+        return {
+            table: {"columns": item.payload.get("columns", []), "grants": item.payload.get("grants", {})}
+            for table, item in self._tables(config.source_id).items()
+            if table in config.tables
+        }
+
+    def _tables(self, source_id: str) -> dict[str, _Frozen]:
+        """This asker's frozen tables on `source_id`, by table name."""
+        return {
+            item.view[len(TABLE_PREFIX) :]: item
+            for item in self._for(source_id)
+            if item.view.startswith(TABLE_PREFIX) and item.run_as == self.asker
+        }
 
     def write(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
         return _not_in_eval(write)

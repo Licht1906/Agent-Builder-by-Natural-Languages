@@ -64,8 +64,9 @@ from src.datasources.sources import (
     dsn_of,
     scope_on,
     scope_on_write,
+    write_dsn_of,
 )
-from src.datasources.write import StructuredWrite, describe_write, write_problems
+from src.datasources.write import StructuredWrite, WriteOp, describe_write, write_problems
 from src.db.base import get_db
 from src.db.models import Agent, DatabaseSource
 from src.models.node_registry import DataQueryConfig, DataWriteConfig
@@ -201,8 +202,21 @@ class DatabaseReader(Protocol):
         """`{table: columns}` the node may write — what the model's write schema offers. Empty for none (ADR-0094)."""
         ...
 
+    def notes_of(self, source_id: str) -> str:
+        """The creator's description of the Hệ CSDL for the model (ADR-0095) — `""` for none or no such source."""
+        ...
+
     def authorize(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
         """Every gate `write` would pass, changing nothing — `allowed` or why not."""
+        ...
+
+    def write_grants(self, config: DataWriteConfig) -> dict[str, dict[str, Any]]:
+        """`{table: {"columns": [...], "grants": {operation: {"scope": [[column, value]]} | {"denied": {...}}}}}`.
+
+        What this asker may do to each of the node's tables, as JSON — what an
+        eval cassette freezes so a case can prepare and authorize a write
+        without a database (ADR-0094).
+        """
         ...
 
     def write(self, config: DataWriteConfig, write: StructuredWrite) -> WriteOutcome:
@@ -237,7 +251,7 @@ class PlatformDatabaseReader:
         for source_id in dict.fromkeys(config.source_id for config in configs):
             source = self._source(source_id)
             rules = access_rules_of(source) if source is not None else None
-            if source is None or rules is None or current_access_problems(source):
+            if source is None or rules is None or rules.identity is None or current_access_problems(source):
                 continue
             identity = rules.identity
             search = IdentitySearch(
@@ -279,15 +293,21 @@ class PlatformDatabaseReader:
             return _outcome(source, query, refusal=str(exc))
 
     def _scoped_read(self, source: DatabaseSource, config: DataQueryConfig, query: StructuredQuery) -> QueryOutcome:
-        """Gates 3 and 4: who is asking, what they may see — then the query itself."""
-        if not self.asker:
-            return _outcome(source, query, denied=Deny(cause=DenyCause.UNKNOWN_ASKER))
+        """Gates 3 and 4: who is asking, what they may see — then the query itself.
+
+        An open Hệ CSDL (ADR-0095) skips gate 3: nobody needs looking up when
+        everyone sees the same, so a trial with nobody picked reads too.
+        """
         rules = access_rules_of(source)
         assert rules is not None  # `closed_deny` already denied a source without rules
+        if not self.asker and not rules.open:
+            return _outcome(source, query, denied=Deny(cause=DenyCause.UNKNOWN_ASKER))
         dsn = dsn_of(source, self.secret_store)
         dialect = dialect_for(source.dialect)
-        lookup = dialect.identity_lookup(dsn, trusted_hosts=self.trusted_hosts)
-        principal = resolve_principal(rules, self.asker, lookup=lookup)
+        principal = None
+        if not rules.open:
+            lookup = dialect.identity_lookup(dsn, trusted_hosts=self.trusted_hosts)
+            principal = resolve_principal(rules, self.asker or "", lookup=lookup)
         scope = scope_on(source, principal, query.view)
         if isinstance(scope, Deny):
             return _outcome(source, query, denied=scope)
@@ -300,6 +320,11 @@ class PlatformDatabaseReader:
             description=describe(query, scoped=bool(request.scope)),
             scope=tuple(request.scope),
         )
+
+    def notes_of(self, source_id: str) -> str:
+        """The owner's own description of the source, or `""`."""
+        source = self._source(source_id)
+        return (source.agent_notes or "") if source is not None else ""
 
     def tables_of(self, config: DataWriteConfig) -> dict[str, list[str]]:
         """The node's tables still ticked for writing on its source, with their columns — `{}` for no source."""
@@ -334,6 +359,33 @@ class PlatformDatabaseReader:
             scope=checked.request.scope,
         )
 
+    def write_grants(self, config: DataWriteConfig) -> dict[str, dict[str, Any]]:
+        """Each writable table's columns and this asker's grant per operation — one employee lookup for all of it."""
+        source = self._source(config.source_id)
+        if source is None:
+            return {}
+        principal = None
+        rules = access_rules_of(source)
+        if self.asker and rules is not None and not rules.open:
+            try:
+                dsn = dsn_of(source, self.secret_store)
+                lookup = dialect_for(source.dialect).identity_lookup(dsn, trusted_hosts=self.trusted_hosts)
+                principal = resolve_principal(rules, self.asker, lookup=lookup)
+            except DatabaseProbeError:
+                principal = None
+        found: dict[str, dict[str, Any]] = {}
+        for table in _writable_tables(source, config):
+            grants: dict[str, Any] = {}
+            for operation in WriteOp:
+                scope = scope_on_write(source, principal, table, operation)
+                if isinstance(scope, Deny):
+                    grants[operation.value] = {"denied": {"cause": scope.cause.value, "reason": scope.reason}}
+                else:
+                    pairs = scope.pairs if isinstance(scope, Where) else ()
+                    grants[operation.value] = {"scope": [[column, value] for column, value in pairs]}
+            found[table] = {"columns": list((source.table_columns or {}).get(table, [])), "grants": grants}
+        return found
+
     def _checked_write(self, config: DataWriteConfig, write: StructuredWrite) -> "WriteOutcome | _ClearedWrite":
         """The module docstring's gates for a write, in order; the first that refuses is the outcome."""
         source = self._source(config.source_id)
@@ -349,14 +401,16 @@ class PlatformDatabaseReader:
         closed = closed_write_deny(source, write.table)
         if closed is not None:
             return _write_outcome(source, write, denied=closed)
-        if not self.asker:
-            return _write_outcome(source, write, denied=Deny(cause=DenyCause.UNKNOWN_ASKER, reason=WRITE_DENIED))
         rules = access_rules_of(source)
         assert rules is not None  # `closed_write_deny` already denied a source without rules
+        if not self.asker and not rules.open:
+            return _write_outcome(source, write, denied=Deny(cause=DenyCause.UNKNOWN_ASKER, reason=WRITE_DENIED))
         try:
             dsn = dsn_of(source, self.secret_store)
-            lookup = dialect_for(source.dialect).identity_lookup(dsn, trusted_hosts=self.trusted_hosts)
-            principal = resolve_principal(rules, self.asker, lookup=lookup)
+            principal = None
+            if not rules.open:
+                lookup = dialect_for(source.dialect).identity_lookup(dsn, trusted_hosts=self.trusted_hosts)
+                principal = resolve_principal(rules, self.asker or "", lookup=lookup)
         except DatabaseProbeError as exc:
             return _write_outcome(source, write, refusal=str(exc))
         scope = scope_on_write(source, principal, write.table, write.operation)
@@ -372,7 +426,12 @@ class PlatformDatabaseReader:
             session_attributes=dict(principal.attributes) if principal else {},
             max_rows=config.max_rows,
         )
-        return _ClearedWrite(source=source, dsn=dsn, request=request)
+        try:
+            # The asker was looked up through the read DSN; the change itself goes through the write one.
+            write_dsn = write_dsn_of(source, self.secret_store)
+        except DatabaseProbeError as exc:
+            return _write_outcome(source, write, refusal=str(exc))
+        return _ClearedWrite(source=source, dsn=write_dsn, request=request)
 
     def _source(self, source_id: str) -> DatabaseSource | None:
         return owned_source(self.db, source_id, self.owner_id)

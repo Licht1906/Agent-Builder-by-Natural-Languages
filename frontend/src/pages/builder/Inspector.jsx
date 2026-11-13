@@ -273,7 +273,7 @@ function ConfigField({ name, field: declared, schema, value, node, mcpNodeIds = 
       <div title={description}>
         <label className="ab-label">{t("Action step")}</label>
         <select className="ab-select" disabled={readOnly} value={value || ""} onChange={(event) => onChange(event.target.value)}>
-          <option value="">{t("— choose the MCP step this collects for —")}</option>
+          <option value="">{t("— choose the tool step this collects for —")}</option>
           {mcpNodeIds.map((id) => (
             <option key={id} value={id}>{id}</option>
           ))}
@@ -581,7 +581,7 @@ function McpNodePanel({ node, tools, readOnly, onConfig, onToolsChanged, notify 
         ) : (
           !readOnly && (
             <button type="button" className="btn btn-secondary btn-sm" onClick={() => setPicking(true)}>
-              <Plus size={12} />{t("Add MCP server")}
+              <Plus size={12} />{t("Choose a tool")}
             </button>
           )
         )}
@@ -589,7 +589,7 @@ function McpNodePanel({ node, tools, readOnly, onConfig, onToolsChanged, notify 
 
       {!attached && (
         <p style={{ fontSize: "var(--text-xs)", color: "var(--ab-warn)", margin: 0, lineHeight: 1.5 }}>
-          {t("Nothing wired yet — add a server, or pick one already connected.")}
+          {t("No tool chosen yet — pick a built-in one (Gmail, Drive) or an MCP server.")}
         </p>
       )}
 

@@ -70,6 +70,10 @@ class DataSourceConfig(BaseModel):
     #: `src.db.models.DatabaseDialect`'s values — spelled here so this module never imports the ORM (and its engine).
     dialect: Literal["postgresql", "sqlserver", "mysql"]
     dsn_secret: str = Field(..., min_length=1)
+    #: The creator's description of this database for the agent (ADR-0095), carried from the platform.
+    agent_notes: str = ""
+    #: Optional: a second account used for writes only (ADR-0094), so `dsn_secret` can be read-only.
+    write_dsn_secret: str | None = Field(default=None, min_length=1)
     access: str = Field(default="access.yaml", description="Đường dẫn access.yaml của Hệ CSDL này")
 
 
@@ -350,6 +354,7 @@ def secret_source(config: SecretsConfig, *, base: Path, environ: Mapping[str, st
 def required_secrets(config: RuntimeConfig) -> list[str]:
     """Every secret `config` names, in the order an operator reads the file."""
     names = [config.database.url_secret, *(source.dsn_secret for source in config.data_sources)]
+    names += [source.write_dsn_secret for source in config.data_sources if source.write_dsn_secret]
     if config.llm.api_key_secret:
         names.append(config.llm.api_key_secret)
     if config.embedding is not None and config.embedding.api_key_secret:

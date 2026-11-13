@@ -17,7 +17,9 @@ export const NODE_LOOK = {
   data_write: { label: "Data Write", icon: DatabaseZap, color: "#e11d48" },
   web_search: { label: "Web Search", icon: Globe, color: "#0ea5e9" },
   collect: { label: "Collect", icon: ClipboardList, color: "#14b8a6" },
-  mcp: { label: "MCP Service", icon: Plug, color: "#f97316" },
+  // Not "MCP": the node calls built-in connectors (Gmail, Drive — straight to their APIs)
+  // as well as real MCP servers, and the label has to be true of both.
+  mcp: { label: "External Tool", icon: Plug, color: "#f97316" },
   if_else: { label: "If / Else", icon: GitBranch, color: "#f59e0b" },
   while: { label: "While", icon: RefreshCw, color: "#a3e635" },
   human_approval: { label: "Human Approval", icon: ShieldCheck, color: "#ec4899" },

@@ -36,8 +36,10 @@ from src.datasources.sources import (
     list_database_sources,
     rename_database_source,
     replace_dsn,
+    replace_write_dsn,
     run_database_test,
     save_access_rules,
+    set_agent_notes,
     set_allowed_views,
     set_allowed_write_tables,
     snapshot_of,
@@ -104,6 +106,8 @@ def _response_of(source: DatabaseSource) -> DatabaseSourceResponse:
         ],
         base_tables=list(snapshot.base_tables),
         allowed_write_tables=list(source.allowed_write_tables or []),
+        has_write_dsn=bool(source.write_dsn_secret_ref),
+        agent_notes=source.agent_notes or "",
         tables=[
             DatabaseTableResponse(
                 name=name, columns=list(columns), writable=name in (source.allowed_write_tables or [])
@@ -167,6 +171,10 @@ def update_my_database_source(
             source = set_allowed_views(db, source, request.allowed_views)
         except AllowedViewsError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from None
+    if request.agent_notes is not None:
+        source = set_agent_notes(db, source, request.agent_notes)
+    if request.write_dsn is not None:
+        source = replace_write_dsn(db, source, request.write_dsn, secret_store=secret_store)
     if request.allowed_write_tables is not None:
         try:
             source = set_allowed_write_tables(db, source, request.allowed_write_tables)
@@ -326,10 +334,18 @@ async def draft_my_access_rules(
             positions=[str(position) for position in positions],
             view_columns=view_columns,
             model_factory=model_factory,
+            table_columns={
+                table: list((source.table_columns or {}).get(table, [])) for table in source.allowed_write_tables or []
+            },
         )
     except UnreadableModelReplyError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from None
-    problems = access_problems(draft.rules, allowed_views=source.allowed_views, snapshot=snapshot)
+    problems = access_problems(
+        draft.rules,
+        allowed_views=source.allowed_views,
+        snapshot=snapshot,
+        allowed_tables=source.allowed_write_tables or [],
+    )
     return AccessRulesDraftResponse(rules=draft.rules, dropped=draft.dropped, problems=problems)
 
 

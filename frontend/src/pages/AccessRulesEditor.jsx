@@ -34,10 +34,32 @@ const OPERATIONS = [
   { id: "delete", label: "Delete" },
 ];
 
+//: Column names a guess recognises (ADR-0095), lower-cased. Only a starting point:
+//: the creator sees every guess filled into the form and can change it.
+const EMAIL_COLUMNS = ["email", "e_mail", "mail", "work_email", "email_address"];
+const POSITION_COLUMNS = ["position", "chuc_vu", "chucvu", "role", "job_title", "title", "vai_tro", "chuc_danh"];
+const KNOWN_ATTRIBUTES = [
+  { name: "employee_code", columns: ["employee_code", "emp_id", "employee_id", "staff_code", "ma_nv", "ma_nhan_vien"] },
+  { name: "department", columns: ["department", "dept", "dept_code", "department_code", "phong_ban", "bo_phan"] },
+];
+
+const pick = (columns, names) => columns.find((column) => names.includes(column.toLowerCase())) || "";
+
+/** The employee view and its attributes, guessed from column names — the form's starting point, never saved unseen. */
+export function suggestIdentity(source) {
+  const views = source.allowed_views.map((name) => ({ name, columns: source.views.find((entry) => entry.name === name)?.columns || [] }));
+  const employees = views.find((view) => pick(view.columns, EMAIL_COLUMNS) && pick(view.columns, POSITION_COLUMNS));
+  if (!employees) return { view: source.allowed_views[0] || "", matchBy: "", attributes: [{ name: POSITION, column: "" }] };
+  const attributes = [{ name: POSITION, column: pick(employees.columns, POSITION_COLUMNS) }];
+  for (const known of KNOWN_ATTRIBUTES) {
+    const column = pick(employees.columns, known.columns);
+    if (column) attributes.push({ name: known.name, column });
+  }
+  return { view: employees.name, matchBy: pick(employees.columns, EMAIL_COLUMNS), attributes };
+}
+
 const emptyDraft = (source) => ({
-  view: source.allowed_views[0] || "",
-  matchBy: "",
-  attributes: [{ name: POSITION, column: "" }],
+  ...suggestIdentity(source),
   positions: [],
   grants: {},
   tableGrants: {},
@@ -162,6 +184,8 @@ export default function AccessRulesEditor({ source, notify }) {
   const [drafting, setDrafting] = useState(false);
   const [drafted, setDrafted] = useState(false);
   const [dropped, setDropped] = useState([]);
+  // ADR-0095: "open" — everyone sees the same, no employee view, no rules.
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -169,7 +193,8 @@ export default function AccessRulesEditor({ source, notify }) {
       .accessRules(source.id)
       .then((saved) => {
         if (cancelled) return;
-        if (saved.rules) setDraft(draftOf(saved.rules));
+        if (saved.rules?.open) setOpen(true);
+        else if (saved.rules) setDraft(draftOf(saved.rules));
         setProblems(saved.problems || []);
       })
       .catch((err) => notify(err.message, "error"))
@@ -217,11 +242,12 @@ export default function AccessRulesEditor({ source, notify }) {
       const result = await api.databaseSources.draftAccessRules(source.id, description.trim(), toRules(draft, grantViews, grantTables).identity);
       const proposed = draftOf(result.rules);
       // Positions already on the form stay — a position the draft has no rule for is simply denied.
-      // The draft is about reading; write grants already on the form are kept as they are.
+      // A draft that proposes write grants replaces the form's; one that proposes none leaves them as they are.
+      const proposesWrites = Object.values(proposed.tableGrants).some((tables) => Object.keys(tables).length > 0);
       setDraft((current) => ({
         ...proposed,
         positions: [...proposed.positions, ...current.positions.filter((position) => !proposed.positions.includes(position))],
-        tableGrants: current.tableGrants,
+        tableGrants: proposesWrites ? proposed.tableGrants : current.tableGrants,
       }));
       setDropped(result.dropped || []);
       setProblems(result.problems || []);
@@ -232,6 +258,22 @@ export default function AccessRulesEditor({ source, notify }) {
       else notify(err.message, "error");
     } finally {
       setDrafting(false);
+    }
+  }
+
+  async function saveOpen() {
+    setSaving(true);
+    try {
+      const saved = await api.databaseSources.saveAccessRules(source.id, { open: true });
+      setProblems(saved.problems || []);
+      setYamlText(null);
+      notify(t("Access rules saved"));
+    } catch (err) {
+      const refused = problemsOf(err);
+      if (refused) setProblems(refused);
+      else notify(err.message, "error");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -272,8 +314,51 @@ export default function AccessRulesEditor({ source, notify }) {
 
   const nothingGranted = toRules(draft, grantViews, grantTables).rules.length === 0;
 
+  const modePicker = (
+    <div className="seg" role="radiogroup" aria-label={t("Who may use this data")} style={{ alignSelf: "flex-start" }}>
+      <label className="seg-opt">
+        <input type="radio" name={`ar-mode-${source.id}`} checked={open} onChange={() => setOpen(true)} />
+        {t("Everyone the same")}
+      </label>
+      <label className="seg-opt">
+        <input type="radio" name={`ar-mode-${source.id}`} checked={!open} onChange={() => setOpen(false)} />
+        {t("By position")}
+      </label>
+    </div>
+  );
+
+  if (open) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {modePicker}
+        <p className="text-muted" style={{ margin: 0, fontSize: "var(--text-sm)", lineHeight: 1.5 }}>
+          {t("Everyone who uses the agent reads every ticked view, and may change every table ticked for writing — each change still waits for a person to approve it. For a database with nothing to keep apart.")}
+        </p>
+        {problems.length > 0 && (
+          <ul style={{ margin: 0, paddingLeft: 18, color: "#a12626", fontSize: "var(--text-sm)" }}>
+            {problems.map((problem) => <li key={problem}>{problem}</li>)}
+          </ul>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={showYaml}>
+            <FileCode size={12} />{t("View YAML")}
+          </button>
+          <button type="button" className="btn btn-primary btn-sm" onClick={saveOpen} disabled={saving}>
+            {saving ? <Spinner size={12} /> : <Check size={12} />}{t("Save access rules")}
+          </button>
+        </div>
+        {yamlText !== null && (
+          <pre className="ab-mono" style={{ margin: 0, padding: "var(--space-2)", fontSize: "var(--text-xs)", border: "1px solid var(--color-divider)", whiteSpace: "pre-wrap" }}>
+            {yamlText}
+          </pre>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {modePicker}
       <IdentityFields draft={draft} source={source} columnsOf={columnsOf} edit={edit} />
 
       <div className="field">

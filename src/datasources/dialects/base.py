@@ -46,7 +46,6 @@ class ProbeFailure(StrEnum):
     WRITE_FAILED = "write_failed"
     WRITE_DENIED = "write_denied"
     TOO_MANY_ROWS = "too_many_rows"
-    WRITE_UNSUPPORTED = "write_unsupported"
 
 
 #: The one sentence each failure is said in — the whole of what a probe ever
@@ -78,7 +77,6 @@ FAILURE_DETAIL: dict[ProbeFailure, str] = {
     ProbeFailure.TOO_MANY_ROWS: (
         "Thao tác ghi sẽ đổi nhiều dòng hơn mức node cho phép nên đã bị huỷ — không có gì bị thay đổi"
     ),
-    ProbeFailure.WRITE_UNSUPPORTED: "Ghi dữ liệu hiện mới hỗ trợ PostgreSQL — không có gì bị thay đổi",
 }
 
 
@@ -220,7 +218,7 @@ class Dialect(Protocol):
     def run_write(self, dsn: str, request: WriteRequest, *, trusted_hosts: frozenset[str]) -> int:
         """`request.write` in one transaction — committed, or rolled back past `max_rows`. The rows it changed.
 
-        Raises `DatabaseProbeError`; `WRITE_UNSUPPORTED` from an engine that cannot write yet.
+        Raises `DatabaseProbeError`.
         """
         ...
 
