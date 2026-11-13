@@ -71,6 +71,7 @@ document the id it just received points into.
 
 import asyncio
 import inspect
+import re
 import textwrap
 import uuid
 from collections import defaultdict
@@ -1099,7 +1100,7 @@ async def _query_from_model(
             "parameters": _query_parameters(columns, max_rows=config.max_rows),
         },
     }
-    asked = _asked_with_notes(run, config.source_id, state)
+    asked = _asked_with_notes(run, config.source_id, state, purpose=config.purpose)
     model_id = default_node_model(list(ASSIGNABLE_MODELS))
     try:
         # `bind_tools` answers a `Runnable`; it is still the chat model `_answer_within_deadline` streams.
@@ -1131,17 +1132,38 @@ async def _query_from_model(
         return None, f"Truy vấn model viết không hợp lệ — {reasons}"
 
 
-def _asked_with_notes(run: WorkflowRunContext, source_id: str, state: WorkflowState) -> str:
-    """The conversation a query or write is written from, after the creator's notes on the Hệ CSDL (ADR-0095).
+def _asked_with_notes(run: WorkflowRunContext, source_id: str, state: WorkflowState, *, purpose: str = "") -> str:
+    """What a query or write is written from: today, the creator's notes, the step's purpose, the rows read, the talk.
 
-    The notes say what the columns alone cannot — which view holds what, how
-    two relate, which rows count — and are the creator's own words, so they
-    sit above the conversation as context, never as permission: scope is the
-    reader's, whatever the notes say.
+    - **Today**, because a model has no clock: "hẹn trả ngày 20/11" was written
+      as `2023-11-20` before this (2026-11-13). The day the user names is theirs;
+      the year it falls in is today's, and only the date says which.
+    - **The notes** (ADR-0095) say what the columns alone cannot — which view
+      holds what, how two relate. The creator's words, so context, never
+      permission: scope is the reader's, whatever the notes say.
+    - **The purpose** of a `data_query` node, when the graph gave it one: what
+      this read is for, which the newest message alone cannot say.
+    - **The rows already read this turn**, because a write keys on them: "Công
+      ty ABC" in the conversation is `KH-0001` in `ar_followups`, and the only
+      place that says so is the row a `data_query` just read. The instruction
+      always told the model to take values "từ dữ liệu đã đọc"; it was never
+      shown any, and wrote `customer_id: "ABC"`.
     """
+    parts = [_today_line(_now_in_app_timezone())]
     notes = run.databases.notes_of(source_id).strip() if run.databases is not None else ""
-    conversation = f"## Hội thoại gần đây\n{_conversation_excerpt(state)}"
-    return f"## Ghi chú của người tạo về Hệ CSDL này\n{notes}\n\n{conversation}" if notes else conversation
+    if notes:
+        parts.append(f"## Ghi chú của người tạo về Hệ CSDL này\n{notes}")
+    if purpose.strip():
+        parts.append(f"## Mục đích của bước này\n{purpose.strip()}")
+    if state.get("findings"):
+        parts.append(f"## Dữ liệu đã đọc trong lượt này\n{_rendered(state['findings'])}")
+    parts.append(f"## Hội thoại gần đây\n{_conversation_excerpt(state)}")
+    return "\n\n".join(parts)
+
+
+def _today_line(now: datetime) -> str:
+    """Today, said the way `_dated` says it — for the fillers, which have no prompt of their own to stamp."""
+    return f"{_NOW_HEADING}\n{_WEEKDAYS[now.weekday()]}, {now:%d/%m/%Y} ({_utc_offset(now)})."
 
 
 def _query_parameters(columns: Mapping[str, list[str]], *, max_rows: int) -> dict[str, Any]:
@@ -1199,8 +1221,12 @@ def _query_parameters(columns: Mapping[str, list[str]], *, max_rows: int) -> dic
 #: platform's job, so a model never adds `sales_rep_id = …` of its own — a
 #: filter it guessed would narrow a lead's view to one rep's rows.
 _DATA_QUERY_INSTRUCTION = (
-    "Viết MỘT truy vấn có cấu trúc trả lời câu hỏi mới nhất của người dùng trong hội thoại bên dưới. "
-    "Chỉ dùng view và cột được liệt kê; giá trị lọc lấy từ hội thoại, không bịa. "
+    "Viết MỘT truy vấn có cấu trúc phục vụ yêu cầu người dùng đang làm trong hội thoại bên dưới — và đúng "
+    "mục đích của bước đọc này khi có ghi. Yêu cầu có thể nằm ở lượt trước: lượt mới nhất có khi chỉ bổ sung "
+    "một chi tiết (một địa chỉ email, một câu 'ừ'), thì vẫn đọc cho yêu cầu đó chứ không lọc theo chi tiết vừa "
+    "bổ sung. Chỉ dùng view và cột được liệt kê; giá trị lọc lấy từ hội thoại hoặc dữ liệu đã đọc, không bịa. "
+    "Tên riêng người dùng nhắc (tên khách, tên công ty) thì lọc bằng op 'like' với '%tên%' trên cột tên. "
+    "Ngày người dùng nói không kèm năm (20/11) là ngày gần nhất theo hôm nay ở trên. "
     "Không tự lọc theo người hỏi (mã nhân viên, phòng ban…) — nền tảng tự áp phạm vi dữ liệu của người hỏi. "
     "Câu hỏi về tổng, số lượng, trung bình thì dùng aggregates; câu hỏi liệt kê thì chọn cột và order_by."
 )
@@ -1499,6 +1525,9 @@ _DATA_WRITE_INSTRUCTION = (
     "hội thoại bên dưới. Chỉ dùng bảng và cột được liệt kê; giá trị lấy từ hội thoại hoặc dữ liệu đã đọc, "
     "không bịa. insert: chỉ values. update: values và where. delete: chỉ where. where chỉ là các điều kiện "
     "cột = giá trị, đủ để chỉ đúng dòng cần đổi (thường là khoá của dòng). "
+    "Khoá (mã khách, mã hoá đơn…) lấy từ dữ liệu đã đọc, không lấy tên người dùng gõ. "
+    "Bảng có cột ghi chú hay nội dung (note, ghi_chu, noi_dung…) thì điền đúng nội dung agent vừa soạn cho người "
+    "duyệt. Ngày người dùng nói không kèm năm là ngày gần nhất theo hôm nay ở trên, viết YYYY-MM-DD. "
     "Không tự thêm điều kiện theo người hỏi (mã nhân viên, phòng ban…) — nền tảng tự áp phạm vi của người hỏi."
 )
 
@@ -1846,7 +1875,71 @@ async def _action_and_args(
             for key, value in args.items()
             if key not in action.verbatim or _acceptable(action, key, value, said)
         }
-    return name, {**args, **known}
+    # What the graph's own drafting node wrote wins over this reading of it: the
+    # reviewer approves the draft they are shown (`_latest_spoken_answer`), and a
+    # filler asked to "fill body from the conversation" rewrote it — the card read
+    # one letter and `args.body` held another (2026-11-13, the công nợ agent).
+    drafted = _drafted_values(_latest_spoken_answer(state), _agent_written(run, node_id))
+    # The draft wins over the collector too: what it composes is the graph's to write, never the user's.
+    return name, {**args, **known, **drafted}
+
+
+def _agent_written(run: WorkflowRunContext, node_id: str) -> tuple[str, ...]:
+    """The parameters of `node_id`'s action that a `collect` node says the graph composes (`agent_writes`)."""
+    if run.workflow is None:
+        return ()
+    for node in run.workflow.nodes:
+        if node.type is NodeType.COLLECT and node.config.get("action_node") == node_id:
+            return tuple(str(name) for name in node.config.get("agent_writes") or ())
+    return ()
+
+
+#: The labels a drafting node writes its parts under, per parameter, in either language.
+_DRAFT_LABELS: Mapping[str, tuple[str, ...]] = {
+    "subject": ("subject", "tiêu đề", "chủ đề", "tiêu đề thư"),
+    "body": ("body", "nội dung", "nội dung thư"),
+    "content": ("content", "nội dung"),
+    "title": ("title", "tiêu đề", "tên tài liệu"),
+}
+
+_LABEL_LINE = re.compile(r"^[*_#\s]*(?P<label>[^:：\n*_]{1,24}?)[*_\s]*[:：][*_\s]*(?P<rest>.*)$")
+
+
+def _drafted_values(draft: str, params: Sequence[str]) -> dict[str, str]:
+    """`params` read off a drafting node's text, verbatim — or nothing for a parameter the draft does not show.
+
+    A single composed parameter (`body` alone, `content`) is the whole draft.
+    Several are split on the labels the draft writes them under ("Tiêu đề: …",
+    "Nội dung: …"); a draft that labels only its subject is read as subject
+    then letter. Anything the labels do not settle is left to the filler,
+    never guessed.
+    """
+    text = draft.strip()
+    wanted = [name for name in params if name in _DRAFT_LABELS]
+    if not text or not wanted:
+        return {}
+    lines = text.splitlines()
+    marks: list[tuple[int, str, str]] = []
+    for index, line in enumerate(lines):
+        match = _LABEL_LINE.match(line)
+        if match is None:
+            continue
+        label = match.group("label").strip().lower()
+        name = next((name for name in wanted if label in _DRAFT_LABELS[name]), None)
+        if name is not None and all(name != seen for _, seen, _ in marks):
+            marks.append((index, name, match.group("rest").strip()))
+    if len(wanted) == 1 and not marks:
+        return {wanted[0]: text}
+    values: dict[str, str] = {}
+    for position, (index, name, rest) in enumerate(marks):
+        end = marks[position + 1][0] if position + 1 < len(marks) else len(lines)
+        values[name] = "\n".join([rest, *lines[index + 1 : end]]).strip()
+    if "body" in wanted and "body" not in values and [name for _, name, _ in marks] == ["subject"]:
+        # "Tiêu đề: …" then the letter, unlabelled: the subject is its own line, the rest is the body.
+        index, _, rest = marks[0]
+        values["subject"] = rest
+        values["body"] = "\n".join(lines[index + 1 :]).strip()
+    return {name: value for name, value in values.items() if value}
 
 
 async def _filled_by_model(
@@ -1892,7 +1985,10 @@ async def _filled_by_model(
         else "Chọn đúng MỘT hành động phù hợp nhất với việc cần làm và điền tham số cho nó từ cuộc "
         "hội thoại bên dưới. Chỉ dùng thông tin có trong hội thoại; không bịa giá trị."
     )
-    asked = f"## Việc cần làm\n{task or '(không có mô tả)'}\n\n## Hội thoại gần đây\n{_conversation_excerpt(state)}"
+    asked = (
+        f"{_today_line(_now_in_app_timezone())}\n\n## Việc cần làm\n{task or '(không có mô tả)'}"
+        f"\n\n## Hội thoại gần đây\n{_conversation_excerpt(state)}"
+    )
     try:
         # The platform's ordinary node model, not the meta-agent's: reading
         # values out of a conversation is a small extraction, and ADR-0010 §1
@@ -2007,7 +2103,13 @@ async def _run_collect(
     args = filled[1] if filled is not None else {}
     said = _user_said(state)
     names = _parameter_names(action)
-    accepted = {name: value for name, value in args.items() if name in names and _acceptable(action, name, value, said)}
+    # `agent_writes` are composed later by the graph; a value the filler invented for one here (a
+    # `body` while asking for the address) must not be carried on as if the user had given it.
+    accepted = {
+        name: value
+        for name, value in args.items()
+        if name in names and name not in config.agent_writes and _acceptable(action, name, value, said)
+    }
     missing = [name for name in required if name not in accepted]
     if missing:
         question = _question_for(missing, action)
@@ -3067,7 +3169,18 @@ không có trong đó; không lọc bớt theo điều kiện công cụ không 
 công cụ không kiểm được, nói rõ là chưa kiểm); kết quả rỗng, lỗi hay "không tìm thấy" thì nói đúng \
 như vậy. Thứ công cụ tìm kiếm trả về LÀ kết quả khớp theo cách công cụ hiểu từ khoá — liệt kê đủ, \
 đừng tự xét lại "có thực sự khớp không" rồi báo không tìm thấy; có thể nói thêm từ khoá không xuất \
-hiện trong tiêu đề."""
+hiện trong tiêu đề.
+- Thư, ghi chú hay tài liệu bạn soạn là bản sẽ được gửi hoặc lưu nguyên văn: KHÔNG dùng ngoặc vuông \
+"[ ]" ở bất kỳ đâu, kể cả chữ ký ("[Tên của bạn]", "[Phòng Kế toán]" đều sai). Thiếu thông tin thì viết câu \
+không cần nó (ký "Phòng Kinh doanh" không ngoặc), hoặc nói rõ là thiếu. Không thêm hậu quả, điều khoản hay \
+cam kết mà dữ liệu và yêu cầu không nêu (phí phạt, lãi chậm trả, hạn chót mới).
+- Bản bạn soạn để người dùng duyệt là việc CHƯA xảy ra: chỉ đưa đúng nội dung sẽ gửi hay sẽ lưu, không \
+viết "đã được gửi", "đã được lưu" hay lời mời duyệt — nền tảng tự hỏi người duyệt.
+- Kết quả công cụ ghi "Mô phỏng" hay "sent": false là lượt chạy thử: nói rõ đây là chạy thử, chưa gửi hay \
+chưa ghi thật — không nói "đã gửi", "đã lưu", và không hỏi người dùng có muốn làm lại không.
+- Chỉ thư (email) mới có tiêu đề; ghi chú hay nội dung để lưu thì viết thẳng nội dung, không nhãn. \
+Thư soạn để gửi thì viết theo khuôn: một dòng "Tiêu đề: …", rồi một dòng "Nội dung:" và thân thư bên \
+dưới — người duyệt đọc đúng bản đó, và đúng bản đó được gửi đi."""
 
 
 def _rendered(findings: list[Finding]) -> str:
@@ -3640,7 +3753,11 @@ Bối cảnh của lần chạy này:
 
 Xét từng vế của điều kiện theo bối cảnh trước, rồi mới kết luận. Nếu agent vừa \
 nói một thông tin "còn thiếu" hay vừa hỏi người dùng về nó thì thông tin đó \
-chưa có. Chỉ trả lời bằng một object JSON, không kèm giải thích ngoài JSON, \
+chưa có. Điều kiện nói về việc người dùng đang yêu cầu gì thì xét theo điều người dùng \
+hiển nhiên muốn trong đúng nghiệp vụ mà điều kiện nói tới — không đòi người dùng dùng \
+đúng từ trong điều kiện, và không đòi họ chứng minh điều nghiệp vụ đó đã ngầm hiểu. Ví dụ \
+với điều kiện "Người dùng đang yêu cầu gửi thư mời họp cho một đối tác", câu "mời anh Nam \
+bên Hoà Phát họp thứ Hai" là đúng. Chỉ trả lời bằng một object JSON, không kèm giải thích ngoài JSON, \
 đúng thứ tự khoá sau:
 {{"reason": "một câu ngắn nói vì sao, đi qua từng vế", \
 "holds": true nếu điều kiện đúng với bối cảnh trên, false nếu không}}
@@ -3723,12 +3840,29 @@ def _condition_context(state: WorkflowState) -> str:
     last week.
     """
     parts = [f"Người dùng hỏi: {_question_of(state)}"]
+    earlier = _request_before_follow_up(state)
+    if earlier:
+        # "ketoan@abc.example" decides nothing on its own; the turn it answers does.
+        parts.insert(0, f"Yêu cầu người dùng đưa ở lượt trước (lượt này chỉ bổ sung cho nó): {earlier}")
     answer = _latest_answer(state)
     if answer:
         parts.append(f"Agent vừa trả lời: {answer}")
     if state["findings"]:
         parts.append(f"{_SOURCES_HEADING}\n{_rendered(state['findings'])}")
     return "\n\n".join(parts)
+
+
+def _request_before_follow_up(state: WorkflowState) -> str:
+    """The user's previous message, when the newest one is too short to be a request of its own.
+
+    The `_retrieval_query` rule (`_FOLLOW_UP_CHARS`), for a branch decision: a
+    turn that only supplies what the agent just asked for — an address, a date,
+    "đúng rồi" — is routed by the request it completes.
+    """
+    said = [text_of(message.content) for message in state["messages"] if isinstance(message, HumanMessage)]
+    if len(said) < 2 or len(said[-1].strip()) >= _FOLLOW_UP_CHARS:
+        return ""
+    return said[-2].strip()
 
 
 def _rendered_approval_message(template: str, state: WorkflowState) -> str:

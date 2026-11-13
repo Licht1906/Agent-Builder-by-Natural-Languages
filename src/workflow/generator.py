@@ -170,39 +170,55 @@ def bound_databases(
 ) -> WorkflowJSON:
     """Each `data_query`/`data_write` node pointed at the Hệ CSDL the spec names — by rule, never by a model (DS-11).
 
-    The n-th `data_query` node reads the n-th `database` source, the way the
-    spec lists them. `source_id` is that source's `ref`; `views` are the
-    views the creator ticked on it, less the employee view its access rules
-    resolve askers against — that one is for deciding scope, not for reading.
-    A source with no `ref` yet, or one that is not the owner's, leaves its
-    node blank for the canvas to ring, as an unbound `tool_id` is.
+    **Which source.** A spec with one Hệ CSDL binds every read and write node to
+    it: a graph with several jobs reads it once per branch (composer principle
+    6), and the old n-th-node-to-n-th-source rule left every read after the
+    first unbound. With several sources, the n-th node of a kind still reads
+    the n-th source, as the spec lists them.
+
+    **Which views and tables — only what someone may use.** Reads get the
+    views the creator ticked, less the employee view its access rules resolve
+    askers against (that one decides scope, it is not for reading), and less
+    any view no position's rule grants. Writes get the tables ticked for
+    writing *that some position's rule lets write*: on the demo ERP every base
+    table was ticked writable and the note node was handed `fin_invoice` too,
+    on a spec that forbids touching invoices (2026-11-13). The access rules
+    already refused that write; the node no longer offers it. A source with no
+    rules yet keeps everything ticked — the rules are where a person narrows it.
+
+    A source with no `ref` yet, or one that is not the owner's, leaves its node
+    blank for the canvas to ring, as an unbound `tool_id` is.
     """
     refs = [source.ref for source in spec.data if source.kind is DataSourceKind.DATABASE]
     nodes, index, written = [], 0, 0
     for node in workflow.nodes:
-        if node.type is NodeType.DATA_WRITE:
-            # ADR-0094: the n-th `data_write` writes the n-th source, every table ticked for writing on it.
-            ref = refs[written] if written < len(refs) else None
-            written += 1
-            target = owned_source(db, ref, owner_id) if ref else None
-            if target is None:
-                nodes.append(node)
-                continue
-            tables = list(target.allowed_write_tables or [])
-            nodes.append(node.model_copy(update={"config": {**node.config, "source_id": str(ref), "tables": tables}}))
-            continue
-        if node.type is not NodeType.DATA_QUERY:
+        if node.type not in (NodeType.DATA_QUERY, NodeType.DATA_WRITE):
             nodes.append(node)
             continue
-        ref = refs[index] if index < len(refs) else None
-        index += 1
+        position = index if node.type is NodeType.DATA_QUERY else written
+        if node.type is NodeType.DATA_QUERY:
+            index += 1
+        else:
+            written += 1
+        ref = refs[0] if len(refs) == 1 else (refs[position] if position < len(refs) else None)
         source = owned_source(db, ref, owner_id) if ref else None
         if source is None:
             nodes.append(node)
             continue
         rules = access_rules_of(source)
+        granted = rules is not None and not rules.open and bool(rules.rules)
+        if node.type is NodeType.DATA_WRITE:
+            tables = list(source.allowed_write_tables or [])
+            if granted:
+                writable = {table for rule in rules.rules for table in rule.tables}
+                tables = [table for table in tables if table in writable]
+            nodes.append(node.model_copy(update={"config": {**node.config, "source_id": str(ref), "tables": tables}}))
+            continue
         identity_view = rules.identity.view if rules is not None and rules.identity is not None else None
         views = [view for view in source.allowed_views if view != identity_view]
+        if granted:
+            readable = {view for rule in rules.rules for view in rule.views}
+            views = [view for view in views if view in readable]
         nodes.append(node.model_copy(update={"config": {**node.config, "source_id": str(ref), "views": views}}))
     return workflow.model_copy(update={"nodes": nodes})
 

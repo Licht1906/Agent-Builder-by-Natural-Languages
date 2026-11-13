@@ -88,9 +88,9 @@ PROSE: dict[str, Any] = {"multiline": True}
 
 
 def is_prose_field(node_type: NodeType, field: str) -> bool:
-    """Whether `field` of `node_type` holds business prose — see `PROSE`."""
+    """Whether `field` of `node_type` holds business prose — see `PROSE` (and `OPTIONAL_PROSE`)."""
     declared = config_model_of(node_type).model_fields.get(field)
-    return bool(declared is not None and declared.json_schema_extra == PROSE)
+    return bool(declared is not None and declared.json_schema_extra in (PROSE, OPTIONAL_PROSE))
 
 
 def prose_fields(node_type: NodeType) -> tuple[str, ...]:
@@ -144,11 +144,17 @@ def resource_fields(node_type: NodeType) -> tuple[str, ...]:
 #: guessing at which of the two rules the third field wants.
 OPTIONAL: dict[str, Any] = {"optional": True}
 
+#: The combination `OPTIONAL`'s note above waited for a second case to define: prose the
+#: Generator writes, whose blank is still a finished state. `DataQueryConfig.purpose` is
+#: the case — a composed graph says what each read is for, and a template's read, which
+#: answers the user's question and nothing narrower, is complete without one.
+OPTIONAL_PROSE: dict[str, Any] = {"multiline": True, "optional": True}
+
 
 def is_optional_field(node_type: NodeType, field: str) -> bool:
     """Whether `field` of `node_type` may be left blank on a finished graph — see `OPTIONAL`."""
     declared = config_model_of(node_type).model_fields.get(field)
-    return bool(declared is not None and declared.json_schema_extra == OPTIONAL)
+    return bool(declared is not None and declared.json_schema_extra in (OPTIONAL, OPTIONAL_PROSE))
 
 
 def optional_fields(node_type: NodeType) -> tuple[str, ...]:
@@ -210,6 +216,17 @@ class DataQueryConfig(NodeConfig):
         default_factory=list,
         description="Các view node này được đọc — trong số view đã tick của Hệ CSDL",
         json_schema_extra=RESOURCE_REF,
+    )
+    # What this read is FOR, in business words. Without it a read can only "answer the
+    # newest message" — which on a graph with several jobs reads the wrong thing: a
+    # branch drafting a reminder needs the customer's open invoices, a branch filing a
+    # note needs the customer's id, and on a follow-up turn the newest message may be
+    # nothing but an email address (2026-11-13, the full công nợ agent).
+    purpose: str = Field(
+        default="",
+        description="Bước đọc này lấy dữ liệu gì, để làm gì — ví dụ 'các hoá đơn còn nợ của khách được nhắc tên, "
+        "để soạn thư nhắc nợ'. Bỏ trống = trả lời câu hỏi của người dùng",
+        json_schema_extra=OPTIONAL_PROSE,
     )
     # `OPTIONAL`: left out, the ceiling is the spec's own 200 — a complete
     # answer, not a field still waiting (`unfilled_fields` would otherwise

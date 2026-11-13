@@ -181,15 +181,20 @@ read-only để đọc (search, recent, fetch, get_profile), action WRITE để 
 "knowledge_search" cho một tài khoản, node đó không có tài liệu để tìm. Action "(read-only)" không \
 cần "human_approval"; action "(WRITE, risk high)" BẮT BUỘC có "human_approval" ngay trước và chỉ đi \
 tiếp từ cổng "approved"; risk medium KHÔNG cần "human_approval" trừ khi bài toán nói rõ phải có người \
-duyệt. Hệ CSDL nghiệp vụ ("kind" database: công nợ, đơn hàng, tồn kho…) → MỘT node "data_query" cho mỗi \
-nguồn — hệ thống tự gắn Hệ CSDL và view, và node tự lọc dữ liệu theo đúng người đang hỏi, nên prompt và \
-condition KHÔNG nói gì về phạm vi, quyền xem hay "chỉ khách của mình"; không bao giờ "knowledge_search" hay \
-"mcp" cho một Hệ CSDL. Bài toán vừa đọc Hệ CSDL vừa gửi ra ngoài thì khung là: "collect" → "data_query" → \
-"agent_llm" soạn → "human_approval" → "mcp" → "agent_llm" báo lại → "end". Bài toán THAY ĐỔI dữ liệu trong \
-Hệ CSDL (ghi chú, cập nhật trạng thái hay ngày hẹn, thêm hoặc xoá dòng) → MỘT node "data_write" cho nguồn đó, \
-LUÔN có "human_approval" ngay trước và chỉ đi tiếp từ cổng "approved" — hệ thống tự gắn Hệ CSDL, bảng và \
-phạm vi người hỏi; khung đọc rồi ghi là: "collect" → "data_query" → "human_approval" → "data_write" → \
-"agent_llm" báo lại → "end". {approval_rule} "human_approval" chỉ đứng ngay trước \
+duyệt. Hệ CSDL nghiệp vụ ("kind" database: công nợ, đơn hàng, tồn kho…) → node "data_query", MỘT node trên \
+mỗi đường đi (mỗi nhánh của nguyên tắc 6 có node của riêng nó) — hệ thống tự gắn Hệ CSDL và view, và node tự \
+lọc dữ liệu theo đúng người đang hỏi, nên prompt và condition KHÔNG nói gì về phạm vi, quyền xem hay "chỉ \
+khách của mình"; không bao giờ "knowledge_search" hay "mcp" cho một Hệ CSDL. Mỗi node "data_query" có \
+"purpose": một câu nghiệp vụ nói bước đọc đó lấy gì và để làm gì, ví dụ "Các hoá đơn còn nợ (số hoá đơn, số \
+tiền, số ngày quá hạn) của khách được nhắc tên, để soạn thư nhắc nợ" hay "Mã khách hàng của khách được nhắc \
+tên, để ghi ghi chú nhắc nợ" — không nêu tên view hay cột. Bài toán vừa đọc Hệ CSDL vừa gửi ra ngoài thì khung \
+là: "collect" → "data_query" → "agent_llm" soạn → "human_approval" → "mcp" → "agent_llm" báo lại → "end". \
+Bài toán THAY ĐỔI dữ liệu trong Hệ CSDL (ghi chú, cập nhật trạng thái hay ngày hẹn, thêm hoặc xoá dòng) → MỘT \
+node "data_write" cho nguồn đó, LUÔN có "human_approval" ngay trước và chỉ đi tiếp từ cổng "approved" — hệ \
+thống tự gắn Hệ CSDL, bảng và phạm vi người hỏi, và tự soạn thao tác ghi từ hội thoại cùng dữ liệu vừa đọc; \
+khung đọc rồi ghi là: "data_query" (purpose: khoá của dòng cần ghi, ví dụ mã khách) → "agent_llm" soạn đúng \
+nội dung sẽ ghi → "human_approval" → "data_write" → "agent_llm" báo lại → "end". {approval_rule} \
+"human_approval" chỉ đứng ngay trước \
 một node "mcp" WRITE hoặc một node "data_write"; graph không có hai loại node đó thì không có "human_approval". \
 Cổng "rejected" phải dẫn tới \
 một node "agent_llm" nói rõ việc chưa được làm và vì sao, rồi mới tới "end" — không bao giờ nối \
@@ -215,6 +220,19 @@ soát lại / sửa tới khi đủ" thì vẽ "while": cổng "loop" → "agent
 trong ba mục: A, B, C — hoặc chưa có bản thảo nào"; "max_iterations" 2–3. Không thay "while" bằng hai \
 node soạn–soát nối thẳng: đó không phải vòng lặp. Ngoại lệ: graph đọc Hệ CSDL bằng "data_query" thì ngưỡng \
 dùng để chọn dòng (ví dụ "khách quá hạn trên 30 ngày") là bộ lọc của truy vấn, không cần "if_else".
+6. NHIỀU VIỆC → RẼ NHÁNH NGAY TỪ ĐẦU. Bài toán giao cho agent từ hai việc trở lên (ví dụ trả lời câu hỏi, gửi \
+thư, ghi chú) thì node bắt đầu là một "if_else" hỏi thẳng về yêu cầu của người dùng, mỗi "if_else" đúng MỘT \
+việc, nối tiếp qua cổng "false": "Người dùng đang yêu cầu soạn hoặc gửi email nhắc nợ cho một khách" → \
+"Người dùng đang báo kết quả cuộc gọi hoặc yêu cầu ghi lại một ghi chú" → còn lại là hỏi đáp. Điều kiện \
+của mỗi "if_else" đó nói ý định theo cách người dùng thật sự nói, kèm một hai câu mẫu trong ngoặc, ví dụ \
+"Người dùng muốn soạn hoặc gửi thư nhắc cho một khách (như: soạn email nhắc Công ty ABC; gửi thư nhắc \
+nợ cho khách X)" — câu ngắn như "nhắc Công ty ABC" vẫn là việc đó. KHÔNG vẽ \
+"agent_llm" phân loại ý định đứng trước các "if_else" đó: "if_else" tự đọc câu người dùng (và cả lượt trước \
+khi lượt này chỉ bổ sung một chi tiết), còn một "agent_llm" phân loại thì nói chuyện với người dùng. Cổng \
+"true" của mỗi "if_else" dẫn vào khung trọn vẹn của việc đó theo nguyên tắc 2 và 4 — với "collect" (nếu có) \
+đứng đầu nhánh, và node "data_query" của RIÊNG nhánh đó với "purpose" nói đúng thứ nhánh cần đọc; nhánh hỏi \
+đáp là "data_query" → MỘT "agent_llm" trả lời → "end". Không đặt một "data_query" chung trước khi rẽ nhánh: \
+mỗi việc cần đọc một thứ khác nhau.
 
 Hợp đồng của từng trường:
 - "message_template" của "human_approval" và mọi "prompt" là văn bản thuần, KHÔNG có cú pháp thay \
@@ -1087,10 +1105,7 @@ def _shape_complaints(
         complaints.append(
             f"Graph có {write_nodes} node data_write cho {database_sources} Hệ CSDL; mỗi Hệ CSDL nhiều nhất một node ghi"
         )
-    if database_sources and query_nodes > database_sources:
-        complaints.append(
-            f"Graph có {query_nodes} node data_query cho {database_sources} Hệ CSDL; mỗi Hệ CSDL đúng một node"
-        )
+    complaints.extend(_read_placement_complaints(graph))
     if DataSourceKind.CONNECTED_ACCOUNT in kinds and offered_actions and NodeType.MCP not in types:
         complaints.append(
             "Bài toán có tài khoản kết nối và một action phải gọi "
@@ -1142,6 +1157,59 @@ def _loop_body(loop_id: str, leaving: dict[str, list[tuple[str, str]]]) -> set[s
             if _reaches(node_id, loop_id, leaving):
                 body.add(node_id)
     return body
+
+
+def _read_placement_complaints(graph: WorkflowJSON) -> list[str]:
+    """Where `data_query` nodes sit, and what they say they are for — principle 6 of the prompt.
+
+    Measured on 2026-11-13, the full công nợ agent (answer, email, note in one):
+    the composer read once before branching and classified the request twice
+    with `agent_llm` nodes. The shared read could not know what it was for — the
+    email branch got a customer row filtered by the address the user had just
+    typed, the note branch got a failed read and wrote `customer_id: "ABC"` —
+    and the classifiers talked to the user ("Tôi không có khả năng kiểm tra…").
+    One read per path replaced the old "one `data_query` per Hệ CSDL" rule,
+    which is what forced the shared read in the first place.
+    """
+    complaints: list[str] = []
+    nodes = {node.id: node for node in graph.nodes}
+    leaving: dict[str, list[tuple[str, str]]] = {}
+    for edge in graph.edges:
+        leaving.setdefault(edge.source_node_id, []).append((edge.source_port, edge.target_node_id))
+    reads = [node for node in graph.nodes if node.type is NodeType.DATA_QUERY]
+    effects = [node.id for node in graph.nodes if node.type in (NodeType.MCP, NodeType.DATA_WRITE)]
+    for first in reads:
+        onward = {target for _, target in leaving.get(first.id, [])}
+        chained = sorted(
+            other.id for other in reads if other.id != first.id and any(_reaches(n, other.id, leaving) for n in onward)
+        )
+        if chained:
+            complaints.append(
+                f"Node data_query {first.id!r} và {chained} nằm trên cùng một đường; mỗi đường đi chỉ một node "
+                "data_query — gộp lại và viết purpose nói đủ thứ cần đọc"
+            )
+        reached = sorted(effect for effect in effects if _reaches(first.id, effect, leaving))
+        if len(reached) > 1:
+            complaints.append(
+                f"Node data_query {first.id!r} đứng trước nhiều việc khác nhau ({', '.join(reached)}); mỗi việc cần "
+                "đọc một thứ khác — rẽ nhánh bằng if_else trước, mỗi nhánh một data_query với purpose của riêng nó"
+            )
+    if len(reads) > 1:
+        vague = [node.id for node in reads if not str(node.config.get("purpose") or "").strip()]
+        if vague:
+            complaints.append(
+                f"Node data_query {vague} chưa có purpose; viết một câu nghiệp vụ nói bước đọc đó lấy gì và để làm "
+                "gì (ví dụ: các hoá đơn còn nợ của khách được nhắc tên, để soạn thư nhắc nợ)"
+            )
+    start = nodes.get(graph.start_node_id)
+    if start is not None and start.type is NodeType.AGENT_LLM:
+        routed = [nodes[target] for _, target in leaving.get(start.id, []) if target in nodes]
+        if any(node.type is NodeType.IF_ELSE for node in routed):
+            complaints.append(
+                f"Node agent_llm {start.id!r} đứng đầu graph chỉ để phân loại yêu cầu cho if_else phía sau; bỏ nó — "
+                "if_else tự đọc câu người dùng, bắt đầu graph bằng chính if_else đó"
+            )
+    return complaints
 
 
 def _reaches(start: str, goal: str, leaving: dict[str, list[tuple[str, str]]]) -> bool:

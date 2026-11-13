@@ -298,7 +298,8 @@ def test_a_database_spec_drawn_without_a_data_query_is_sent_back() -> None:
     assert any("không có node data_query nào" in complaint for complaint in complaints)
 
 
-def test_two_data_query_nodes_for_one_database_are_sent_back() -> None:
+def test_two_data_query_nodes_on_one_path_are_sent_back() -> None:
+    # Reading twice in a row is one read said twice; one node per path, its purpose saying all it needs.
     spec = _documents_spec(name="Công nợ trong ERP", kind="database", ref="1")
     graph = _graph(
         [
@@ -307,12 +308,10 @@ def test_two_data_query_nodes_for_one_database_are_sent_back() -> None:
             ("tra_loi", NodeType.AGENT_LLM),
             ("xong", NodeType.END),
         ],
-        [("a", "done", "tra_loi"), ("b", "done", "tra_loi"), ("tra_loi", "done", "xong")],
+        [("a", "done", "b"), ("b", "done", "tra_loi"), ("tra_loi", "done", "xong")],
     )
 
-    assert any(
-        "2 node data_query cho 1 Hệ CSDL" in complaint for complaint in _shape_complaints(graph, spec, frozenset())
-    )
+    assert any("nằm trên cùng một đường" in complaint for complaint in _shape_complaints(graph, spec, frozenset()))
 
 
 async def test_a_documents_only_spec_drafted_with_a_data_query_is_redrawn_without_one(

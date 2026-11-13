@@ -387,3 +387,58 @@ async def test_with_a_write_account_the_main_connection_can_be_a_read_only_login
         with engine.begin() as connection:
             connection.execute(text("DROP OWNED BY dwn_readonly"))
             connection.execute(text("DROP ROLE IF EXISTS dwn_readonly"))
+
+
+async def test_every_read_and_write_binds_to_the_one_source_and_writes_only_what_a_rule_grants(
+    db_session: Session, source: DatabaseSource, seeded_creator: User
+) -> None:
+    """2026-11-13: a second `data_query` for the same Hệ CSDL was left unbound (n-th node → n-th source),
+    and the write node was handed every table ticked writable — `fin_invoice` included — on a spec that
+    forbids touching invoices. One source binds every node; a table no rule lets anyone write is not offered."""
+    from src.models.node_registry import NodeType
+    from src.models.solution_spec import AgentSolutionSpecification
+    from src.models.workflow import Edge, NodeInstance
+    from src.workflow.generator import bound_databases
+
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE IF NOT EXISTS t_dwn_invoices (id serial PRIMARY KEY, amount int)"))
+    try:
+        store = EncryptedDbSecretStore(db=db_session)
+        run_database_test(db_session, source, secret_store=store, trusted_hosts=frozenset({TRUSTED}))
+        set_allowed_write_tables(db_session, source, ["t_dwn_notes", "t_dwn_invoices"])
+        spec = AgentSolutionSpecification.model_validate(
+            {
+                "goal": "Theo dõi công nợ",
+                "users": ["Nhân viên KD"],
+                "data": [{"name": "ERP", "kind": "database", "ref": str(source.id)}],
+                "actions": ["Trả lời", "Ghi chú"],
+                "expected_outcome": ["Đúng"],
+                "success_criteria": [{"text": "Đúng", "category": "correctness"}],
+                "prohibitions": ["Không sửa hoá đơn"],
+            }
+        )
+        graph = WorkflowJSON(
+            start_node_id="doc_a",
+            nodes=[
+                NodeInstance(id="doc_a", type=NodeType.DATA_QUERY, config={}),
+                NodeInstance(id="doc_b", type=NodeType.DATA_QUERY, config={}),
+                NodeInstance(id="ghi", type=NodeType.DATA_WRITE, config={}),
+                NodeInstance(id="xong", type=NodeType.END, config={}),
+            ],
+            edges=[
+                Edge(id="e1", source_node_id="doc_a", source_port="done", target_node_id="doc_b"),
+                Edge(id="e2", source_node_id="doc_b", source_port="done", target_node_id="ghi"),
+                Edge(id="e3", source_node_id="ghi", source_port="done", target_node_id="xong"),
+            ],
+        )
+
+        bound = {
+            node.id: node.config for node in bound_databases(db_session, graph, spec, owner_id=seeded_creator.id).nodes
+        }
+
+        assert bound["doc_a"]["source_id"] == bound["doc_b"]["source_id"] == str(source.id)
+        assert bound["ghi"]["source_id"] == str(source.id)
+        assert bound["ghi"]["tables"] == ["t_dwn_notes"]
+    finally:
+        with engine.begin() as connection:
+            connection.execute(text("DROP TABLE IF EXISTS t_dwn_invoices"))

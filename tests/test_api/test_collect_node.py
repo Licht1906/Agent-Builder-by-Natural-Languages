@@ -317,3 +317,46 @@ async def test_the_actions_own_fill_also_drops_an_address_the_user_never_typed(
     assert response.status_code == 200, response.text
     [call] = parse_sse(response.text, event="tool")
     assert call["args"] == {"subject": "Thư mời họp", "body": "Kính gửi anh Minh…"}
+
+
+async def test_the_letter_sent_is_the_draft_the_reviewer_read_not_a_fill_of_it(
+    client: AsyncClient,
+    creator_token: str,
+    confirmed: Callable[..., AgentVersion],
+    scripted_chat_model_factory: Callable[[list[list[AIMessage]]], ScriptedRun],
+) -> None:
+    """2026-11-13, the full công nợ agent: the card showed the drafted reminder and `args.body` held
+    "Đây là email nhắc nhở từ hệ thống" — the collector had kept a `body` its filler invented while
+    asking for the address, and the gate's own fill rewrote the rest. `agent_writes` come from the draft."""
+    graph = collect_then("send_email", approval=True, agent_writes=["subject", "body"])
+    graph["nodes"].insert(
+        1, {"id": "soan", "type": "agent_llm", "config": {"prompt": "Soạn thư nhắc nợ.", "model": "gpt-4o-mini"}}
+    )
+    graph["edges"] = [edge for edge in graph["edges"] if edge["id"] != "e1"] + [
+        {"id": "e1", "source_node_id": "thu_thap", "source_port": "complete", "target_node_id": "soan"},
+        {"id": "e7", "source_node_id": "soan", "source_port": "done", "target_node_id": "duyet"},
+    ]
+    draft = "Tiêu đề: Nhắc thanh toán HD-0001\nNội dung:\nKính gửi Công ty ABC,\nSố tiền 15.000.000 đ, quá hạn 60 ngày."
+    scripted_chat_model_factory(
+        [
+            [
+                calls_tool(
+                    "send_email", to="ketoan@abc.example", subject="Bịa", body="Đây là email nhắc nhở từ hệ thống"
+                )
+            ],
+            [answers(draft)],
+            [calls_tool("send_email", to="ketoan@abc.example", subject="Khác", body="Một lá thư khác hẳn")],
+        ]
+    )
+    version = confirmed(graph)
+
+    response = await trial_workflow(client, version, "Nhắc Công ty ABC, gửi ketoan@abc.example", creator_token)
+
+    assert response.status_code == 200, response.text
+    [pause] = parse_sse(response.text, event="awaiting_approval")
+    assert pause["actions"][0]["args"] == {
+        "to": "ketoan@abc.example",
+        "subject": "Nhắc thanh toán HD-0001",
+        "body": "Kính gửi Công ty ABC,\nSố tiền 15.000.000 đ, quá hạn 60 ngày.",
+    }
+    assert pause["actions"][0]["args"]["body"] in pause["message"]
